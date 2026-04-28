@@ -1,0 +1,66 @@
+version: 2
+
+builds:
+  - id: homedrive
+    main: ./homedrive/cmd/homedrive
+    binary: homedrive
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s
+      - -w
+      - -X main.version={{.Version}}
+
+nfpms:
+  - id: homedrive
+    builds:
+      - homedrive
+    package_name: homedrive
+    vendor: asnowfix
+    homepage: https://github.com/asnowfix/home-drive
+    maintainer: asnowfix
+    description: Bidirectional Google Drive sync agent for headless Linux NAS
+    license: MIT
+    formats:
+      - deb
+    bindir: /usr/bin
+    contents:
+      - src: homedrive/linux/homedrive@.service
+        dst: /lib/systemd/system/homedrive@.service
+        type: config
+      - src: homedrive/linux/homedrive.default
+        dst: /etc/default/homedrive
+        type: config|noreplace
+      - src: homedrive/linux/homedrive.logrotate
+        dst: /etc/logrotate.d/homedrive
+        type: config
+      - src: homedrive/linux/99-homedrive-inotify.conf
+        dst: /etc/sysctl.d/99-homedrive-inotify.conf
+        type: config
+    scripts:
+      postinstall: homedrive/linux/postinst.sh
+
+archives:
+  - id: homedrive
+    builds:
+      - homedrive
+    name_template: "homedrive_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
