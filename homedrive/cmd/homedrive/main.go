@@ -8,6 +8,10 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	// Import rcloneclient to register the Drive backend at init time.
+	// This is the only rclone backend; binary stays < 25 MB.
+	_ "github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 )
 
 // version is set at build time via -ldflags.
