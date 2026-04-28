@@ -58,7 +58,7 @@ jobs:
 
       - name: Lint
         if: matrix.goarch == 'amd64' && hashFiles('homedrive/**/*.go') != ''
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
           working-directory: homedrive
 
