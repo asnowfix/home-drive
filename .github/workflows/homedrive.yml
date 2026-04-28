@@ -13,10 +13,15 @@ on:
       - "homedrive/**"
       - ".github/workflows/homedrive.yml"
 
+permissions:
+  contents: read
+
 jobs:
-  test:
+  build:
+    name: build (${{ matrix.goarch }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         goarch: [amd64, arm64]
     steps:
@@ -31,39 +36,74 @@ jobs:
 
       - name: Build
         env:
+          GOOS: linux
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
+          CGO_ENABLED: '0'
         run: |
-          # Phase 0+ will create the homedrive module. Until then this is a no-op guard.
-          if [ -d homedrive ]; then
-            go build -trimpath -ldflags="-s -w" -o homedrive-bin ./homedrive/cmd/homedrive
-          else
-            echo "homedrive module not yet bootstrapped; skipping build"
-            exit 0
+          go build -trimpath -ldflags="-s -w" -o homedrive-bin ./homedrive/cmd/homedrive
+
+      - name: Verify binary size (< 25 MB)
+        run: |
+          size=$(stat -c%s homedrive-bin)
+          echo "Binary size: $size bytes ($(numfmt --to=iec $size))"
+          test "$size" -lt 26214400
+
+      - name: Verify rclone backend imports
+        run: |
+          # The drive backend transitively pulls in crypt, so counting symbols
+          # in the binary is not reliable. Instead, verify that source code only
+          # explicitly imports backend/drive and no other rclone backends.
+          imports=$(grep -rn 'rclone/backend/' homedrive/ --include='*.go' \
+            | grep -v '_test.go' \
+            | grep -v 'rclone/backend/drive' || true)
+          if [ -n "$imports" ]; then
+            echo "ERROR: found non-drive rclone backend imports:"
+            echo "$imports"
+            exit 1
           fi
+          # Also verify that backend/drive IS imported (once rcloneclient is wired)
+          drive_imports=$(grep -rn 'rclone/backend/drive' homedrive/ --include='*.go' \
+            | grep -v '_test.go' || true)
+          echo "Drive backend imports: ${drive_imports:-none (not yet wired)}"
 
-      - name: Verify binary size
-        if: hashFiles('homedrive-bin') != ''
-        run: test "$(stat -c%s homedrive-bin)" -lt 26214400  # < 25 MB
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Verify rclone backends
-        if: hashFiles('homedrive-bin') != ''
-        run: |
-          backends=$(go tool nm homedrive-bin | grep -c 'rclone/backend/' || true)
-          test "$backends" -eq 1 || (echo "expected exactly 1 rclone backend, got $backends" && exit 1)
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
 
       - name: Test
-        if: matrix.goarch == 'amd64' && hashFiles('homedrive/**/*.go') != ''
         run: go test -race -coverprofile=coverage.out ./homedrive/...
 
-      - name: Lint
-        if: matrix.goarch == 'amd64' && hashFiles('homedrive/**/*.go') != ''
-        uses: golangci/golangci-lint-action@v9
-        with:
-          working-directory: homedrive
-
-      - name: Coverage gate
-        if: matrix.goarch == 'amd64' && hashFiles('coverage.out') != ''
+      - name: Coverage gate (> 70%)
         run: |
           pct=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d %)
-          awk -v p=$pct 'BEGIN { exit (p < 70) }'
+          echo "Coverage: ${pct}%"
+          awk -v p="$pct" 'BEGIN { exit (p < 70) }'
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          working-directory: homedrive

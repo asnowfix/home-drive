@@ -734,14 +734,15 @@ Each phase = one PR, reviewed before the next. Issues created via
 - Manual test on Pi.
 - Issue: `[homedrive] systemd packaging + sysctl + logrotate`.
 
-### Phase 12 — CI / GitHub Actions (0.5d)
-- Dedicated workflow `.github/workflows/homedrive.yml`.
-- Build matrix `linux/amd64` + `linux/arm64` (QEMU).
-- `go test`, `go vet`, `staticcheck`, `golangci-lint`.
-- Coverage gate > 70%.
-- Binary size check in CI.
-- Update `.goreleaser.yml`.
-- Update `dependabot.yml` with grouping for rclone updates.
+### Phase 12 — CI / GitHub Actions (0.5d) [DONE]
+- [x] Dedicated workflow `.github/workflows/homedrive.yml`.
+- [x] Build matrix `linux/amd64` + `linux/arm64` (QEMU).
+- [x] `go test`, `golangci-lint` (separate jobs for build, test, lint).
+- [x] Coverage gate > 70%.
+- [x] Binary size check in CI (< 25 MB).
+- [x] Rclone backend import check (source-level grep, not symbol count).
+- [x] Created `.goreleaser.yml` with nfpm packaging for deb.
+- [x] Updated `dependabot.yml` with grouped rclone updates.
 - Issue: `[homedrive] CI GitHub Actions`.
 
 ### Phase 13 — Docs + 0.1.0 release (0.5d)
