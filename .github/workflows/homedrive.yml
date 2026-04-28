@@ -1,0 +1,69 @@
+name: homedrive
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "homedrive/**"
+      - "go.work"
+      - "go.work.sum"
+      - ".github/workflows/homedrive.yml"
+  pull_request:
+    paths:
+      - "homedrive/**"
+      - ".github/workflows/homedrive.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - uses: docker/setup-qemu-action@v3
+        if: matrix.goarch == 'arm64'
+
+      - name: Build
+        env:
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          # Phase 0+ will create the homedrive module. Until then this is a no-op guard.
+          if [ -d homedrive ]; then
+            go build -trimpath -ldflags="-s -w" -o homedrive-bin ./homedrive/cmd/homedrive
+          else
+            echo "homedrive module not yet bootstrapped; skipping build"
+            exit 0
+          fi
+
+      - name: Verify binary size
+        if: hashFiles('homedrive-bin') != ''
+        run: test "$(stat -c%s homedrive-bin)" -lt 26214400  # < 25 MB
+
+      - name: Verify rclone backends
+        if: hashFiles('homedrive-bin') != ''
+        run: |
+          backends=$(go tool nm homedrive-bin | grep -c 'rclone/backend/' || true)
+          test "$backends" -eq 1 || (echo "expected exactly 1 rclone backend, got $backends" && exit 1)
+
+      - name: Test
+        if: matrix.goarch == 'amd64' && hashFiles('homedrive/**/*.go') != ''
+        run: go test -race -coverprofile=coverage.out ./homedrive/...
+
+      - name: Lint
+        if: matrix.goarch == 'amd64' && hashFiles('homedrive/**/*.go') != ''
+        uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: homedrive
+
+      - name: Coverage gate
+        if: matrix.goarch == 'amd64' && hashFiles('coverage.out') != ''
+        run: |
+          pct=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d %)
+          awk -v p=$pct 'BEGIN { exit (p < 70) }'
