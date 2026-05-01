@@ -21,10 +21,11 @@ atomic PR per phase.
    listed in PLAN.md. Refuse to mark a phase done if tests are missing.
 5. **No regressions on invariants:**
    - Binary size < 25 MB stripped.
-   - Exactly one rclone backend registered (`drive`).
+   - Exactly one rclone backend registered (`drive`) — only enforced once rclone is in `go.mod`.
    - No `panic` outside `main`.
    - No `fmt.Println` — structured `slog` only.
    - No real Google Drive API calls in tests (use `MemFS`/`FlakyFS`).
+6. **CI must pass before a phase is declared done.** After pushing a branch, run `gh run watch` and wait for the GitHub Actions workflow to succeed. If it fails, fix it in the same branch before opening or updating the PR.
 6. **macOS-aware development.** This is a Linux-target project. Use build
    tags for Linux-only code. Tests that require inotify cookies must skip
    on `runtime.GOOS != "linux"` and rely on OrbStack for real validation.
@@ -42,12 +43,14 @@ For each phase:
 4. **Test**: write the test scenarios listed in PLAN.md §14 and §16.3.
    Ensure `go test -race ./homedrive/...` passes inside OrbStack.
 5. **Verify invariants**: build for `linux/arm64`, check binary size and
-   rclone backend count.
+   rclone backend count (skip backend count if rclone not yet in `go.mod`).
 6. **Document**: update PLAN.md to tick the phase as complete; if a
    decision was refined, update §2 ("Decisions locked in").
 7. **PR**: open with a description that links the PLAN.md phase, lists
    what changed, and includes test output.
-8. **Stop and wait** for the user to review and merge before starting
+8. **Validate CI**: run `gh run watch --exit-status` on the PR's workflow
+   run and confirm all checks pass before reporting the phase done.
+9. **Stop and wait** for the user to review and merge before starting
    the next phase.
 
 ## Refusal triggers
