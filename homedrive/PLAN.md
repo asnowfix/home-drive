@@ -724,7 +724,7 @@ Each phase = one PR, reviewed before the next. Issues created via
 - Resume pushes when quota drops below `stop_push_pct - 5%` (hysteresis).
 - Issue: `[homedrive] Quota-aware push throttling`.
 
-### Phase 11 — Packaging systemd + sysctl + logrotate (0.5d)
+### Phase 11 — Packaging systemd + sysctl + logrotate (0.5d) DONE
 - `linux/homedrive@.service` templated.
 - `linux/homedrive.default` sample.
 - `linux/homedrive.logrotate` (weekly, keep 12).
