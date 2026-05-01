@@ -744,12 +744,12 @@ Each phase = one PR, reviewed before the next. Issues created via
 - Update `dependabot.yml` with grouping for rclone updates.
 - Issue: `[homedrive] CI GitHub Actions`.
 
-### Phase 13 — Docs + 0.1.0 release (0.5d)
-- Final README, `docs/architecture.md`, `docs/conflict-resolution.md`,
+### Phase 13 — Docs + 0.1.0 release (0.5d) [DONE]
+- [x] Final README, `docs/architecture.md`, `docs/conflict-resolution.md`,
   `docs/directory-rename.md`, `docs/dev-environment.md`,
-  `docs/manual-validation.md`.
-- Update root `RELEASE_NOTES.md`.
-- Tag `homedrive/v0.1.0`.
+  `docs/home-assistant.md`, `docs/manual-validation.md`.
+- [ ] Update root `RELEASE_NOTES.md`.
+- [ ] Tag `homedrive/v0.1.0` (deferred to post-merge).
 
 **Estimated total: ~10 person-days, atomic 0.5–1.5 day PRs.**
 
