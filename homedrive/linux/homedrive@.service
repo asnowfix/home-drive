@@ -1,0 +1,33 @@
+[Unit]
+Description=homedrive sync agent for %i
+Documentation=https://github.com/asnowfix/home-drive/blob/main/homedrive/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=%i
+Group=%i
+EnvironmentFile=/etc/default/homedrive
+EnvironmentFile=-/etc/default/homedrive.%i
+ExecStart=/usr/bin/homedrive run --config ${HOMEDRIVE_CONFIG}
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=10
+WatchdogSec=60
+
+# hardening
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/homedrive /var/log/homedrive
+ReadOnlyPaths=/etc/homedrive
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

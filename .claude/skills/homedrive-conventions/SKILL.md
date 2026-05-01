@@ -100,6 +100,14 @@ package watcher
 - Use `golangci-lint` config from the parent repo if present, otherwise
   the defaults plus: `errcheck`, `staticcheck`, `gosec`, `revive`.
 
+## CI validation (mandatory)
+
+Before declaring any phase done, the GitHub Actions workflow must pass:
+- `gh run watch --exit-status` on the PR's latest run.
+- The "Verify rclone backends" check is skipped when rclone is not in
+  `go.mod` (pre-Phase-2). Once rclone is added, exactly 1 backend is
+  required.
+
 ## Concurrency
 
 - Channels for events and signals; mutexes for shared state.
