@@ -183,6 +183,67 @@ func TestPairer_ChildSuppression(t *testing.T) {
 	}
 }
 
+func TestPairer_ReversePair(t *testing.T) {
+	// On macOS/kqueue Create(dst) can arrive before Rename(src). Verify that
+	// handleCreate records the create and handleRename completes the pair.
+	tmpDir := t.TempDir()
+	srcDir := tmpDir + "/src"
+	dstDir := tmpDir + "/dst"
+	if err := os.Mkdir(srcDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Rename(srcDir, dstDir); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	var mu sync.Mutex
+	var paired []DirRename
+
+	log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	p := newPairer(
+		500*time.Millisecond,
+		log,
+		func(dr DirRename) {
+			mu.Lock()
+			paired = append(paired, dr)
+			mu.Unlock()
+		},
+		func(ev Event) { t.Errorf("unexpected unpaired event: %v", ev) },
+	)
+	defer p.stop()
+
+	p.trackDir(srcDir)
+	now := time.Now()
+
+	// Create arrives first (macOS order). Should return false so the watcher
+	// adds watches and debounces the event normally.
+	consumed := p.handleCreate(dstDir, now)
+	if consumed {
+		t.Fatal("handleCreate should return false for reverse-pair buffering")
+	}
+
+	// Rename arrives after Create.
+	handled := p.handleRename(srcDir, now.Add(10*time.Millisecond))
+	if !handled {
+		t.Fatal("handleRename should return true when pairing with a recent create")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paired) != 1 {
+		t.Fatalf("expected 1 paired event, got %d", len(paired))
+	}
+	if paired[0].From != srcDir {
+		t.Errorf("From = %q, want %q", paired[0].From, srcDir)
+	}
+	if paired[0].To != dstDir {
+		t.Errorf("To = %q, want %q", paired[0].To, dstDir)
+	}
+}
+
 func TestPairer_HandleCreateForFile(t *testing.T) {
 	tmpDir := t.TempDir()
 

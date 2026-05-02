@@ -19,17 +19,22 @@ type renameEntry struct {
 
 // pairer detects directory renames by matching Rename events with
 // subsequent Create events within a configurable time window. On Linux,
-// inotify guarantees that IN_MOVED_FROM and IN_MOVED_TO with the same
-// cookie arrive sequentially; fsnotify translates these into Rename and
-// Create events. The pairer buffers Rename events on watched directories
-// and pairs them with the next Create event for a directory.
+// inotify guarantees that IN_MOVED_FROM and IN_MOVED_TO arrive in order;
+// on macOS/kqueue the Create(dst) can arrive before the Rename(src). Both
+// orderings are handled via the pending and recentCreates maps.
 type pairer struct {
 	mu     sync.Mutex
 	window time.Duration
 	log    *slog.Logger
 
 	// pending maps old directory paths to their rename entries.
+	// Used on Linux/inotify where Rename arrives before Create.
 	pending map[string]*renameEntry
+
+	// recentCreates records directory Create events that arrived before any
+	// matching Rename (macOS/kqueue path). Keyed by the new directory path,
+	// value is the event time. Entries are lazily expired by handleRename.
+	recentCreates map[string]time.Time
 
 	// suppressedPrefixes tracks directory paths that have been paired.
 	// Child events under these prefixes are suppressed for the duration
@@ -54,6 +59,7 @@ func newPairer(window time.Duration, log *slog.Logger, onPair func(DirRename), o
 		window:             window,
 		log:                log,
 		pending:            make(map[string]*renameEntry),
+		recentCreates:      make(map[string]time.Time),
 		suppressedPrefixes: make(map[string]time.Time),
 		onPair:             onPair,
 		onUnpaired:         onUnpaired,
@@ -85,9 +91,11 @@ func (p *pairer) isTrackedDir(path string) bool {
 	return ok
 }
 
-// handleRename buffers a Rename event for a directory. If the path was
-// a watched directory, it becomes a candidate for pairing. Returns true
-// if the event was buffered (caller should not emit it yet).
+// handleRename buffers a Rename event for a directory. It first checks
+// recentCreates for a reverse match (macOS/kqueue: Create arrived before
+// Rename). If found, the pair is completed immediately. Otherwise the
+// Rename is buffered for the pair window. Returns true if the event was
+// consumed (caller should not emit it).
 func (p *pairer) handleRename(path string, at time.Time) bool {
 	if !p.isTrackedDir(path) {
 		return false
@@ -96,6 +104,43 @@ func (p *pairer) handleRename(path string, at time.Time) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// Check for a Create that arrived before this Rename (macOS/kqueue path).
+	// Pick the oldest recent create within the pair window.
+	cutoff := at.Add(-p.window)
+	var matchDst string
+	var matchAt time.Time
+	for dstPath, createAt := range p.recentCreates {
+		if createAt.Before(cutoff) {
+			delete(p.recentCreates, dstPath) // lazy expiry
+			continue
+		}
+		if matchDst == "" || createAt.Before(matchAt) {
+			matchDst = dstPath
+			matchAt = createAt
+		}
+	}
+
+	if matchDst != "" {
+		delete(p.recentCreates, matchDst)
+
+		suppressUntil := time.Now().Add(p.window)
+		p.suppressedPrefixes[path+string(filepath.Separator)] = suppressUntil
+		p.suppressedPrefixes[matchDst+string(filepath.Separator)] = suppressUntil
+
+		p.log.Info("directory rename paired (reverse)",
+			"from", path,
+			"to", matchDst,
+			"op", "dir_rename",
+		)
+
+		dr := DirRename{From: path, To: matchDst, At: at}
+		p.mu.Unlock()
+		p.onPair(dr)
+		p.mu.Lock()
+		return true
+	}
+
+	// No recent Create found; buffer the Rename (Linux/inotify path).
 	entry := &renameEntry{path: path, at: at}
 	entry.timer = time.AfterFunc(p.window, func() {
 		p.expireRename(path)
@@ -111,8 +156,10 @@ func (p *pairer) handleRename(path string, at time.Time) bool {
 }
 
 // handleCreate checks if a Create event on a directory matches a pending
-// Rename. If so, the pair is emitted and child suppression begins.
-// Returns true if the event was consumed by pairing.
+// Rename (Linux/inotify path). If so, the pair is emitted. If no pending
+// Rename exists, the Create is recorded in recentCreates for reverse
+// matching when the Rename arrives later (macOS/kqueue path).
+// Returns true only when the event is fully consumed by a forward pair.
 func (p *pairer) handleCreate(path string, at time.Time) bool {
 	// Check if the created path is a directory.
 	info, err := os.Stat(path)
@@ -123,10 +170,8 @@ func (p *pairer) handleCreate(path string, at time.Time) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Look for the best matching pending rename. On Linux, the inotify
-	// events arrive in order, so there is typically exactly one pending
-	// rename. We match the oldest pending rename since it should be the
-	// one that pairs with this Create.
+	// Look for the best matching pending rename (forward pair: Rename before
+	// Create). Match the oldest pending rename.
 	var matchKey string
 	var matchEntry *renameEntry
 
@@ -138,10 +183,17 @@ func (p *pairer) handleCreate(path string, at time.Time) bool {
 	}
 
 	if matchEntry == nil {
+		// No pending Rename yet. Record this Create so that a subsequent
+		// Rename can pair with it (reverse pair: Create before Rename).
+		p.recentCreates[path] = at
+		p.log.Debug("create recorded for reverse pairing",
+			"path", path,
+			"window", p.window.String(),
+		)
 		return false
 	}
 
-	// Found a pair.
+	// Found a forward pair.
 	matchEntry.timer.Stop()
 	delete(p.pending, matchKey)
 
@@ -226,4 +278,5 @@ func (p *pairer) stop() {
 		delete(p.pending, path)
 	}
 	p.suppressedPrefixes = make(map[string]time.Time)
+	p.recentCreates = make(map[string]time.Time)
 }

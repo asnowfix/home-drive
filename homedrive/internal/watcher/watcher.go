@@ -334,7 +334,10 @@ func (w *Watcher) onDirRenamePaired(dr DirRename) {
 	}
 	w.walkNewDir(dr.To)
 
-	// Suppress any debounced events under both old and new paths.
+	// Suppress any debounced events under both old and new paths, and the
+	// new directory's own Create event (present in the debouncer on macOS/kqueue
+	// when Create(dst) arrived before Rename(src) was paired).
+	w.debouncer.suppress(dr.To)
 	w.debouncer.suppressPrefix(dr.From + string(filepath.Separator))
 	w.debouncer.suppressPrefix(dr.To + string(filepath.Separator))
 

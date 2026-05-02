@@ -50,15 +50,20 @@ preserving the cookie in `event.Op`.
 - **Conflict during rename**: if destination already exists remotely,
   apply the standard §11 conflict resolution at the directory level.
   Documented as a known v0.1 limitation.
-- **`IN_MOVE_SELF` fires after pairing**: when the source directory has
-  its own inotify watch, the kernel fires `IN_MOVE_SELF` on that watch
-  descriptor in addition to `IN_MOVED_FROM` on the parent. This produces
-  a second `Rename(srcDir)` event that can arrive **after** the pair
-  completes — at which point `srcDir` has been untracked by
-  `removeSubtreeWatches`. `isSuppressed` must match the directory path
-  itself, not only paths beneath it. `strings.HasPrefix(path, "srcDir/")`
-  silently misses `path == "srcDir"`. Fix: also check
-  `path == strings.TrimSuffix(prefix, string(filepath.Separator))`.
+- **`IN_MOVE_SELF` fires after pairing** (Linux only): when the source
+  directory has its own inotify watch, the kernel fires `IN_MOVE_SELF` on
+  that watch descriptor after `IN_MOVED_FROM`. This produces a second
+  `Rename(srcDir)` event that can arrive **after** the pair completes — at
+  which point `srcDir` has been untracked. `isSuppressed` must match the
+  directory path itself, not only paths beneath it:
+  `path == strings.TrimSuffix(prefix, sep) || strings.HasPrefix(path, prefix)`.
+- **Create arrives before Rename** (macOS/kqueue): on macOS, `NOTE_WRITE`
+  on the parent fires `Create(dst)` before `NOTE_RENAME` fires `Rename(src)`.
+  The pairer records the Create in `recentCreates` and the subsequent Rename
+  completes the pair. `onDirRenamePaired` must also call `debouncer.suppress(dr.To)`
+  to cancel the debounced Create event that was already queued. For large
+  directories (5k+ files), the kqueue backlog can delay the Rename by > 200ms;
+  tests must widen `DirRenamePairWindow` on non-Linux accordingly.
 
 ## Syncer behavior on `DirRename`
 
@@ -111,7 +116,9 @@ N transactions.
 - `isSuppressed(path)` must cover **both** the directory itself and its
   children: check `path == dirPath || strings.HasPrefix(path, dirPath+"/")`.
   Checking only the `dirPath + "/"` prefix misses the `IN_MOVE_SELF` event
-  on the directory's own wd.
+  on the directory's own wd (Linux) and any direct events on the dir itself.
+- On macOS, also call `debouncer.suppress(dr.To)` in `onDirRenamePaired` to
+  cancel the buffered `Create(dst)` that was queued before the pair completed.
 - When re-watching, do it in the order: remove old → add new. Brief
   window where events on the renamed subtree are dropped is acceptable
   given the suppression set.

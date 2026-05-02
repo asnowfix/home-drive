@@ -9,10 +9,6 @@ import (
 )
 
 func TestWatcher_DirRenameSmall(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("requires Linux inotify cookies")
-	}
-
 	w, root := newTestWatcher(t)
 	startWatcher(t, w)
 
@@ -69,11 +65,13 @@ func TestWatcher_DirRenameSmall(t *testing.T) {
 }
 
 func TestWatcher_DirRenameLarge(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("requires Linux inotify cookies")
-	}
-
-	w, root := newTestWatcher(t)
+	// On macOS/kqueue, processing 5k file events can delay the Rename event
+	// relative to its paired Create by more than the default 200ms window.
+	w, root := newTestWatcher(t, func(cfg *Config) {
+		if runtime.GOOS != "linux" {
+			cfg.DirRenamePairWindow = 1 * time.Second
+		}
+	})
 	startWatcher(t, w)
 
 	// Create a directory with 5k files.
@@ -125,18 +123,20 @@ func TestWatcher_DirRenameLarge(t *testing.T) {
 		}
 	}
 
-	if latency > 100*time.Millisecond {
-		t.Errorf("DirRename latency %v exceeds 100ms threshold", latency)
+	// Linux/inotify delivers paired rename events synchronously; kqueue on
+	// macOS may add latency from the directory-scan step in fsnotify.
+	latencyThreshold := 100 * time.Millisecond
+	if runtime.GOOS != "linux" {
+		latencyThreshold = 500 * time.Millisecond
+	}
+	if latency > latencyThreshold {
+		t.Errorf("DirRename latency %v exceeds %v threshold", latency, latencyThreshold)
 	}
 
 	t.Logf("DirRename latency for 5k-file directory: %v", latency)
 }
 
 func TestWatcher_DirRenameCrossMount(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("requires Linux inotify cookies")
-	}
-
 	// Cross-mount renames cannot be detected via cookies because the
 	// inode spaces are different. We simulate this by renaming to a
 	// path outside the watched tree (which produces only a Rename event
@@ -189,10 +189,6 @@ func TestWatcher_DirRenameCrossMount(t *testing.T) {
 }
 
 func TestWatcher_RapidDoubleRename(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("requires Linux inotify cookies")
-	}
-
 	w, root := newTestWatcher(t)
 	startWatcher(t, w)
 
@@ -233,10 +229,6 @@ func TestWatcher_RapidDoubleRename(t *testing.T) {
 }
 
 func TestWatcher_DirRenameWithExcludedFiles(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("requires Linux inotify cookies")
-	}
-
 	w, root := newTestWatcher(t, func(cfg *Config) {
 		cfg.Exclude = []string{"**/*.swp"}
 	})

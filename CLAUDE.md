@@ -89,10 +89,10 @@ Target is Linux ARM64; development is on macOS. fsnotify uses FSEvents on macOS 
 
 This project uses **[OrbStack](https://orbstack.dev)** (not Docker Desktop) for the local Linux VM. OrbStack runs a fast, lightweight Ubuntu 24.04 VM (`dev` machine) with real inotify support. Always run watcher tests via `orb run -m dev -- ...` or `make test-linux`.
 
-Build pipeline order (never skip steps):
-1. `make test` — macOS native (catches compile errors, non-inotify tests)
-2. `orb run -m dev -- go test -race ./homedrive/...` — Linux VM (real inotify, race detector)
-3. Push to GitHub — CI validates on amd64 and arm64
+Build pipeline order — run in this order, never skip, commit only after all pass:
+1. `make test` — macOS native: catches compile errors and all platform-agnostic tests including rename tests (rename pairer handles both inotify and kqueue event orderings)
+2. `orb run -m dev -- go test -race ./homedrive/...` — Linux VM: real inotify, IN_MOVE_SELF, race detector
+3. Commit and push — CI validates on amd64 and arm64
 
 See `PLAN.md` §19 and `docs/dev-environment.md` for cross-compilation, build tags, and VS Code config.
 
