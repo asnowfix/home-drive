@@ -111,7 +111,9 @@ func (w *Watcher) Stop() {
 
 	w.debouncer.stop()
 	w.pairer.stop()
-	w.fsw.Close()
+	if err := w.fsw.Close(); err != nil {
+		w.log.Warn("fsnotify close error", "error", err)
+	}
 	close(w.done)
 }
 
@@ -146,7 +148,7 @@ func (w *Watcher) addWatch(path string) error {
 
 // removeWatch removes the fsnotify watch and unregisters from the pairer.
 func (w *Watcher) removeWatch(path string) {
-	w.fsw.Remove(path)
+	_ = w.fsw.Remove(path) // best-effort; path may already be unwatched after rename
 	w.pairer.untrackDir(path)
 }
 
@@ -285,7 +287,7 @@ func (w *Watcher) isSelfInduced(path string) bool {
 
 // walkNewDir adds watches to all subdirectories of a newly created directory.
 func (w *Watcher) walkNewDir(root string) {
-	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
