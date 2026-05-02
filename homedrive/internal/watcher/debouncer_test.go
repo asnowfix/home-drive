@@ -167,7 +167,7 @@ func TestDebouncer_Stop(t *testing.T) {
 	}
 }
 
-func TestDebouncer_KeepsLatestOp(t *testing.T) {
+func TestDebouncer_CreateNotDowngradedToWrite(t *testing.T) {
 	var mu sync.Mutex
 	var received []Event
 
@@ -178,7 +178,8 @@ func TestDebouncer_KeepsLatestOp(t *testing.T) {
 	})
 	defer d.stop()
 
-	// First event is Create, second is Write. Debouncer should keep the latest.
+	// os.WriteFile fires IN_CREATE then IN_MODIFY in quick succession.
+	// Create must not be downgraded to Write.
 	d.add(Event{Path: "/tmp/file.txt", Op: OpCreate, At: time.Now()})
 	d.add(Event{Path: "/tmp/file.txt", Op: OpWrite, At: time.Now()})
 
@@ -189,7 +190,7 @@ func TestDebouncer_KeepsLatestOp(t *testing.T) {
 	if len(received) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(received))
 	}
-	if received[0].Op != OpWrite {
-		t.Errorf("expected OpWrite (latest), got %v", received[0].Op)
+	if received[0].Op != OpCreate {
+		t.Errorf("expected OpCreate (not downgraded to Write), got %v", received[0].Op)
 	}
 }

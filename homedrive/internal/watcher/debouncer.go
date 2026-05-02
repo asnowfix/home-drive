@@ -37,8 +37,11 @@ func (d *debouncer) add(ev Event) {
 
 	path := ev.Path
 
-	// Update the pending event (always keep the latest).
-	d.pending[path] = ev
+	// Update the pending event. Don't downgrade Create → Write: os.WriteFile
+	// fires IN_CREATE then IN_MODIFY in rapid succession; the Create must win.
+	if existing, ok := d.pending[path]; !ok || !(existing.Op == OpCreate && ev.Op == OpWrite) {
+		d.pending[path] = ev
+	}
 
 	// If there is an existing timer, stop and reset it.
 	if t, ok := d.timers[path]; ok {
