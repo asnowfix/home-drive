@@ -39,7 +39,7 @@ func (d *debouncer) add(ev Event) {
 
 	// Update the pending event. Don't downgrade Create → Write: os.WriteFile
 	// fires IN_CREATE then IN_MODIFY in rapid succession; the Create must win.
-	if existing, ok := d.pending[path]; !(ok && existing.Op == OpCreate && ev.Op == OpWrite) {
+	if existing, ok := d.pending[path]; !ok || existing.Op != OpCreate || ev.Op != OpWrite {
 		d.pending[path] = ev
 	}
 
