@@ -182,7 +182,10 @@ func (p *pairer) isSuppressed(path string) bool {
 			delete(p.suppressedPrefixes, prefix)
 			continue
 		}
-		if strings.HasPrefix(path, prefix) {
+		// Also match the directory itself (IN_MOVE_SELF fires a Rename on
+		// the dir's own wd after the pair completes and the dir is untracked).
+		dirPath := strings.TrimSuffix(prefix, string(filepath.Separator))
+		if path == dirPath || strings.HasPrefix(path, prefix) {
 			return true
 		}
 	}

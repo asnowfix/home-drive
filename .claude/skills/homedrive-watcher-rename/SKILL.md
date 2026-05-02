@@ -50,6 +50,15 @@ preserving the cookie in `event.Op`.
 - **Conflict during rename**: if destination already exists remotely,
   apply the standard §11 conflict resolution at the directory level.
   Documented as a known v0.1 limitation.
+- **`IN_MOVE_SELF` fires after pairing**: when the source directory has
+  its own inotify watch, the kernel fires `IN_MOVE_SELF` on that watch
+  descriptor in addition to `IN_MOVED_FROM` on the parent. This produces
+  a second `Rename(srcDir)` event that can arrive **after** the pair
+  completes — at which point `srcDir` has been untracked by
+  `removeSubtreeWatches`. `isSuppressed` must match the directory path
+  itself, not only paths beneath it. `strings.HasPrefix(path, "srcDir/")`
+  silently misses `path == "srcDir"`. Fix: also check
+  `path == strings.TrimSuffix(prefix, string(filepath.Separator))`.
 
 ## Syncer behavior on `DirRename`
 
@@ -93,11 +102,16 @@ N transactions.
 
 ## Implementation hints
 
-- Pair buffer keyed by cookie: `map[uint32]renameEntry` with a `time.Timer`
-  per entry for window expiry.
+- Pair buffer keyed by **path** (not cookie): `map[string]renameEntry`
+  with a `time.Timer` per entry for window expiry. The path key is the
+  old directory path as reported by fsnotify.
 - Use a mutex around the buffer; events arrive on the fsnotify goroutine.
 - The suppression set for child events expires when the pair completes
   (or shortly after, e.g. 100ms grace).
+- `isSuppressed(path)` must cover **both** the directory itself and its
+  children: check `path == dirPath || strings.HasPrefix(path, dirPath+"/")`.
+  Checking only the `dirPath + "/"` prefix misses the `IN_MOVE_SELF` event
+  on the directory's own wd.
 - When re-watching, do it in the order: remove old → add new. Brief
   window where events on the renamed subtree are dropped is acceptable
   given the suppression set.
