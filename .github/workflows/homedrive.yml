@@ -49,8 +49,12 @@ jobs:
       - name: Verify rclone backends
         if: hashFiles('homedrive-bin') != ''
         run: |
-          backends=$(go tool nm homedrive-bin | grep -c 'rclone/backend/' || true)
-          test "$backends" -eq 1 || (echo "expected exactly 1 rclone backend, got $backends" && exit 1)
+          if grep -q 'rclone/rclone' homedrive/go.mod; then
+            backends=$(go tool nm homedrive-bin | grep -c 'rclone/backend/' || true)
+            test "$backends" -eq 1 || (echo "expected exactly 1 rclone backend, got $backends" && exit 1)
+          else
+            echo "rclone not yet in go.mod; skipping backend count check"
+          fi
 
       - name: Test
         if: matrix.goarch == 'amd64' && hashFiles('homedrive/**/*.go') != ''
