@@ -50,7 +50,9 @@ jobs:
         if: hashFiles('homedrive-bin') != ''
         run: |
           if grep -q 'rclone/rclone' homedrive/go.mod; then
-            backends=$(go tool nm homedrive-bin | grep -c 'rclone/backend/' || true)
+            # go tool nm fails on stripped binaries (-s -w removes the symbol table).
+            # Use strings instead: Go embeds package paths in .rodata even after stripping.
+            backends=$(strings homedrive-bin | grep -oE 'rclone/backend/[a-z0-9]+' | sort -u | wc -l | tr -d ' ')
             test "$backends" -eq 1 || (echo "expected exactly 1 rclone backend, got $backends" && exit 1)
           else
             echo "rclone not yet in go.mod; skipping backend count check"
