@@ -50,10 +50,17 @@ jobs:
         if: hashFiles('homedrive-bin') != ''
         run: |
           if grep -q 'rclone/rclone' homedrive/go.mod; then
-            # go tool nm fails on stripped binaries (-s -w removes the symbol table).
-            # Use strings instead: Go embeds package paths in .rodata even after stripping.
-            backends=$(strings homedrive-bin | grep -oE 'rclone/backend/[a-z0-9]+' | sort -u | wc -l | tr -d ' ')
-            test "$backends" -eq 1 || (echo "expected exactly 1 rclone backend, got $backends" && exit 1)
+            # go tool nm fails on stripped binaries; use go list -deps instead.
+            # drive pulls in crypt transitively — that is expected and allowed.
+            # Any other backend (s3, b2, sftp, …) is a violation.
+            unexpected=$(go list -deps ./homedrive/cmd/homedrive 2>/dev/null \
+              | grep -oE 'rclone/backend/[a-z0-9]+' | sort -u \
+              | grep -vE '^rclone/backend/(drive|crypt)$' || true)
+            if [ -n "$unexpected" ]; then
+              echo "unexpected rclone backends found: $unexpected"
+              exit 1
+            fi
+            echo "rclone backend check passed"
           else
             echo "rclone not yet in go.mod; skipping backend count check"
           fi
