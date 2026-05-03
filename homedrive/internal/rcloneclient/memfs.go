@@ -35,7 +35,6 @@ type MemFS struct {
 	files   map[string]RemoteObject
 	clock   Clock
 	changes []Change
-	token   int64
 	quota   Quota
 	idSeq   int64
 }
