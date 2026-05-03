@@ -14,7 +14,8 @@ contributions too.
 2. Branch: `phase-N-<short-title>`.
 3. Read the relevant skill(s) in `.claude/skills/`.
 4. Implement, with tests.
-5. Run locally inside OrbStack:
+5. Run locally inside OrbStack ([orbstack.dev](https://orbstack.dev)) —
+   the project requires real Linux inotify semantics not available on macOS:
    ```bash
    orb run -m dev -- go test -race ./homedrive/...
    ```

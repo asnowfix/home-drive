@@ -3,6 +3,8 @@ module github.com/asnowfix/home-drive/homedrive
 go 1.26.2
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.10.0
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/rclone/rclone v1.73.5
 	github.com/spf13/cobra v1.10.1
 )

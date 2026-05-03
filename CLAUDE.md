@@ -85,7 +85,16 @@ _ "github.com/rclone/rclone/backend/drive"
 
 ## Development environment
 
-Target is Linux ARM64; development is on macOS. fsnotify uses FSEvents on macOS (different semantics from inotify), so **watcher tests must run on Linux**. See `PLAN.md` §19 and `docs/dev-environment.md` for OrbStack setup, cross-compilation, build tags, and VS Code config.
+Target is Linux ARM64; development is on macOS. fsnotify uses FSEvents on macOS (different semantics from inotify), so **watcher tests must run on Linux**.
+
+This project uses **[OrbStack](https://orbstack.dev)** (not Docker Desktop) for the local Linux VM. OrbStack runs a fast, lightweight Ubuntu 24.04 VM (`dev` machine) with real inotify support. Always run watcher tests via `orb run -m dev -- ...` or `make test-linux`.
+
+Build pipeline order — run in this order, never skip, commit only after all pass:
+1. `make test` — macOS native: catches compile errors and all platform-agnostic tests including rename tests (rename pairer handles both inotify and kqueue event orderings)
+2. `orb run -m dev -- go test -race ./homedrive/...` — Linux VM: real inotify, IN_MOVE_SELF, race detector
+3. Commit and push — CI validates on amd64 and arm64
+
+See `PLAN.md` §19 and `docs/dev-environment.md` for cross-compilation, build tags, and VS Code config.
 
 ## Skills and agent
 
