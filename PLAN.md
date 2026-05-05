@@ -657,12 +657,15 @@ Each phase = one PR, reviewed before the next. Issues created via
   - rename of dir containing only excluded files → 1 paired event.
 - Issue: `[homedrive] Watcher fsnotify + rename pairer`.
 
-### Phase 2 — Minimal rclone wrapper (1d)
-- `internal/rcloneclient/`: selective backend import.
-- Methods: `CopyFile`, `DeleteFile`, `MoveFile`, `Stat`, `ListChanges`, `Quota`.
-- Honor `--dry-run`: log + return success without remote writes.
-- Binary size assertion in CI (< 25 MB).
-- Mock-friendly interface (`RemoteFS`).
+### Phase 2 — Minimal rclone wrapper (1d) [DONE]
+- [x] `internal/rcloneclient/`: selective backend import.
+- [x] Methods: `CopyFile`, `DeleteFile`, `MoveFile`, `Stat`, `ListChanges`, `Quota`.
+- [x] Honor `--dry-run`: log + return success without remote writes.
+- [x] Binary size assertion in CI (< 25 MB).
+- [x] Mock-friendly interface (`RemoteFS`).
+- [x] `MemFS` in-memory thread-safe with injectable clock.
+- [x] `FlakyFS` decorator injecting errors/latency/timeouts.
+- [x] `DryRunFS` logging wrapper for --dry-run mode.
 - Issue: `[homedrive] Wrapper rclone (minimal import)`.
 
 ### Phase 3 — Store + conflict resolution (1d)

@@ -642,27 +642,31 @@ Each phase = one PR, reviewed before the next. Issues created via
 - [x] Initial README + this `PLAN.md`.
 - Issue: `[homedrive] Bootstrap module`.
 
-### Phase 1 — Watcher with rename pairer (1.5d)
-- `internal/watcher/`: initial Walk, dynamic AddWatch on directory `Create`.
-- Per-path debouncer (configurable window).
-- **Directory rename pairer** (cookie-based, configurable window).
-- `doublestar` exclusion filters from config.
-- Outbound channel: `Event{Path, Op, At}` and `DirRename{From, To, At}`.
-- Unit tests:
-  - create, write, write x10 fast.
-  - mv dir small (10 files) → 1 paired event, child events suppressed.
-  - mv dir large (5k files in tests) → 1 paired event, < 100ms latency.
-  - mv across mount points → fallback to delete+create.
-  - rapid double rename within window → both pairs handled.
-  - rename of dir containing only excluded files → 1 paired event.
+### Phase 1 — Watcher with rename pairer (1.5d) [DONE]
+- [x] `internal/watcher/`: initial Walk, dynamic AddWatch on directory `Create`.
+- [x] Per-path debouncer (configurable window).
+- [x] **Directory rename pairer** (cookie-based, configurable window).
+- [x] `doublestar` exclusion filters from config.
+- [x] Inode/mtime guard — consult store before emitting (1s tolerance).
+- [x] Outbound channel: `Event{Path, Op, At}` and `DirRename{From, To, At}`.
+- [x] Unit tests:
+  - [x] create, write, write x10 fast → debounced to 1 event.
+  - [x] mv dir small (10 files) → 1 paired event, child events suppressed.
+  - [x] mv dir large (5k files in tests) → 1 paired event, < 100ms latency.
+  - [x] mv across mount points → fallback to delete+create.
+  - [x] rapid double rename within window → both pairs handled.
+  - [x] rename of dir containing only excluded files → 1 paired event.
 - Issue: `[homedrive] Watcher fsnotify + rename pairer`.
 
-### Phase 2 — Minimal rclone wrapper (1d)
-- `internal/rcloneclient/`: selective backend import.
-- Methods: `CopyFile`, `DeleteFile`, `MoveFile`, `Stat`, `ListChanges`, `Quota`.
-- Honor `--dry-run`: log + return success without remote writes.
-- Binary size assertion in CI (< 25 MB).
-- Mock-friendly interface (`RemoteFS`).
+### Phase 2 — Minimal rclone wrapper (1d) [DONE]
+- [x] `internal/rcloneclient/`: selective backend import.
+- [x] Methods: `CopyFile`, `DeleteFile`, `MoveFile`, `Stat`, `ListChanges`, `Quota`.
+- [x] Honor `--dry-run`: log + return success without remote writes.
+- [x] Binary size assertion in CI (< 25 MB).
+- [x] Mock-friendly interface (`RemoteFS`).
+- [x] `MemFS` in-memory thread-safe with injectable clock.
+- [x] `FlakyFS` decorator injecting errors/latency/timeouts.
+- [x] `DryRunFS` logging wrapper for --dry-run mode.
 - Issue: `[homedrive] Wrapper rclone (minimal import)`.
 
 ### Phase 3 — Store + conflict resolution (1d)
