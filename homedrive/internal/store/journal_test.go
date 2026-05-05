@@ -16,7 +16,7 @@ func newTestJournal(t *testing.T) *Journal {
 	if err != nil {
 		t.Fatalf("OpenJournal: %v", err)
 	}
-	t.Cleanup(func() { j.Close() })
+	t.Cleanup(func() { _ = j.Close() })
 	return j
 }
 

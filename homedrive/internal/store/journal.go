@@ -52,7 +52,7 @@ func OpenJournal(path string, logger *slog.Logger) (*Journal, error) {
 		_, err := tx.CreateBucketIfNotExists(bucketJournal)
 		return err
 	}); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("store: create bucket: %w", err)
 	}
 

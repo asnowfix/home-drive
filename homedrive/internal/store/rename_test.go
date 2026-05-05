@@ -21,7 +21,7 @@ func newTestJournalWithAuditor(t *testing.T) (*Journal, *Auditor, *bytes.Buffer)
 	if err != nil {
 		t.Fatalf("OpenJournal: %v", err)
 	}
-	t.Cleanup(func() { j.Close() })
+	t.Cleanup(func() { _ = j.Close() })
 
 	var auditBuf bytes.Buffer
 	auditor := NewAuditor(&auditBuf, logger)

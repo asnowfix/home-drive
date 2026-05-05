@@ -20,7 +20,7 @@ func newTestResolver(t *testing.T, policy ConflictPolicy) (*ConflictResolver, *J
 	if err != nil {
 		t.Fatalf("OpenJournal: %v", err)
 	}
-	t.Cleanup(func() { j.Close() })
+	t.Cleanup(func() { _ = j.Close() })
 
 	var auditBuf bytes.Buffer
 	auditor := NewAuditor(&auditBuf, logger)
@@ -130,9 +130,7 @@ func TestConflictResolver_OldNIncrementing(t *testing.T) {
 
 	// Simulate previous conflicts: .old.1 and .old.2 already exist.
 	for _, n := range []int{1, 2} {
-		oldPath := basePath + ".old." + strings.Replace("N", "N", string(rune('0'+n)), 1)
-		// Use the proper format.
-		oldPath = basePath + ".old." + itoa(n)
+		oldPath := basePath + ".old." + itoa(n)
 		if err := j.Put(JournalEntry{Path: oldPath, LastOrigin: "local"}); err != nil {
 			t.Fatalf("seed .old.%d: %v", n, err)
 		}
