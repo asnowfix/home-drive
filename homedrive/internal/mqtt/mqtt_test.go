@@ -235,7 +235,9 @@ func TestAutoReconnect_AfterBrokerRestart(t *testing.T) {
 		t.Fatalf("reserve port: %v", err)
 	}
 	hostPort := ln.Addr().String()
-	ln.Close()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
 
 	srv := newBrokerOnAddr(t, hostPort)
 	if srv == nil {
