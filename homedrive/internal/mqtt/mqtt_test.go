@@ -110,7 +110,19 @@ func newBrokerOnAddr(t *testing.T, hostPort string) *mqttserver.Server {
 		})
 		if err := srv.AddListener(tcp); err == nil {
 			go func() { _ = srv.Serve() }()
-			return srv
+			// Wait for the broker to actually start accepting connections before
+			// returning, otherwise paho may attempt to reconnect before Serve()
+			// has bound the socket (races on fast native runners; not on QEMU).
+			ready := time.Now().Add(2 * time.Second)
+			for time.Now().Before(ready) {
+				c, err := net.DialTimeout("tcp", hostPort, 100*time.Millisecond)
+				if err == nil {
+					_ = c.Close()
+					return srv
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			_ = srv.Close()
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
