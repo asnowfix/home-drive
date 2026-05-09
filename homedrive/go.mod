@@ -7,6 +7,7 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/rclone/rclone v1.73.5
 	github.com/spf13/cobra v1.10.1
+	go.etcd.io/bbolt v1.4.3
 )
 
 require (
