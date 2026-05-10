@@ -10,7 +10,51 @@ import (
 	"time"
 )
 
-// RemoteFS is the subset of rcloneclient.RemoteFS used by the puller.
+// Op represents a filesystem operation type from the watcher.
+type Op int
+
+const (
+	// OpCreate indicates a new file was created.
+	OpCreate Op = iota + 1
+	// OpWrite indicates an existing file was modified.
+	OpWrite
+	// OpRemove indicates a file was deleted.
+	OpRemove
+	// OpRename indicates a file was renamed (handled by the pairer upstream).
+	OpRename
+)
+
+// String returns the human-readable operation name.
+func (o Op) String() string {
+	switch o {
+	case OpCreate:
+		return "create"
+	case OpWrite:
+		return "write"
+	case OpRemove:
+		return "remove"
+	case OpRename:
+		return "rename"
+	default:
+		return "unknown"
+	}
+}
+
+// Event represents a single filesystem event from the watcher.
+type Event struct {
+	Path string
+	Op   Op
+	At   time.Time
+}
+
+// DirRename represents a paired directory rename event from the watcher.
+type DirRename struct {
+	From string
+	To   string
+	At   time.Time
+}
+
+// RemoteFS is the subset of rcloneclient.RemoteFS used by the syncer.
 // Tests supply a mock; production wires in the real rclone wrapper.
 type RemoteFS interface {
 	CopyFile(ctx context.Context, src, dstDir string) (RemoteObject, error)
@@ -55,7 +99,7 @@ type JournalEntry struct {
 	LastOrigin   string // "local" | "remote"
 }
 
-// Store is the subset of store.Store used by the puller for journal
+// Store is the subset of store.Store used by the syncer for journal
 // operations and page token persistence.
 type Store interface {
 	GetPageToken(ctx context.Context) (string, error)
@@ -64,6 +108,9 @@ type Store interface {
 	Put(ctx context.Context, entry JournalEntry) error
 	Delete(ctx context.Context, path string) error
 	NextOldN(ctx context.Context, path string) (int, error)
+	// RewritePrefix renames all journal paths under oldPrefix to newPrefix.
+	// Used by the push syncer when a directory is renamed.
+	RewritePrefix(ctx context.Context, oldPrefix, newPrefix string) (int, error)
 }
 
 // AuditLogger appends structured audit entries to the JSONL log.
@@ -75,7 +122,7 @@ type AuditLogger interface {
 type AuditEntry struct {
 	Timestamp  time.Time `json:"ts"`
 	Op         string    `json:"op"`
-	Path       string    `json:"path"`
+	Path       string    `json:"path,omitempty"`
 	Origin     string    `json:"origin,omitempty"`
 	Bytes      int64     `json:"bytes,omitempty"`
 	DurationMs int64     `json:"duration_ms,omitempty"`
@@ -83,6 +130,11 @@ type AuditEntry struct {
 	OldPath    string    `json:"old_path,omitempty"`
 	DryRun     bool      `json:"dry_run,omitempty"`
 	Error      string    `json:"error,omitempty"`
+	// Push-syncer fields for directory rename audit entries.
+	From       string `json:"from,omitempty"`
+	To         string `json:"to,omitempty"`
+	FilesCount int    `json:"files_count,omitempty"`
+	Attempt    int    `json:"attempt,omitempty"`
 }
 
 // Publisher is the subset of mqtt.Publisher used by the puller to emit

@@ -3,7 +3,9 @@ package syncer
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
+	"testing"
 	"time"
 )
 
@@ -18,6 +20,11 @@ type mockRemoteFS struct {
 	startToken  string
 	goneTokens  map[string]bool // tokens that trigger ErrGone
 	downloadErr map[string]error
+
+	// error hooks for push tests
+	copyErr func(path string) error
+	delErr  func(path string) error
+	moveErr func(src, dst string) error
 
 	// call recorders
 	downloadedFiles []downloadCall
@@ -54,9 +61,14 @@ func (m *mockRemoteFS) CopyFile(_ context.Context, src, dstDir string) (RemoteOb
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.copiedFiles = append(m.copiedFiles, copyCall{Src: src, DstDir: dstDir})
+	if m.copyErr != nil {
+		if err := m.copyErr(src); err != nil {
+			return RemoteObject{}, err
+		}
+	}
 	obj, ok := m.files[dstDir]
 	if !ok {
-		obj = RemoteObject{Path: dstDir, ID: "id-" + dstDir}
+		obj = RemoteObject{Path: dstDir, ModTime: time.Now(), ID: "id-" + dstDir}
 	}
 	return obj, nil
 }
@@ -65,6 +77,11 @@ func (m *mockRemoteFS) DeleteFile(_ context.Context, path string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.deletedFiles = append(m.deletedFiles, path)
+	if m.delErr != nil {
+		if err := m.delErr(path); err != nil {
+			return err
+		}
+	}
 	delete(m.files, path)
 	return nil
 }
@@ -120,20 +137,53 @@ func (m *mockRemoteFS) DownloadFile(_ context.Context, remotePath, localPath str
 	if err, ok := m.downloadErr[remotePath]; ok {
 		return err
 	}
-	// Write actual file content so os.Stat works in tests.
 	return writeTestFile(localPath, "content-of-"+remotePath)
+}
+
+// getCopyCalls returns the src paths from all CopyFile calls (for push tests).
+func (m *mockRemoteFS) getCopyCalls() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.copiedFiles))
+	for i, c := range m.copiedFiles {
+		out[i] = c.Src
+	}
+	return out
+}
+
+// getDeleteCalls returns the paths from all DeleteFile calls (for push tests).
+func (m *mockRemoteFS) getDeleteCalls() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.deletedFiles))
+	copy(out, m.deletedFiles)
+	return out
+}
+
+// getMoveCalls returns [src, dst] pairs from all MoveFile calls (for push tests).
+func (m *mockRemoteFS) getMoveCalls() [][2]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([][2]string, len(m.movedFiles))
+	for i, mv := range m.movedFiles {
+		out[i] = [2]string{mv.Src, mv.Dst}
+	}
+	return out
 }
 
 // mockStore is a thread-safe in-memory Store for testing.
 type mockStore struct {
-	mu        sync.Mutex
-	entries   map[string]JournalEntry
-	pageToken string
+	mu           sync.Mutex
+	entries      map[string]JournalEntry
+	pageToken    string
+	rewriteCalls [][2]string
+	rewriteCount int
 }
 
 func newMockStore() *mockStore {
 	return &mockStore{
-		entries: make(map[string]JournalEntry),
+		entries:      make(map[string]JournalEntry),
+		rewriteCount: 42,
 	}
 }
 
@@ -184,6 +234,33 @@ func (s *mockStore) NextOldN(_ context.Context, path string) (int, error) {
 	}
 }
 
+func (s *mockStore) RewritePrefix(_ context.Context, oldPrefix, newPrefix string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rewriteCalls = append(s.rewriteCalls, [2]string{oldPrefix, newPrefix})
+	return s.rewriteCount, nil
+}
+
+// getPuts returns all journal entries written via Put (for push tests).
+func (s *mockStore) getPuts() []JournalEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]JournalEntry, 0, len(s.entries))
+	for _, e := range s.entries {
+		out = append(out, e)
+	}
+	return out
+}
+
+// getRewriteCalls returns [oldPrefix, newPrefix] pairs (for push tests).
+func (s *mockStore) getRewriteCalls() [][2]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([][2]string, len(s.rewriteCalls))
+	copy(out, s.rewriteCalls)
+	return out
+}
+
 // mockAuditLogger records audit entries for test assertions.
 type mockAuditLogger struct {
 	mu      sync.Mutex
@@ -222,7 +299,7 @@ type publishedMsg struct {
 }
 
 func newMockPublisher() *mockPublisher {
-	return &mockPublisher{basePath: "homedrive/testhost/testuser"}
+	return &mockPublisher{basePath: "homedrive/test"}
 }
 
 func (p *mockPublisher) PublishJSON(topic string, payload any) error {
@@ -251,6 +328,11 @@ func (p *mockPublisher) getMessages() []publishedMsg {
 	return cp
 }
 
+// getEvents is an alias for getMessages used by push syncer tests.
+func (p *mockPublisher) getEvents() []publishedMsg {
+	return p.getMessages()
+}
+
 func (p *mockPublisher) getMessagesByTopic(topic string) []publishedMsg {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -267,3 +349,48 @@ func (p *mockPublisher) getMessagesByTopic(topic string) []publishedMsg {
 func fixedClock(t time.Time) func() time.Time {
 	return func() time.Time { return t }
 }
+
+// --- Push syncer test helpers ---
+
+// runSyncer starts a syncer, calls setup, then closes channels and
+// waits for graceful shutdown.
+func runSyncer(
+	t *testing.T,
+	s *Syncer,
+	events chan Event,
+	dirRenames chan DirRename,
+	setup func(),
+) {
+	t.Helper()
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() {
+		s.Run(ctx, events, dirRenames)
+		close(done)
+	}()
+
+	setup()
+
+	close(events)
+	close(dirRenames)
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("syncer did not shut down in time")
+	}
+}
+
+// noSleep is a sleep function that returns immediately, for tests.
+func noSleep(_ context.Context, _ time.Duration) {}
+
+// newDiscardLogger returns an slog.Logger that discards all output.
+func newDiscardLogger() *slog.Logger {
+	return slog.New(slog.NewJSONHandler(
+		discardWriter{}, &slog.HandlerOptions{Level: slog.LevelError + 1}))
+}
+
+type discardWriter struct{}
+
+func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }

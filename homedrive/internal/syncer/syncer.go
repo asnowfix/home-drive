@@ -39,7 +39,7 @@ type Syncer struct {
 	cfg       Config
 	remote    RemoteFS
 	store     Store
-	auditLog  AuditLog
+	auditLog  AuditLogger
 	publisher Publisher
 	logger    *slog.Logger
 
@@ -77,7 +77,7 @@ func New(
 	cfg Config,
 	remote RemoteFS,
 	store Store,
-	auditLog AuditLog,
+	auditLog AuditLogger,
 	publisher Publisher,
 	logger *slog.Logger,
 	opts ...Option,
@@ -259,7 +259,7 @@ func (s *Syncer) handleDirRename(ctx context.Context, dr DirRename) {
 	elapsed := s.nowFn().Sub(start)
 
 	if err == nil {
-		count, rewriteErr := s.store.RewritePrefix(dr.From, dr.To)
+		count, rewriteErr := s.store.RewritePrefix(ctx, dr.From, dr.To)
 		if rewriteErr != nil {
 			logger.Error("store prefix rewrite failed",
 				"error", rewriteErr.Error(),
@@ -315,7 +315,7 @@ func (s *Syncer) handleDirRename(ctx context.Context, dr DirRename) {
 // recordResult records the outcome of a push operation in the store,
 // audit log, and MQTT.
 func (s *Syncer) recordResult(
-	_ context.Context,
+	ctx context.Context,
 	path, op string,
 	err error,
 	elapsed time.Duration,
@@ -351,12 +351,12 @@ func (s *Syncer) recordResult(
 	)
 
 	// Record sync in journal (ignore store errors, they are logged).
-	record := SyncRecord{
+	record := JournalEntry{
 		Path:         path,
 		LastSyncedAt: s.nowFn(),
 		LastOrigin:   "local",
 	}
-	if putErr := s.store.Put(record); putErr != nil {
+	if putErr := s.store.Put(ctx, record); putErr != nil {
 		s.logger.Error("store put failed",
 			"path", path,
 			"error", putErr.Error(),
@@ -411,7 +411,7 @@ func (s *Syncer) appendAudit(entry AuditEntry) {
 	if s.auditLog == nil {
 		return
 	}
-	if err := s.auditLog.Append(entry); err != nil {
+	if err := s.auditLog.Log(entry); err != nil {
 		s.logger.Error("audit log append failed", "error", err.Error())
 	}
 }
