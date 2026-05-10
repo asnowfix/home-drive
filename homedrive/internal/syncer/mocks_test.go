@@ -24,7 +24,6 @@ type mockRemoteFS struct {
 	// error hooks for push tests
 	copyErr func(path string) error
 	delErr  func(path string) error
-	moveErr func(src, dst string) error
 
 	// call recorders
 	downloadedFiles []downloadCall

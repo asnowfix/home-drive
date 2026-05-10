@@ -77,7 +77,9 @@ func (p *Puller) Run(ctx context.Context) error {
 	)
 
 	// Run one cycle immediately at startup.
-	p.poll(ctx)
+	if err := p.poll(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		p.log.Error("poll error", "error", err)
+	}
 
 	ticker := time.NewTicker(p.cfg.Interval)
 	defer ticker.Stop()
@@ -88,7 +90,9 @@ func (p *Puller) Run(ctx context.Context) error {
 			p.log.Info("puller stopping", "reason", ctx.Err())
 			return ctx.Err()
 		case <-ticker.C:
-			p.poll(ctx)
+			if err := p.poll(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				p.log.Error("poll error", "error", err)
+			}
 		}
 	}
 }
