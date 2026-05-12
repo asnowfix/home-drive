@@ -8,7 +8,7 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/rclone/rclone v1.73.5
-	github.com/spf13/cobra v1.10.1
+	github.com/spf13/cobra v1.10.2
 	go.etcd.io/bbolt v1.4.3
 )
 
