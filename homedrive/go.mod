@@ -5,7 +5,7 @@ go 1.26.2
 require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
-	github.com/fsnotify/fsnotify v1.9.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/rclone/rclone v1.73.5
 	github.com/spf13/cobra v1.10.1
