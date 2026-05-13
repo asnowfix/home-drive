@@ -160,7 +160,7 @@ func TestBisync_AuditLogRecordsDurationAndCounts(t *testing.T) {
 		t.Fatal("audit log is empty")
 	}
 
-	var entry AuditEntry
+	var entry BisyncAuditEntry
 	if err := json.Unmarshal(
 		[]byte(strings.TrimSpace(logStr)), &entry,
 	); err != nil {
@@ -216,7 +216,7 @@ func TestBisync_DryRunDetectsButDoesNotSync(t *testing.T) {
 	if logStr == "" {
 		t.Fatal("audit log should be written even in dry-run mode")
 	}
-	var entry AuditEntry
+	var entry BisyncAuditEntry
 	if err := json.Unmarshal(
 		[]byte(strings.TrimSpace(logStr)), &entry,
 	); err != nil {

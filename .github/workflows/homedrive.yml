@@ -14,6 +14,10 @@ on:
       - ".github/workflows/homedrive.yml"
 
 jobs:
+  # Both architectures cross-compile the binary and verify its size and rclone
+  # backend imports.  Tests, lint, and coverage run on amd64 only — the arm64
+  # leg exists solely to confirm the binary compiles and meets size/import
+  # constraints; no Go test binary is executed there.
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -26,10 +30,14 @@ jobs:
         with:
           go-version: 'stable'
 
+      # QEMU is only needed for the arm64 cross-compilation step below.
+      # It does NOT run tests: the Test / Lint / Coverage steps are
+      # guarded by `if: matrix.goarch == 'amd64'` and are skipped entirely
+      # on the arm64 leg, which is why arm64 completes in ~50 s vs ~2 m for amd64.
       - uses: docker/setup-qemu-action@v4
         if: matrix.goarch == 'arm64'
 
-      - name: Build
+      - name: Build (${{ matrix.goarch }})
         env:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
@@ -65,17 +73,22 @@ jobs:
             echo "rclone not yet in go.mod; skipping backend count check"
           fi
 
-      - name: Test
+      # --- amd64 only: tests, lint, and coverage ---
+      # The three steps below are intentionally skipped on arm64.
+      # arm64 is build-verify only; running tests under QEMU would be
+      # ~10x slower and inotify semantics differ from native Linux anyway.
+
+      - name: Test (amd64 only)
         if: matrix.goarch == 'amd64' && hashFiles('homedrive/**/*.go') != ''
         run: go test -race -coverprofile=coverage.out ./homedrive/...
 
-      - name: Lint
+      - name: Lint (amd64 only)
         if: matrix.goarch == 'amd64' && hashFiles('homedrive/**/*.go') != ''
         uses: golangci/golangci-lint-action@v9
         with:
           working-directory: homedrive
 
-      - name: Coverage gate
+      - name: Coverage gate (amd64 only)
         if: matrix.goarch == 'amd64' && hashFiles('coverage.out') != ''
         run: |
           pct=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d %)

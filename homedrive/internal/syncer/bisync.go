@@ -250,7 +250,7 @@ func (b *Bisync) writeAudit(
 	}
 
 	elapsed := b.clock.Now().Sub(start)
-	entry := AuditEntry{
+	entry := BisyncAuditEntry{
 		Timestamp:    start.UTC().Format(time.RFC3339),
 		Op:           "bisync",
 		Duration:     fmt.Sprintf("%d", elapsed.Milliseconds()),

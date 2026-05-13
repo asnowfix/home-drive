@@ -2,8 +2,6 @@ package syncer
 
 import (
 	"bytes"
-	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +12,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// mockClock is a controllable clock for tests.
+// mockClock is a controllable clock for bisync tests.
 // ---------------------------------------------------------------------------
 
 type mockClock struct {
@@ -75,130 +73,7 @@ func (c *mockClock) After(_ time.Duration) <-chan time.Time {
 }
 
 // ---------------------------------------------------------------------------
-// mockRemoteFS is a thread-safe in-memory remote filesystem.
-// ---------------------------------------------------------------------------
-
-type mockRemoteFS struct {
-	mu    sync.Mutex
-	files map[string]RemoteObject
-	// Track operations for assertions.
-	copies []string
-	moves  []string
-}
-
-func newMockRemoteFS() *mockRemoteFS {
-	return &mockRemoteFS{
-		files: make(map[string]RemoteObject),
-	}
-}
-
-func (m *mockRemoteFS) Seed(
-	path string, modTime time.Time, md5 string,
-) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.files[path] = RemoteObject{
-		Path:    path,
-		Size:    100,
-		MD5:     md5,
-		ModTime: modTime,
-	}
-}
-
-func (m *mockRemoteFS) CopyFile(
-	_ context.Context, src, dstDir string,
-) (RemoteObject, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	name := filepath.Base(src)
-	remotePath := name
-	if dstDir != "" {
-		remotePath = dstDir + "/" + name
-	}
-
-	obj := RemoteObject{
-		Path:    remotePath,
-		Size:    100,
-		MD5:     "md5-" + remotePath,
-		ModTime: time.Now(),
-	}
-	m.files[remotePath] = obj
-	m.copies = append(m.copies, remotePath)
-	return obj, nil
-}
-
-func (m *mockRemoteFS) DeleteFile(
-	_ context.Context, path string,
-) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.files, path)
-	return nil
-}
-
-func (m *mockRemoteFS) MoveFile(
-	_ context.Context, src, dst string,
-) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	obj, ok := m.files[src]
-	if !ok {
-		return fmt.Errorf("remote file not found: %s", src)
-	}
-	delete(m.files, src)
-	obj.Path = dst
-	m.files[dst] = obj
-	m.moves = append(m.moves, src+"->"+dst)
-	return nil
-}
-
-func (m *mockRemoteFS) Stat(
-	_ context.Context, path string,
-) (RemoteObject, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	obj, ok := m.files[path]
-	if !ok {
-		return RemoteObject{}, fmt.Errorf("not found: %s", path)
-	}
-	return obj, nil
-}
-
-func (m *mockRemoteFS) List(
-	_ context.Context, _ string,
-) ([]RemoteObject, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	result := make([]RemoteObject, 0, len(m.files))
-	for _, obj := range m.files {
-		result = append(result, obj)
-	}
-	return result, nil
-}
-
-func (m *mockRemoteFS) CopyCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.copies)
-}
-
-func (m *mockRemoteFS) MoveCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.moves)
-}
-
-func (m *mockRemoteFS) HasFile(path string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	_, ok := m.files[path]
-	return ok
-}
-
-// ---------------------------------------------------------------------------
-// mockJournal is a thread-safe in-memory journal.
+// mockJournal is a thread-safe in-memory journal for bisync tests.
 // ---------------------------------------------------------------------------
 
 type mockJournal struct {
@@ -243,7 +118,7 @@ func (j *mockJournal) Seed(entry JournalEntry) {
 }
 
 // ---------------------------------------------------------------------------
-// mockMQTT records published events for assertion.
+// mockMQTT records bisync MQTT events for assertion.
 // ---------------------------------------------------------------------------
 
 type mockMQTT struct {

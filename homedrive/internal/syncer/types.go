@@ -1,9 +1,9 @@
-// types.go defines the interfaces, types, and sentinel errors used by the
-// bisync safety net and (in future phases) the push/pull syncer.
+// types.go defines bisync-specific interfaces, types, and sentinel errors.
+// Shared types (RemoteObject, RemoteFS, JournalEntry, AuditEntry, etc.) live
+// in ifaces.go; this file contains only what is unique to the bisync path.
 package syncer
 
 import (
-	"context"
 	"errors"
 	"io"
 	"time"
@@ -21,41 +21,12 @@ var ErrBisyncCanceled = errors.New("bisync canceled")
 var ErrBisyncRunning = errors.New("bisync already running")
 
 // ---------------------------------------------------------------------------
-// Local interfaces -- defined here so the package compiles independently
-// of the other phase implementations. Production wiring injects the
-// concrete types.
+// Bisync-specific interfaces
 // ---------------------------------------------------------------------------
 
-// RemoteObject represents metadata about a file on the remote side.
-type RemoteObject struct {
-	Path    string
-	Size    int64
-	MD5     string
-	ModTime time.Time
-}
-
-// RemoteFS abstracts the remote filesystem (Google Drive via rclone).
-// Tests inject MemFS; production injects RcloneFS.
-type RemoteFS interface {
-	CopyFile(ctx context.Context, src, dstDir string) (RemoteObject, error)
-	DeleteFile(ctx context.Context, path string) error
-	MoveFile(ctx context.Context, src, dst string) error
-	Stat(ctx context.Context, path string) (RemoteObject, error)
-	List(ctx context.Context, dir string) ([]RemoteObject, error)
-}
-
-// JournalEntry records the last-known sync state of a file.
-type JournalEntry struct {
-	Path         string    `json:"path"`
-	LocalMtime   time.Time `json:"local_mtime"`
-	RemoteMtime  time.Time `json:"remote_mtime"`
-	RemoteMD5    string    `json:"remote_md5"`
-	RemoteID     string    `json:"remote_id"`
-	LastSyncedAt time.Time `json:"last_synced_at"`
-	LastOrigin   string    `json:"last_origin"` // "local" | "remote"
-}
-
-// Journal abstracts the BoltDB store for sync state.
+// Journal abstracts the BoltDB store for bisync state.
+// It is context-free and lighter than Store, which includes page-token and
+// push-syncer methods.
 type Journal interface {
 	Get(path string) (*JournalEntry, error)
 	Put(entry JournalEntry) error
@@ -68,7 +39,7 @@ type EventPublisher interface {
 	Topic(parts ...string) string
 }
 
-// AuditWriter abstracts the JSONL audit log.
+// AuditWriter abstracts the JSONL audit log writer used by bisync.
 type AuditWriter interface {
 	io.Writer
 }
@@ -106,11 +77,11 @@ type BisyncConfig struct {
 }
 
 // ---------------------------------------------------------------------------
-// Audit log entry
+// BisyncAuditEntry is a single JSONL line in the bisync audit log.
+// Per-file push/pull audit entries use AuditEntry from ifaces.go.
 // ---------------------------------------------------------------------------
 
-// AuditEntry represents a single JSONL line in the audit log.
-type AuditEntry struct {
+type BisyncAuditEntry struct {
 	Timestamp    string `json:"ts"`
 	Op           string `json:"op"`
 	Duration     string `json:"duration_ms,omitempty"`
