@@ -12,7 +12,7 @@ import (
 func TestSyncer_FileCreate(t *testing.T) {
 	remote := newMockRemoteFS()
 	store := newMockStore()
-	audit := newMockAuditLog()
+	audit := newMockAuditLogger()
 	pub := newMockPublisher()
 	logger := newDiscardLogger()
 
@@ -58,7 +58,7 @@ func TestSyncer_FileCreate(t *testing.T) {
 func TestSyncer_FileWrite(t *testing.T) {
 	remote := newMockRemoteFS()
 	store := newMockStore()
-	audit := newMockAuditLog()
+	audit := newMockAuditLogger()
 	pub := newMockPublisher()
 	logger := newDiscardLogger()
 
@@ -84,7 +84,7 @@ func TestSyncer_FileWrite(t *testing.T) {
 func TestSyncer_FileDelete(t *testing.T) {
 	remote := newMockRemoteFS()
 	store := newMockStore()
-	audit := newMockAuditLog()
+	audit := newMockAuditLogger()
 	pub := newMockPublisher()
 	logger := newDiscardLogger()
 
@@ -118,7 +118,7 @@ func TestSyncer_FileDelete(t *testing.T) {
 func TestSyncer_DirRename(t *testing.T) {
 	remote := newMockRemoteFS()
 	store := newMockStore()
-	audit := newMockAuditLog()
+	audit := newMockAuditLogger()
 	pub := newMockPublisher()
 	logger := newDiscardLogger()
 
@@ -163,7 +163,7 @@ func TestSyncer_DirRename(t *testing.T) {
 func TestSyncer_RetryOnTransientError(t *testing.T) {
 	remote := newMockRemoteFS()
 	store := newMockStore()
-	audit := newMockAuditLog()
+	audit := newMockAuditLogger()
 	pub := newMockPublisher()
 	logger := newDiscardLogger()
 
@@ -205,7 +205,7 @@ func TestSyncer_RetryOnTransientError(t *testing.T) {
 func TestSyncer_AllRetriesExhausted(t *testing.T) {
 	remote := newMockRemoteFS()
 	store := newMockStore()
-	audit := newMockAuditLog()
+	audit := newMockAuditLogger()
 	pub := newMockPublisher()
 	logger := newDiscardLogger()
 
@@ -260,7 +260,7 @@ func TestSyncer_AllRetriesExhausted(t *testing.T) {
 func TestSyncer_DryRun(t *testing.T) {
 	remote := newMockRemoteFS()
 	store := newMockStore()
-	audit := newMockAuditLog()
+	audit := newMockAuditLogger()
 	pub := newMockPublisher()
 	logger := newDiscardLogger()
 
@@ -314,7 +314,7 @@ func TestSyncer_DryRun(t *testing.T) {
 func TestSyncer_ConcurrentEvents(t *testing.T) {
 	remote := newMockRemoteFS()
 	store := newMockStore()
-	audit := newMockAuditLog()
+	audit := newMockAuditLogger()
 	pub := newMockPublisher()
 	logger := newDiscardLogger()
 
@@ -357,7 +357,7 @@ func TestSyncer_ConcurrentEvents(t *testing.T) {
 func TestSyncer_BisyncMutexCoordination(t *testing.T) {
 	remote := newMockRemoteFS()
 	store := newMockStore()
-	audit := newMockAuditLog()
+	audit := newMockAuditLogger()
 	pub := newMockPublisher()
 	logger := newDiscardLogger()
 

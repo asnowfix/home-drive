@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"io"
+
 	paho "github.com/eclipse/paho.mqtt.golang"
 	mqttserver "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
@@ -241,6 +243,87 @@ func TestPublishJSON_RoundTrip(t *testing.T) {
 	}
 }
 
+// brokerProxy sits between paho and a real broker. Closing the proxy
+// connections simulates broker failure without calling Server.Close()
+// directly, which has a TOCTOU data race in mochi-mqtt v2.7.9 between
+// TCP.Serve's l.end check + goroutine spawn and TCP.Close's l.end=1 +
+// ClientsWg.Wait().
+type brokerProxy struct {
+	mu     sync.Mutex
+	ln     net.Listener
+	target string
+	conns  []net.Conn
+}
+
+func newBrokerProxy(t *testing.T, target string) *brokerProxy {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("proxy listen: %v", err)
+	}
+	p := &brokerProxy{ln: ln, target: target}
+	go p.serve()
+	return p
+}
+
+func (p *brokerProxy) addr() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ln.Addr().String()
+}
+
+func (p *brokerProxy) serve() {
+	for {
+		client, err := p.ln.Accept()
+		if err != nil {
+			return
+		}
+		p.mu.Lock()
+		target := p.target
+		p.mu.Unlock()
+		server, err := net.Dial("tcp", target)
+		if err != nil {
+			_ = client.Close()
+			continue
+		}
+		p.mu.Lock()
+		p.conns = append(p.conns, client, server)
+		p.mu.Unlock()
+		go func() { _, _ = io.Copy(server, client) }()
+		go func() { _, _ = io.Copy(client, server) }()
+	}
+}
+
+// kill closes all proxy connections, simulating network-level broker failure.
+// The proxy listener itself stays closed so paho's immediate reconnect attempt
+// gets "connection refused" while we restart the broker.
+func (p *brokerProxy) kill() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_ = p.ln.Close()
+	for _, c := range p.conns {
+		_ = c.Close()
+	}
+	p.conns = nil
+}
+
+// rebind reopens the proxy listener on the original address, forwarding to a
+// new target. Call after kill() and after the replacement broker is ready.
+func (p *brokerProxy) rebind(t *testing.T, newTarget string) bool {
+	t.Helper()
+	proxyAddr := p.ln.Addr().String()
+	ln, err := net.Listen("tcp", proxyAddr)
+	if err != nil {
+		return false
+	}
+	p.mu.Lock()
+	p.ln = ln
+	p.target = newTarget
+	p.mu.Unlock()
+	go p.serve()
+	return true
+}
+
 func TestAutoReconnect_AfterBrokerRestart(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -255,8 +338,16 @@ func TestAutoReconnect_AfterBrokerRestart(t *testing.T) {
 	if srv == nil {
 		t.Fatal("could not start initial broker")
 	}
+	// srv.Close() runs in t.Cleanup — by then the proxy has already closed
+	// the broker connections so all session goroutines have exited and
+	// ClientsWg.Wait() returns immediately without any race.
+	t.Cleanup(func() { _ = srv.Close() })
 
-	cfg := testConfig("tcp://" + hostPort)
+	// paho connects to the proxy, which forwards to the real broker.
+	proxy := newBrokerProxy(t, hostPort)
+	t.Cleanup(proxy.kill)
+
+	cfg := testConfig("tcp://" + proxy.addr())
 	cfg.ReconnectMax = 1 * time.Second
 
 	client, err := New(cfg, "myhost", "myuser", testLogger())
@@ -268,8 +359,10 @@ func TestAutoReconnect_AfterBrokerRestart(t *testing.T) {
 		t.Fatal("expected connected before broker kill")
 	}
 
-	// Kill the broker.
-	_ = srv.Close()
+	// Kill the broker: close the proxy (no Server.Close() here — that's the
+	// call that races in mochi-mqtt v2.7.9).  Paho detects the TCP drop and
+	// starts auto-reconnecting; it gets "connection refused" until we rebind.
+	proxy.kill()
 
 	deadline := time.Now().Add(5 * time.Second)
 	for client.paho.IsConnectionOpen() && time.Now().Before(deadline) {
@@ -279,11 +372,20 @@ func TestAutoReconnect_AfterBrokerRestart(t *testing.T) {
 	// Restart broker on the same port.
 	srv2 := newBrokerOnAddr(t, hostPort)
 	if srv2 == nil {
-		// Close client before skipping since broker is gone.
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = client.Close(ctx)
 		t.Skip("could not rebind to same port")
+	}
+
+	// Reopen the proxy pointing to the new broker. Paho's next reconnect
+	// attempt lands here and flows through to srv2.
+	if !proxy.rebind(t, hostPort) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = client.Close(ctx)
+		_ = srv2.Close()
+		t.Skip("could not rebind proxy")
 	}
 
 	deadline = time.Now().Add(10 * time.Second)
