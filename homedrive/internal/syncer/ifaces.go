@@ -61,6 +61,7 @@ type RemoteFS interface {
 	DeleteFile(ctx context.Context, path string) error
 	MoveFile(ctx context.Context, src, dst string) error
 	Stat(ctx context.Context, path string) (RemoteObject, error)
+	List(ctx context.Context, dir string) ([]RemoteObject, error)
 	ListChanges(ctx context.Context, pageToken string) (Changes, error)
 	GetStartPageToken(ctx context.Context) (string, error)
 	DownloadFile(ctx context.Context, remotePath, localPath string) error

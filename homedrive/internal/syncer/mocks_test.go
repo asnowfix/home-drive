@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -65,10 +66,18 @@ func (m *mockRemoteFS) CopyFile(_ context.Context, src, dstDir string) (RemoteOb
 			return RemoteObject{}, err
 		}
 	}
-	obj, ok := m.files[dstDir]
-	if !ok {
-		obj = RemoteObject{Path: dstDir, ModTime: time.Now(), ID: "id-" + dstDir}
+	// Compute destination path. Two calling conventions coexist:
+	//   push syncer: CopyFile(relPath, relPath)     → dstDir IS the full path
+	//   bisync:      CopyFile(absLocalPath, dir)     → join dir + basename(src)
+	name := filepath.Base(src)
+	remotePath := dstDir
+	if remotePath == "" || remotePath == "." {
+		remotePath = name
+	} else if filepath.Base(remotePath) != name {
+		remotePath = remotePath + "/" + name
 	}
+	obj := RemoteObject{Path: remotePath, Size: 100, MD5: "md5-" + remotePath, ModTime: time.Now(), ID: "id-" + remotePath}
+	m.files[remotePath] = obj
 	return obj, nil
 }
 
@@ -137,6 +146,52 @@ func (m *mockRemoteFS) DownloadFile(_ context.Context, remotePath, localPath str
 		return err
 	}
 	return writeTestFile(localPath, "content-of-"+remotePath)
+}
+
+// List returns all seeded/copied files (for bisync tests).
+func (m *mockRemoteFS) List(_ context.Context, _ string) ([]RemoteObject, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]RemoteObject, 0, len(m.files))
+	for _, obj := range m.files {
+		result = append(result, obj)
+	}
+	return result, nil
+}
+
+// Seed adds a file to the remote store (for bisync tests).
+func (m *mockRemoteFS) Seed(path string, modTime time.Time, md5 string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.files[path] = RemoteObject{
+		Path:    path,
+		Size:    100,
+		MD5:     md5,
+		ModTime: modTime,
+		ID:      "id-" + path,
+	}
+}
+
+// HasFile reports whether path exists in the remote store (for bisync tests).
+func (m *mockRemoteFS) HasFile(path string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.files[path]
+	return ok
+}
+
+// CopyCount returns the number of successful CopyFile calls (for bisync tests).
+func (m *mockRemoteFS) CopyCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.copiedFiles)
+}
+
+// MoveCount returns the number of MoveFile calls (for bisync tests).
+func (m *mockRemoteFS) MoveCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.movedFiles)
 }
 
 // getCopyCalls returns the src paths from all CopyFile calls (for push tests).
