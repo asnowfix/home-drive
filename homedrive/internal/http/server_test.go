@@ -107,7 +107,7 @@ func doRequest(t *testing.T, handler http.Handler, method, path string) *http.Re
 
 func readBody(t *testing.T, resp *http.Response) string {
 	t.Helper()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("reading response body: %v", err)

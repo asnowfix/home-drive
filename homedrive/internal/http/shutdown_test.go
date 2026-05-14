@@ -33,7 +33,7 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	for time.Now().Before(deadline) {
 		conn, connErr := net.DialTimeout("tcp", addr, 50*time.Millisecond)
 		if connErr == nil {
-			conn.Close()
+			_ = conn.Close()
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -44,7 +44,7 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /healthz: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
