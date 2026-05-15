@@ -19,7 +19,7 @@ func TestEventPublisher_Emit_SetsTimestamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	topic := client.Topic("events", string(EventPushSuccess))
 	received := subscribeInline(t, srv, topic)
@@ -58,7 +58,7 @@ func TestEventPublisher_Emit_PreservesExplicitTimestamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	topic := client.Topic("events", string(EventPullSuccess))
 	received := subscribeInline(t, srv, topic)
@@ -96,7 +96,7 @@ func TestEventPublisher_Emit_RequiresType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ep := NewEventPublisher(client, 1, log)
 	err = ep.Emit(Event{Path: "test.txt"})
@@ -114,7 +114,7 @@ func TestEventPublisher_EmitConflict_Payload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	topic := client.Topic("events", string(EventConflictDetected))
 	received := subscribeInline(t, srv, topic)
@@ -171,7 +171,7 @@ func TestEventPublisher_EmitDirRename_Payload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	topic := client.Topic("events", string(EventDirRename))
 	received := subscribeInline(t, srv, topic)
@@ -213,7 +213,7 @@ func TestEventPublisher_EmitSync_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	topic := client.Topic("events", string(EventPushSuccess))
 	received := subscribeInline(t, srv, topic)
@@ -249,7 +249,7 @@ func TestEventPublisher_EmitSync_Failure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	topic := client.Topic("events", string(EventPushFailure))
 	received := subscribeInline(t, srv, topic)
@@ -283,7 +283,7 @@ func TestEventPublisher_EmitQuota_Warning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	topic := client.Topic("events", string(EventQuotaWarning))
 	received := subscribeInline(t, srv, topic)
@@ -319,7 +319,7 @@ func TestEventPublisher_EmitOAuthFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	topic := client.Topic("events", string(EventOAuthRefreshFailed))
 	received := subscribeInline(t, srv, topic)
@@ -362,7 +362,7 @@ func TestEventPublisher_EventTopicFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	tests := []struct {
 		eventType EventType

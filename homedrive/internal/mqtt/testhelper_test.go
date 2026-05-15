@@ -31,7 +31,7 @@ func startEmbeddedBroker(t *testing.T) (string, *mochi.Server) {
 		t.Fatalf("failed to listen on ephemeral port: %v", err)
 	}
 	addr := ln.Addr().String()
-	ln.Close()
+	_ = ln.Close()
 
 	tcp := listeners.NewTCP(listeners.Config{
 		ID:      "test",
@@ -53,17 +53,6 @@ func startEmbeddedBroker(t *testing.T) (string, *mochi.Server) {
 	})
 
 	return fmt.Sprintf("tcp://%s", addr), s
-}
-
-// testConfig returns a Config suitable for tests with the given broker address.
-func testConfig(brokerAddr string) Config {
-	return Config{
-		Broker:            brokerAddr,
-		ClientIDPrefix:    "test",
-		BaseTopic:         "homedrive",
-		HADiscoveryPrefix: "homeassistant",
-		QoS:               1,
-	}
 }
 
 // subscribeInline subscribes via the mochi inline client and sends received

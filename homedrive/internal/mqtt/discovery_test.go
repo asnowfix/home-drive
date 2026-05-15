@@ -209,7 +209,7 @@ func TestPublishDiscovery_PublishesAllEntities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	if err := PublishDiscovery(client, cfg, "testhost", "testuser", "0.1.0", log); err != nil {
 		t.Fatalf("PublishDiscovery() error: %v", err)
@@ -261,7 +261,7 @@ func TestPublishDiscovery_RetainTrue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	// Publish discovery messages first.
 	if err := PublishDiscovery(client, cfg, "rethost", "retuser", "0.1.0", log); err != nil {

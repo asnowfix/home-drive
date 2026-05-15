@@ -91,7 +91,7 @@ func TestStatePublisher_PublishesOnStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	status := &mockStatusProvider{
 		status:   "running",
@@ -187,7 +187,7 @@ func TestStatePublisher_PublishesAtInterval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	status := &mockStatusProvider{status: "running"}
 	metrics := &mockMetricsProvider{pendingUp: 1}
@@ -235,7 +235,7 @@ func TestStatePublisher_EmptyTimestamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	// Zero timestamps should publish empty strings.
 	status := &mockStatusProvider{status: "running"}
@@ -276,7 +276,7 @@ func TestStatePublisher_PublishOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	status := &mockStatusProvider{status: "paused"}
 	metrics := &mockMetricsProvider{pendingUp: 10}
