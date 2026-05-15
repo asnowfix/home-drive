@@ -1,5 +1,5 @@
 .PHONY: build-mac build-arm64 build-amd64 test test-linux test-pi deploy-pi \
-	dev-create dev-delete dev-setup dev-shell clean
+	dev-create dev-delete dev-setup dev-shell clean install-systemd install-package
 
 BINARY := homedrive
 CMD    := ./homedrive/cmd/homedrive
@@ -81,6 +81,21 @@ dev-delete:
 
 dev-shell: dev-setup
 	$(ORB_RUN) 'cd $(CURDIR) && exec $$SHELL -l'
+
+LINUX_DIR := homedrive/linux
+PREFIX    := /usr
+
+# Must be run as root (sudo make install-systemd / sudo make install-package).
+install-systemd:
+	install -d -m 0755 /etc/systemd/system
+	install -m 0644 $(LINUX_DIR)/homedrive@.service /etc/systemd/system/
+	install -d -m 0755 /etc/default
+	install -m 0644 $(LINUX_DIR)/homedrive.default /etc/default/homedrive
+
+install-package: build-arm64 install-systemd
+	install -m 0755 $(DIST)/$(BINARY)-arm64 $(PREFIX)/bin/$(BINARY)
+	$(LINUX_DIR)/postinst.sh
+	systemctl daemon-reload
 
 clean:
 	rm -rf $(DIST)

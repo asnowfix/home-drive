@@ -1,13 +1,9 @@
-/var/log/homedrive/audit.jsonl {
+/var/log/homedrive/*/audit.jsonl {
     weekly
     rotate 12
     compress
     delaycompress
     missingok
     notifempty
-    create 0640 homedrive homedrive
-    sharedscripts
-    postrotate
-        systemctl reload 'homedrive@*.service' > /dev/null 2>&1 || true
-    endscript
+    copytruncate
 }
