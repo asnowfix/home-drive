@@ -642,7 +642,7 @@ Each phase = one PR, reviewed before the next. Issues created via
 - [x] Initial README + this `PLAN.md`.
 - Issue: `[homedrive] Bootstrap module`.
 
-### Phase 1 — Watcher with rename pairer (1.5d)
+### Phase 1 — Watcher with rename pairer (1.5d) [DONE]
 - `internal/watcher/`: initial Walk, dynamic AddWatch on directory `Create`.
 - Per-path debouncer (configurable window).
 - **Directory rename pairer** (cookie-based, configurable window).
@@ -668,7 +668,7 @@ Each phase = one PR, reviewed before the next. Issues created via
 - [x] `DryRunFS` logging wrapper for --dry-run mode.
 - Issue: `[homedrive] Wrapper rclone (minimal import)`.
 
-### Phase 3 — Store + conflict resolution (1d)
+### Phase 3 — Store + conflict resolution (1d) [DONE]
 - `internal/store/` with BoltDB, documented schema.
 - `newer_wins` algorithm with `.old.<N>`.
 - **Bulk path-prefix rewrite** for directory renames (single TX).
