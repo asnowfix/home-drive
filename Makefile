@@ -85,16 +85,17 @@ dev-shell: dev-setup
 LINUX_DIR := homedrive/linux
 PREFIX    := /usr
 
+# Must be run as root (sudo make install-systemd / sudo make install-package).
 install-systemd:
 	install -d -m 0755 /etc/systemd/system
 	install -m 0644 $(LINUX_DIR)/homedrive@.service /etc/systemd/system/
 	install -d -m 0755 /etc/default
 	install -m 0644 $(LINUX_DIR)/homedrive.default /etc/default/homedrive
-	systemctl daemon-reload
 
 install-package: build-arm64 install-systemd
 	install -m 0755 $(DIST)/$(BINARY)-arm64 $(PREFIX)/bin/$(BINARY)
-	cd $(LINUX_DIR) && ./postinst.sh
+	$(LINUX_DIR)/postinst.sh
+	systemctl daemon-reload
 
 clean:
 	rm -rf $(DIST)
