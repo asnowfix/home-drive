@@ -126,6 +126,21 @@ func (c *mockPushController) ResumeCount() int {
 	return c.resumeCt
 }
 
+// notifyingRemoteFS wraps a mockRemoteFS and sends to ch on every Quota call.
+type notifyingRemoteFS struct {
+	inner *mockRemoteFS
+	ch    chan struct{}
+}
+
+func (n *notifyingRemoteFS) Quota(ctx context.Context) (QuotaInfo, error) {
+	qi, err := n.inner.Quota(ctx)
+	select {
+	case n.ch <- struct{}{}:
+	default:
+	}
+	return qi, err
+}
+
 // --- helpers ---
 
 func newTestMonitor(t *testing.T, remote *mockRemoteFS, pub *mockPublisher, push *mockPushController, dryRun bool) *Monitor {

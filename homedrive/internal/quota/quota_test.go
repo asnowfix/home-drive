@@ -272,22 +272,31 @@ func TestQuotaInfo_UsedPercent(t *testing.T) {
 }
 
 func TestMonitor_RunCancellation(t *testing.T) {
-	remote := &mockRemoteFS{quota: QuotaInfo{Used: 50, Total: 100}}
+	inner := &mockRemoteFS{quota: QuotaInfo{Used: 50, Total: 100}}
+	pollCh := make(chan struct{}, 10)
+	remote := &notifyingRemoteFS{inner: inner, ch: pollCh}
 	pub := &mockPublisher{}
 	push := &mockPushController{}
 	cfg := DefaultConfig()
-	cfg.PollInterval = 10 * time.Millisecond // fast poll for test
+	cfg.PollInterval = 10 * time.Millisecond
 	mon := NewMonitor(remote, pub, push, cfg, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	done := make(chan error, 1)
 	go func() {
 		done <- mon.Run(ctx)
 	}()
 
-	// Let it run a few poll cycles.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for 3 confirmed poll cycles before cancelling.
+	for i := 0; i < 3; i++ {
+		select {
+		case <-pollCh:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("poll %d did not fire within 2s", i+1)
+		}
+	}
 	cancel()
 
 	select {
