@@ -2,6 +2,7 @@ package quota
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"testing"
@@ -352,5 +353,38 @@ func TestMonitor_FullLifecycle(t *testing.T) {
 	mon.Poll(ctx)
 	if mon.State().State != StateNormal {
 		t.Fatalf("step 6: expected normal, got %s", mon.State().State)
+	}
+}
+
+func TestMonitor_PollErrorWhileBlocked(t *testing.T) {
+	remote := &mockRemoteFS{quota: QuotaInfo{Used: 99, Total: 100}}
+	pub := &mockPublisher{}
+	push := &mockPushController{}
+	mon := newTestMonitor(t, remote, pub, push, false)
+	ctx := context.Background()
+
+	// Drive into blocked state.
+	mon.Poll(ctx)
+	if mon.State().State != StateBlocked {
+		t.Fatalf("setup: expected blocked, got %s", mon.State().State)
+	}
+	if !push.IsPaused() {
+		t.Fatal("setup: expected push paused")
+	}
+
+	// Inject consecutive poll errors.
+	remote.SetError(errors.New("network error"))
+	mon.Poll(ctx)
+	mon.Poll(ctx)
+
+	// State must stay blocked — cannot safely resume without knowing quota.
+	if s := mon.State(); s.State != StateBlocked {
+		t.Errorf("expected blocked after poll errors, got %s", s.State)
+	}
+	if !push.IsPaused() {
+		t.Error("expected push still paused after poll errors")
+	}
+	if mon.State().LastError == "" {
+		t.Error("expected LastError to be set after poll errors")
 	}
 }
