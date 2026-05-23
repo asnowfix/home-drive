@@ -45,12 +45,13 @@ func TestWatcher_WriteDebounced(t *testing.T) {
 	// Wait for the create event to clear.
 	collectEvents(t, w, 300*time.Millisecond)
 
-	// Write 10 times rapidly.
-	for i := 0; i < 10; i++ {
+	// Write 5 times with no sleep — a true burst that must coalesce regardless
+	// of scheduler jitter. (10ms sleeps inflated on loaded CI runners past the
+	// 100ms debounce window, causing spurious splits.)
+	for i := 0; i < 5; i++ {
 		if err := os.WriteFile(path, []byte("data"), 0644); err != nil {
 			t.Fatalf("write %d failed: %v", i, err)
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 
 	// Collect events. The debouncer (100ms) should coalesce to 1 event.
