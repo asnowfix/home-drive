@@ -181,23 +181,28 @@ func (m *Monitor) poll(ctx context.Context) {
 	qi, err := m.remote.Quota(ctx)
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	m.lastPoll = time.Now()
 	if err != nil {
 		m.lastErr = fmt.Errorf("quota poll failed: %w", err)
+		m.mu.Unlock()
+		// State is not changed on poll errors — if push was already paused,
+		// the monitor stays blocked. Resuming without knowing quota level
+		// would be unsafe.
 		m.log.Error("quota poll failed", "error", err)
 		return
 	}
 	m.lastErr = nil
 	m.lastQuota = qi
-
 	pct := qi.UsedPercent()
 	prev := m.state
 	next := m.evaluate(pct, prev)
+	if next != prev {
+		m.state = next
+	}
+	m.mu.Unlock()
 
 	if next != prev {
-		m.transition(prev, next, pct)
+		m.applyTransition(prev, next, pct)
 	}
 }
 
@@ -218,9 +223,7 @@ func (m *Monitor) evaluate(pct float64, prev State) State {
 	}
 }
 
-func (m *Monitor) transition(prev, next State, pct float64) {
-	m.state = next
-
+func (m *Monitor) applyTransition(prev, next State, pct float64) {
 	m.log.Info("quota state transition",
 		"op", "quota_transition",
 		"from", string(prev),
