@@ -243,7 +243,7 @@ func (m *Monitor) applyTransition(prev, next State, pct float64) {
 		m.emitEvent("quota.exhausted", pct)
 		m.pausePush()
 	case StateNormal:
-		// If transitioning from blocked or warned back to normal, resume.
+		// Warned state does not pause push, so only resume from blocked.
 		if prev == StateBlocked {
 			m.resumePush()
 		}
