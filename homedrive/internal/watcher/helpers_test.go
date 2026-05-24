@@ -4,12 +4,14 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 	"time"
 )
 
 // stubStore implements SyncStore for testing the mtime guard.
 type stubStore struct {
+	mu      sync.RWMutex
 	records map[string]*SyncRecord
 }
 
@@ -17,7 +19,15 @@ func (s *stubStore) GetSyncRecord(path string) *SyncRecord {
 	if s == nil || s.records == nil {
 		return nil
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.records[path]
+}
+
+func (s *stubStore) set(path string, rec *SyncRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records[path] = rec
 }
 
 // newTestWatcher creates a Watcher for testing with a temp directory and

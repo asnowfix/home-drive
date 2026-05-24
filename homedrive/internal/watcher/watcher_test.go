@@ -185,7 +185,7 @@ func TestWatcher_MtimeGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to re-stat before rewrite: %v", err)
 	}
-	store.records[filePath] = &SyncRecord{LocalMtime: info.ModTime(), Size: info.Size()}
+	store.set(filePath, &SyncRecord{LocalMtime: info.ModTime(), Size: info.Size()})
 
 	// Rewrite with same content (simulating a pull echo).
 	if err := os.WriteFile(filePath, []byte("synced content"), 0644); err != nil {
