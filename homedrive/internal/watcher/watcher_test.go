@@ -178,6 +178,15 @@ func TestWatcher_MtimeGuard(t *testing.T) {
 
 	startWatcher(t, w)
 
+	// Refresh the store record immediately before the rewrite so the guard
+	// reference mtime is always within 1s of the write, regardless of how
+	// long watcher initialisation took on a loaded race-detector runner.
+	info, err = os.Stat(filePath)
+	if err != nil {
+		t.Fatalf("failed to re-stat before rewrite: %v", err)
+	}
+	store.records[filePath] = &SyncRecord{LocalMtime: info.ModTime(), Size: info.Size()}
+
 	// Rewrite with same content (simulating a pull echo).
 	if err := os.WriteFile(filePath, []byte("synced content"), 0644); err != nil {
 		t.Fatalf("failed to rewrite file: %v", err)
