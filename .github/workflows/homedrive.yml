@@ -56,10 +56,9 @@ jobs:
 
       - name: Verify rclone backend imports
         run: |
-          # The drive backend transitively pulls in crypt, so counting symbols
-          # in the binary is not reliable. Instead, verify that source code only
-          # explicitly imports backend/drive and no other rclone backends.
-          imports=$(grep -rn 'rclone/backend/' homedrive/ --include='*.go' \
+          # Match only actual import statements (quoted paths), not comments.
+          # drive is the only permitted backend; crypt is pulled in transitively.
+          imports=$(grep -rn '"github.com/rclone/rclone/backend/' homedrive/ --include='*.go' \
             | grep -v '_test.go' \
             | grep -v 'rclone/backend/drive' || true)
           if [ -n "$imports" ]; then
@@ -67,8 +66,7 @@ jobs:
             echo "$imports"
             exit 1
           fi
-          # Also verify that backend/drive IS imported (once rcloneclient is wired)
-          drive_imports=$(grep -rn 'rclone/backend/drive' homedrive/ --include='*.go' \
+          drive_imports=$(grep -rn '"github.com/rclone/rclone/backend/drive"' homedrive/ --include='*.go' \
             | grep -v '_test.go' || true)
           echo "Drive backend imports: ${drive_imports:-none (not yet wired)}"
 
