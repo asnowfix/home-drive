@@ -33,7 +33,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       # QEMU enables cross-compilation of the arm64 binary on the amd64 runner.
       # It does NOT run the test suite — no Go tests are executed under QEMU.
@@ -83,7 +83,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Test
         run: go test -race -coverprofile=coverage.out ./homedrive/...
@@ -110,7 +110,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - uses: golangci/golangci-lint-action@v9
         with:
