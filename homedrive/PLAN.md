@@ -669,91 +669,91 @@ Each phase = one PR, reviewed before the next. Issues created via
 - [x] `DryRunFS` logging wrapper for --dry-run mode.
 - Issue: `[homedrive] Wrapper rclone (minimal import)`.
 
-### Phase 3 — Store + conflict resolution (1d)
-- `internal/store/` with BoltDB, documented schema.
-- `newer_wins` algorithm with `.old.<N>`.
-- **Bulk path-prefix rewrite** for directory renames (single TX).
-- JSONL audit appender.
-- Unit tests covering all 3 cases of §11.2 + edge cases.
+### Phase 3 — Store + conflict resolution (1d) [DONE]
+- [x] `internal/store/` with BoltDB, documented schema.
+- [x] `newer_wins` algorithm with `.old.<N>`.
+- [x] **Bulk path-prefix rewrite** for directory renames (single TX).
+- [x] JSONL audit appender.
+- [x] Unit tests covering all 3 cases of §11.2 + edge cases.
 - Issue: `[homedrive] Store + conflict resolution`.
 
-### Phase 4 — MQTT wrapper (0.5d)
-- `internal/mqtt/`: paho wrapper per §8.
-- LWT, auto-reconnect, JSON publish, topic builder.
-- Unit tests with embedded broker (`mochi-mqtt/server`).
-- Future-extension interfaces documented (commented out).
+### Phase 4 — MQTT wrapper (0.5d) [DONE]
+- [x] `internal/mqtt/`: paho wrapper per §8.
+- [x] LWT, auto-reconnect, JSON publish, topic builder.
+- [x] Unit tests with embedded broker (`mochi-mqtt/server`).
+- [x] Future-extension interfaces documented (commented out).
 - Issue: `[homedrive] MQTT wrapper`.
 
-### Phase 5 — Push syncer (1d)
-- Worker pool consuming the watcher queue.
-- Handles `Event` and `DirRename` events distinctly.
-- Exponential backoff retry.
-- Push/bisync coordination via `sync.RWMutex`.
-- End-to-end tests with mocked `RemoteFS`, including `mv dir` scenario
+### Phase 5 — Push syncer (1d) [DONE]
+- [x] Worker pool consuming the watcher queue.
+- [x] Handles `Event` and `DirRename` events distinctly.
+- [x] Exponential backoff retry.
+- [x] Push/bisync coordination via `sync.RWMutex`.
+- [x] End-to-end tests with mocked `RemoteFS`, including `mv dir` scenario
   asserting exactly 1 `MoveFile` call.
 - Issue: `[homedrive] Push worker pool`.
 
-### Phase 6 — Pull via Drive Changes API (1d)
-- Polling `changes.list` with `pageToken` persisted in store.
-- Download + conflict resolution.
-- Tests with mock supplying simulated `Change` events.
-- 410 GONE handling (token reset).
+### Phase 6 — Pull via Drive Changes API (1d) [DONE]
+- [x] Polling `changes.list` with `pageToken` persisted in store.
+- [x] Download + conflict resolution.
+- [x] Tests with mock supplying simulated `Change` events.
+- [x] 410 GONE handling (token reset).
 - Issue: `[homedrive] Pull via Drive Changes API`.
 
-### Phase 7 — Bisync safety net (0.5d)
-- Configurable ticker (default 1h).
-- Global lock blocking push/pull during execution.
+### Phase 7 — Bisync safety net (0.5d) [DONE]
+- [x] Configurable ticker (default 1h).
+- [x] Global lock blocking push/pull during execution.
 - Issue: `[homedrive] Periodic bisync safety net`.
 
-### Phase 8 — HTTP control + metrics (0.5d)
-- Standard `net/http` server.
-- Routes `/status /pause /resume /resync /reload /healthz /metrics`.
-- Prometheus exporter aligned with `myhome` pattern.
-- `httptest`-based unit tests.
-- CLI sub-commands wired to call the endpoint.
+### Phase 8 — HTTP control + metrics (0.5d) [DONE]
+- [x] Standard `net/http` server.
+- [x] Routes `/status /pause /resume /resync /reload /healthz /metrics`.
+- [x] Prometheus exporter aligned with `myhome` pattern.
+- [x] `httptest`-based unit tests.
+- [x] CLI sub-commands wired to call the endpoint.
 - Issue: `[homedrive] HTTP control endpoint`.
 
-### Phase 9 — HA Discovery + state publisher (0.5d)
-- HA discovery configs published with retain at startup + on `/reload`.
-- Periodic state publisher (uses `internal/mqtt/`).
-- Event publisher (incl. `dir_rename`).
-- `docs/home-assistant.md` with example automations.
+### Phase 9 — HA Discovery + state publisher (0.5d) [DONE]
+- [x] HA discovery configs published with retain at startup + on `/reload`.
+- [x] Periodic state publisher (uses `internal/mqtt/`).
+- [x] Event publisher (incl. `dir_rename`).
+- [x] `docs/home-assistant.md` with example automations.
 - Issue: `[homedrive] HA Discovery + state/event publishing`.
 
-### Phase 10 — Quota handling (0.5d)
-- Periodic `Quota()` poll (every 5min).
-- At `warn_pct`: MQTT warning event.
-- At `stop_push_pct`: pause push workers, keep pull running, MQTT
+### Phase 10 — Quota handling (0.5d) [DONE]
+- [x] Periodic `Quota()` poll (every 5min).
+- [x] At `warn_pct`: MQTT warning event.
+- [x] At `stop_push_pct`: pause push workers, keep pull running, MQTT
   `quota.exhausted` event, status reflects `quota_blocked`.
-- Resume pushes when quota drops below `stop_push_pct - 5%` (hysteresis).
+- [x] Resume pushes when quota drops below `stop_push_pct - 5%` (hysteresis).
 - Issue: `[homedrive] Quota-aware push throttling`.
 
-### Phase 11 — Packaging systemd + sysctl + logrotate (0.5d) DONE
-- `linux/homedrive@.service` templated.
-- `linux/homedrive.default` sample.
-- `linux/homedrive.logrotate` (weekly, keep 12).
-- `linux/99-homedrive-inotify.conf` (sysctl).
-- `linux/postinst.sh` applying sysctl + creating dirs.
-- Make targets `install-systemd` and `install-package`.
+### Phase 11 — Packaging systemd + sysctl + logrotate (0.5d) [DONE]
+- [x] `linux/homedrive@.service` templated.
+- [x] `linux/homedrive.default` sample.
+- [x] `linux/homedrive.logrotate` (weekly, keep 12).
+- [x] `linux/99-homedrive-inotify.conf` (sysctl).
+- [x] `linux/postinst.sh` applying sysctl + creating dirs.
+- [x] Make targets `install-systemd` and `install-package`.
 - Manual test on Pi.
 - Issue: `[homedrive] systemd packaging + sysctl + logrotate`.
 
-### Phase 12 — CI / GitHub Actions (0.5d)
-- Dedicated workflow `.github/workflows/homedrive.yml`.
-- Build matrix `linux/amd64` + `linux/arm64` (QEMU).
-- `go test`, `go vet`, `staticcheck`, `golangci-lint`.
-- Coverage gate > 70%.
-- Binary size check in CI.
-- Update `.goreleaser.yml`.
-- Update `dependabot.yml` with grouping for rclone updates.
+### Phase 12 — CI / GitHub Actions (0.5d) [DONE]
+- [x] Dedicated workflow `.github/workflows/homedrive.yml`.
+- [x] Build matrix `linux/amd64` + `linux/arm64` (QEMU).
+- [x] `go test`, `golangci-lint`.
+- [x] Coverage gate > 70%.
+- [x] Binary size check in CI.
+- [x] Updated `.goreleaser.yml`.
+- [x] Updated `dependabot.yml` with grouping for rclone updates.
 - Issue: `[homedrive] CI GitHub Actions`.
 
 ### Phase 13 — Docs + 0.1.0 release (0.5d) [DONE]
 - [x] Final README, `docs/architecture.md`, `docs/conflict-resolution.md`,
   `docs/directory-rename.md`, `docs/dev-environment.md`,
   `docs/home-assistant.md`, `docs/manual-validation.md`.
-- [ ] Update root `RELEASE_NOTES.md`.
-- [ ] Tag `homedrive/v0.1.0` (deferred to post-merge).
+- [x] Update root `RELEASE_NOTES.md`.
+- [x] Tag `homedrive/v0.1.0` (deferred to post-merge — awaiting user approval).
 
 **Estimated total: ~10 person-days, atomic 0.5–1.5 day PRs.**
 

@@ -46,6 +46,7 @@ homedrive/
     config/                  YAML + /etc/default loader, hot reload
     http/                    Control endpoint (status, pause, resume, etc.)
     mqtt/                    Paho wrapper, HA Discovery, topic builder
+    quota/                   Quota poller, push throttling, hysteresis
   pkg/
     homedrive/               Public types (reusable by other modules if needed)
   linux/
