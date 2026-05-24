@@ -1,13 +1,16 @@
 version: 2
 updates:
   - package-ecosystem: "gomod"
-    directory: "/"
+    directory: "/homedrive"
     schedule:
       interval: "weekly"
     groups:
       rclone:
         patterns:
-          - "github.com/rclone/rclone/*"
+          - "github.com/rclone/rclone*"
+        update-types:
+          - "minor"
+          - "patch"
       mqtt:
         patterns:
           - "github.com/eclipse/paho.mqtt.golang"
