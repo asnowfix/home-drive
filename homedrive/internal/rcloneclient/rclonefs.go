@@ -3,7 +3,9 @@ package rcloneclient
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 
 	// Single rclone backend -- keep this as the ONLY backend import.
@@ -126,22 +128,108 @@ func (r *RcloneFS) Stat(ctx context.Context, remotePath string) (RemoteObject, e
 	return remoteObjectFromRclone(obj), nil
 }
 
-// ListChanges returns changes since the given page token.
+// GetStartPageToken returns the sentinel token that triggers a full
+// remote walk on the first pull cycle.
+func (r *RcloneFS) GetStartPageToken(_ context.Context) (string, error) {
+	return "initial_sync", nil
+}
+
+// ListChanges returns remote changes since the given page token.
 //
-// This method uses the Drive Changes API, which requires casting the rclone
-// Fs to the drive-specific type. This is the one place where the wrapper
-// abstraction leaks -- the cast is necessary because rclone's operations
-// package does not expose the Changes API generically.
+// When pageToken == "initial_sync", performs a full recursive walk of
+// the remote and returns every file as a change, triggering a complete
+// pull on first startup or after a token reset.
 //
-// For Phase 2 the implementation returns a placeholder; the full Drive
-// Changes API integration lands in Phase 6.
-func (r *RcloneFS) ListChanges(_ context.Context, pageToken string) (Changes, error) {
-	// TODO(phase-6): implement via drive.Fs cast for Changes API.
-	r.log.Info("ListChanges not yet implemented",
-		"op", "ListChanges",
-		"page_token", pageToken,
-	)
-	return Changes{NextPageToken: pageToken}, nil
+// Any other token returns empty changes with the same stable token
+// until the Drive Changes API is wired in.
+func (r *RcloneFS) ListChanges(ctx context.Context, pageToken string) (Changes, error) {
+	if pageToken != "initial_sync" {
+		return Changes{NextPageToken: pageToken}, nil
+	}
+
+	r.log.Info("ListChanges: full remote walk (initial sync)", "op", "ListChanges")
+
+	var items []Change
+	if err := r.listRecursive(ctx, "", &items); err != nil {
+		return Changes{}, fmt.Errorf("rcloneclient: walk for initial sync: %w", err)
+	}
+
+	r.log.Info("ListChanges: walk complete", "files", len(items))
+	return Changes{Items: items, NextPageToken: "synced"}, nil
+}
+
+// listRecursive walks dir on the remote Fs, appending file changes to items.
+func (r *RcloneFS) listRecursive(ctx context.Context, dir string, items *[]Change) error {
+	entries, err := r.fsObj.List(ctx, dir)
+	if err != nil {
+		return fmt.Errorf("list %q: %w", dir, err)
+	}
+	for _, entry := range entries {
+		switch v := entry.(type) {
+		case rclonefs.Object:
+			ro := remoteObjectFromRclone(v)
+			*items = append(*items, Change{Path: ro.Path, Object: &ro})
+		default:
+			if err := r.listRecursive(ctx, entry.Remote(), items); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// DownloadFile downloads the remote file at remotePath to localPath,
+// preserving the remote mtime for loop-prevention.
+func (r *RcloneFS) DownloadFile(ctx context.Context, remotePath, localPath string) error {
+	obj, err := r.fsObj.NewObject(ctx, remotePath)
+	if err != nil {
+		return fmt.Errorf("rcloneclient: open remote %q: %w", remotePath, err)
+	}
+
+	rc, err := obj.Open(ctx)
+	if err != nil {
+		return fmt.Errorf("rcloneclient: open stream %q: %w", remotePath, err)
+	}
+	defer rc.Close()
+
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+		return fmt.Errorf("rcloneclient: mkdirall for %q: %w", localPath, err)
+	}
+
+	f, err := os.Create(localPath)
+	if err != nil {
+		return fmt.Errorf("rcloneclient: create %q: %w", localPath, err)
+	}
+	defer f.Close()
+
+	if _, err := io.Copy(f, rc); err != nil {
+		return fmt.Errorf("rcloneclient: download %q: %w", localPath, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("rcloneclient: close %q: %w", localPath, err)
+	}
+
+	mtime := obj.ModTime(ctx)
+	if err := os.Chtimes(localPath, mtime, mtime); err != nil {
+		r.log.Warn("failed to preserve mtime after download",
+			"path", localPath, "error", err)
+	}
+	return nil
+}
+
+// List returns all objects in the given remote directory (non-recursive).
+func (r *RcloneFS) List(ctx context.Context, dir string) ([]RemoteObject, error) {
+	entries, err := r.fsObj.List(ctx, dir)
+	if err != nil {
+		return nil, fmt.Errorf("rcloneclient: list %q: %w", dir, err)
+	}
+	var objs []RemoteObject
+	for _, entry := range entries {
+		if obj, ok := entry.(rclonefs.Object); ok {
+			objs = append(objs, remoteObjectFromRclone(obj))
+		}
+	}
+	return objs, nil
 }
 
 // Quota returns the current remote storage usage via fs.About.
@@ -182,9 +270,8 @@ func remoteObjectFromRclone(obj rclonefs.Object) RemoteObject {
 		ro.RemoteID = ider.ID()
 	}
 
-	// MD5 extraction deferred -- requires fs/hash import which is not in
-	// the allow-list. Will be added when Phase 6 (Pull via Changes API)
-	// needs it, with binary size verification.
+	// MD5 extraction requires fs/hash which would add rclone backend imports
+	// beyond the allowed set; omitted until the Drive Changes API needs it.
 
 	return ro
 }

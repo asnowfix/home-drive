@@ -81,6 +81,14 @@ func (p *Puller) processFileChange(ctx context.Context, ch Change, start time.Ti
 		if isConflict {
 			return p.handleConflict(ctx, ch, journal, localMtime, start)
 		}
+		// Remote mtime unchanged since last recorded sync: already in sync, skip.
+		diff := ch.Object.ModTime.Sub(journal.RemoteMtime)
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff <= time.Second {
+			return nil
+		}
 	}
 
 	return p.downloadFile(ctx, ch, start)

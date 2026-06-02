@@ -94,8 +94,11 @@ install-systemd:
 
 install-package: build-arm64 install-systemd
 	install -m 0755 $(DIST)/$(BINARY)-arm64 $(PREFIX)/bin/$(BINARY)
+	install -m 0644 $(LINUX_DIR)/99-homedrive-inotify.conf /etc/sysctl.d/
+	install -m 0644 $(LINUX_DIR)/homedrive.logrotate /etc/logrotate.d/homedrive
+	install -d -m 0755 /etc/homedrive
+	install -m 0644 $(LINUX_DIR)/config.yaml /etc/homedrive/config.yaml
 	$(LINUX_DIR)/postinst.sh
-	systemctl daemon-reload
 
 clean:
 	rm -rf $(DIST)

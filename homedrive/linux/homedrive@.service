@@ -5,7 +5,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
+Type=simple
 User=%i
 Group=%i
 EnvironmentFile=/etc/default/homedrive
@@ -14,7 +14,6 @@ ExecStart=/usr/bin/homedrive run --config ${HOMEDRIVE_CONFIG}
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=10
-WatchdogSec=60
 StateDirectory=homedrive/%i
 LogsDirectory=homedrive/%i
 ConfigurationDirectory=homedrive

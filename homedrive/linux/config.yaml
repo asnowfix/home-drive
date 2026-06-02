@@ -1,0 +1,76 @@
+# /etc/homedrive/config.yaml — default configuration.
+# Adjust local_root, remote, and rclone_config before starting the service.
+# Enable: systemctl enable --now homedrive@fix.service
+
+local_root: /mnt/external/gdrive
+remote: "gdrive:"
+rclone_config: /home/fix/.config/rclone/rclone.conf
+
+watcher:
+  debounce: 2s
+  dir_rename_pair_window: 500ms
+  exclude:
+    - "**/.git/**"
+    - "**/.svn/**"
+    - "**/.hg/**"
+    - "**/.DS_Store"
+    - "**/Thumbs.db"
+    - "**/desktop.ini"
+    - "**/*.swp"
+    - "**/*.swo"
+    - "**/*~"
+    - "**/.#*"
+    - "**/~$*"
+    - "**/.~lock.*"
+    - "**/node_modules/**"
+    - "**/.venv/**"
+    - "**/__pycache__/**"
+    - "**/.idea/**"
+    - "**/.vscode/**"
+    - "**/*.tmp"
+    - "**/*.partial"
+    - "**/*.crdownload"
+
+push:
+  workers: 2
+  retry:
+    max_attempts: 5
+    initial_backoff: 5s
+    max_backoff: 5m
+
+pull:
+  changes_api_interval: 30s
+  bisync_interval: 1h
+
+conflict:
+  policy: newer_wins
+  old_suffix_format: ".old.%d"
+
+state:
+  # systemd StateDirectory=homedrive/%i creates /var/lib/homedrive/<user>/
+  path: /var/lib/homedrive/fix/state.db
+  # systemd LogsDirectory=homedrive/%i creates /var/log/homedrive/<user>/
+  audit_log: /var/log/homedrive/fix/audit.jsonl
+
+http:
+  listen: 127.0.0.1:6090
+  metrics: true
+
+mqtt:
+  enabled: true
+  broker: tcp://192.168.1.2:1883
+  client_id_prefix: homedrive
+  base_topic: homedrive
+  ha_discovery_prefix: homeassistant
+  publish_interval: 30s
+  qos: 1
+
+logging:
+  level: info
+  format: json
+
+quota:
+  warn_pct: 90
+  stop_push_pct: 99
+
+dry_run: false

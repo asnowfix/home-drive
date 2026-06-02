@@ -70,10 +70,9 @@ func TestDryRunFlag_DefaultFalse(t *testing.T) {
 	var capturedCtx context.Context
 	for _, cmd := range root.Commands() {
 		if cmd.Name() == "run" {
-			original := cmd.RunE
 			cmd.RunE = func(cmd *cobra.Command, args []string) error {
 				capturedCtx = cmd.Context()
-				return original(cmd, args)
+				return nil // capture only; don't start the agent
 			}
 			break
 		}
@@ -103,10 +102,9 @@ func TestDryRunFlag_SetTrue(t *testing.T) {
 	var capturedCtx context.Context
 	for _, cmd := range root.Commands() {
 		if cmd.Name() == "run" {
-			original := cmd.RunE
 			cmd.RunE = func(cmd *cobra.Command, args []string) error {
 				capturedCtx = cmd.Context()
-				return original(cmd, args)
+				return nil // capture only; don't start the agent
 			}
 			break
 		}
