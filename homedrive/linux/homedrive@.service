@@ -10,6 +10,7 @@ User=%i
 Group=%i
 EnvironmentFile=/etc/default/homedrive
 EnvironmentFile=-/etc/default/homedrive.%i
+ExecCondition=/bin/sh -c 'test -f $(getent passwd %i | cut -d: -f6)/.config/homedrive/config.yaml'
 ExecStart=/usr/bin/homedrive run
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
