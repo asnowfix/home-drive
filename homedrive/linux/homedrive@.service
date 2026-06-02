@@ -5,24 +5,22 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
+Type=simple
 User=%i
 Group=%i
 EnvironmentFile=/etc/default/homedrive
 EnvironmentFile=-/etc/default/homedrive.%i
-ExecStart=/usr/bin/homedrive run --config ${HOMEDRIVE_CONFIG}
+ExecCondition=/bin/sh -c 'test -f $(getent passwd %i | cut -d: -f6)/.config/homedrive/config.yaml'
+ExecStart=/usr/bin/homedrive run
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=10
-WatchdogSec=60
 StateDirectory=homedrive/%i
 LogsDirectory=homedrive/%i
-ConfigurationDirectory=homedrive
 
 # hardening
 ProtectSystem=strict
 ProtectHome=read-only
-ReadOnlyPaths=/etc/homedrive
 PrivateTmp=true
 NoNewPrivileges=true
 ProtectKernelTunables=true

@@ -1,6 +1,6 @@
 # /etc/default/homedrive
 # Variables consumed by systemd (homedrive@.service).
-# Rich config lives in HOMEDRIVE_CONFIG (YAML).
-HOMEDRIVE_CONFIG=/etc/homedrive/config.yaml
+# Per-user config lives at ~/.config/homedrive/config.yaml
+# (see /usr/share/doc/homedrive/config.yaml.example).
 HOMEDRIVE_LOG_LEVEL=info
 HOMEDRIVE_LOG=stderr

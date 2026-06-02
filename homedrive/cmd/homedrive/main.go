@@ -4,14 +4,20 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
-	// Import rcloneclient to register the Drive backend at init time.
-	// This is the only rclone backend; binary stays < 25 MB.
-	_ "github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
+	"github.com/asnowfix/home-drive/homedrive/internal/config"
+	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
+	"github.com/asnowfix/home-drive/homedrive/internal/store"
+	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
 )
 
 // version is set at build time via -ldflags.
@@ -36,6 +42,15 @@ func main() {
 		slog.Error("fatal error", "error", err)
 		os.Exit(1)
 	}
+}
+
+// defaultConfigPath returns the XDG-compliant per-user config path.
+func defaultConfigPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "/etc/homedrive/config.yaml"
+	}
+	return filepath.Join(dir, "homedrive", "config.yaml")
 }
 
 func newRootCmd() *cobra.Command {
@@ -63,20 +78,105 @@ func newRootCmd() *cobra.Command {
 }
 
 func newRunCmd() *cobra.Command {
-	return &cobra.Command{
+	var configPath string
+
+	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Start the sync agent",
 		RunE:  runAgent,
 	}
+	cmd.Flags().StringVar(&configPath, "config", defaultConfigPath(),
+		"path to config file")
+	return cmd
 }
 
 func runAgent(cmd *cobra.Command, _ []string) error {
 	dryRun, _ := cmd.Context().Value(DryRunKey).(bool)
+	configPath, _ := cmd.Flags().GetString("config")
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	if dryRun {
+		cfg.DryRun = true
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cfg.State.Path), 0o755); err != nil {
+		return fmt.Errorf("create state dir: %w", err)
+	}
+	if err := os.MkdirAll(cfg.LocalRoot, 0o755); err != nil {
+		return fmt.Errorf("create local root: %w", err)
+	}
+
+	journal, err := store.OpenJournal(cfg.State.Path, slog.Default())
+	if err != nil {
+		return fmt.Errorf("open journal: %w", err)
+	}
+	defer func() { _ = journal.Close() }()
+
+	var auditAdapter syncer.AuditLogger
+	if cfg.State.AuditLog != "" {
+		if err := os.MkdirAll(filepath.Dir(cfg.State.AuditLog), 0o755); err != nil {
+			return fmt.Errorf("create audit log dir: %w", err)
+		}
+		f, err := os.OpenFile(cfg.State.AuditLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640)
+		if err != nil {
+			return fmt.Errorf("open audit log: %w", err)
+		}
+		defer func() { _ = f.Close() }()
+		auditAdapter = &auditLoggerAdapter{a: store.NewAuditor(f, slog.Default())}
+	}
+
 	slog.Info("starting homedrive agent",
 		"version", version,
-		"dry_run", dryRun,
+		"config", configPath,
+		"local_root", cfg.LocalRoot,
+		"remote", cfg.Remote,
+		"dry_run", cfg.DryRun,
 	)
-	// Phase 1+ will wire watcher, syncer, http, mqtt here.
+
+	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
+	rfs, err := rcloneclient.NewRcloneFS(ctx, rcloneclient.RcloneFSConfig{
+		Remote:     cfg.Remote,
+		ConfigPath: cfg.RcloneConfig,
+		Log:        slog.Default(),
+	})
+	if err != nil {
+		return fmt.Errorf("init rclone remote: %w", err)
+	}
+
+	interval := cfg.Pull.ChangesAPIInterval.Duration
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+
+	puller := syncer.NewPuller(
+		syncer.PullerConfig{
+			Interval:       interval,
+			LocalRoot:      cfg.LocalRoot,
+			ConflictPolicy: syncer.ConflictPolicy(cfg.Conflict.Policy),
+			DryRun:         cfg.DryRun,
+		},
+		&rcloneSyncerAdapter{fs: rfs},
+		&journalSyncerAdapter{j: journal, logger: slog.Default()},
+		auditAdapter,
+		noopPublisher{},
+		slog.Default(),
+		time.Now,
+	)
+
+	pullerDone := make(chan error, 1)
+	go func() { pullerDone <- puller.Run(ctx) }()
+
+	<-ctx.Done()
+	err = <-pullerDone
+	slog.Info("homedrive agent stopped")
+	if err != nil && err != context.Canceled {
+		return err
+	}
 	return nil
 }
 
@@ -100,7 +200,6 @@ func newCtlStatusCmd() *cobra.Command {
 		Short: "Show agent status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			slog.Info("ctl: status requested")
-			// Phase 8 will call GET /status on the HTTP endpoint.
 			return nil
 		},
 	}
@@ -112,7 +211,6 @@ func newCtlPauseCmd() *cobra.Command {
 		Short: "Pause the sync agent",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			slog.Info("ctl: pause requested")
-			// Phase 8 will call POST /pause on the HTTP endpoint.
 			return nil
 		},
 	}
@@ -124,7 +222,6 @@ func newCtlResumeCmd() *cobra.Command {
 		Short: "Resume the sync agent",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			slog.Info("ctl: resume requested")
-			// Phase 8 will call POST /resume on the HTTP endpoint.
 			return nil
 		},
 	}
@@ -136,7 +233,6 @@ func newCtlResyncCmd() *cobra.Command {
 		Short: "Force an immediate bisync",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			slog.Info("ctl: resync requested")
-			// Phase 8 will call POST /resync on the HTTP endpoint.
 			return nil
 		},
 	}

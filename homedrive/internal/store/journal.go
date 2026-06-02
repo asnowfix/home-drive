@@ -15,7 +15,10 @@ import (
 // Bucket names used inside the BoltDB file.
 var (
 	bucketJournal = []byte("journal")
+	bucketMeta    = []byte("meta")
 )
+
+var keyPageToken = []byte("page_token")
 
 // Sentinel errors for the store package.
 var (
@@ -49,7 +52,10 @@ func OpenJournal(path string, logger *slog.Logger) (*Journal, error) {
 	}
 
 	if err := db.Update(func(tx *bolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists(bucketJournal)
+		if _, err := tx.CreateBucketIfNotExists(bucketJournal); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucketIfNotExists(bucketMeta)
 		return err
 	}); err != nil {
 		_ = db.Close()
@@ -147,6 +153,46 @@ func (j *Journal) Count() (int, error) {
 // that need transactional access (e.g. bulk rename).
 func (j *Journal) DB() *bolt.DB {
 	return j.db
+}
+
+// GetPageToken retrieves the persisted Drive Changes API page token.
+// Returns an empty string if no token has been stored yet.
+func (j *Journal) GetPageToken() (string, error) {
+	var token string
+	err := j.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketMeta)
+		if b == nil {
+			return nil
+		}
+		if v := b.Get(keyPageToken); v != nil {
+			token = string(v)
+		}
+		return nil
+	})
+	return token, err
+}
+
+// SetPageToken persists the Drive Changes API page token.
+func (j *Journal) SetPageToken(token string) error {
+	return j.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketMeta)
+		if b == nil {
+			return fmt.Errorf("store: meta bucket missing")
+		}
+		return b.Put(keyPageToken, []byte(token))
+	})
+}
+
+// NextOldN returns the smallest positive N such that "<path>.old.<N>"
+// has no journal entry, used when computing conflict loser filenames.
+func (j *Journal) NextOldN(path string) int {
+	n := 1
+	for {
+		if !j.Exists(fmt.Sprintf("%s.old.%d", path, n)) {
+			return n
+		}
+		n++
+	}
 }
 
 // hasPrefix checks whether key starts with prefix (byte-level comparison).

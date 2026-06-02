@@ -44,6 +44,9 @@ nfpms:
       - src: homedrive/linux/99-homedrive-inotify.conf
         dst: /etc/sysctl.d/99-homedrive-inotify.conf
         type: config
+      - src: homedrive/linux/config.yaml
+        dst: /usr/share/doc/homedrive/config.yaml.example
+        type: doc
     scripts:
       postinstall: homedrive/linux/postinst.sh
 
