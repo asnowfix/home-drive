@@ -190,7 +190,7 @@ func (r *RcloneFS) DownloadFile(ctx context.Context, remotePath, localPath strin
 	if err != nil {
 		return fmt.Errorf("rcloneclient: open stream %q: %w", remotePath, err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return fmt.Errorf("rcloneclient: mkdirall for %q: %w", localPath, err)
@@ -200,7 +200,7 @@ func (r *RcloneFS) DownloadFile(ctx context.Context, remotePath, localPath strin
 	if err != nil {
 		return fmt.Errorf("rcloneclient: create %q: %w", localPath, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := io.Copy(f, rc); err != nil {
 		return fmt.Errorf("rcloneclient: download %q: %w", localPath, err)

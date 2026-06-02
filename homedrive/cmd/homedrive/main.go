@@ -113,7 +113,7 @@ func runAgent(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("open journal: %w", err)
 	}
-	defer journal.Close()
+	defer func() { _ = journal.Close() }()
 
 	var auditAdapter syncer.AuditLogger
 	if cfg.State.AuditLog != "" {
@@ -124,7 +124,7 @@ func runAgent(cmd *cobra.Command, _ []string) error {
 		if err != nil {
 			return fmt.Errorf("open audit log: %w", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		auditAdapter = &auditLoggerAdapter{a: store.NewAuditor(f, slog.Default())}
 	}
 
