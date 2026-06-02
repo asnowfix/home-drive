@@ -10,18 +10,16 @@ User=%i
 Group=%i
 EnvironmentFile=/etc/default/homedrive
 EnvironmentFile=-/etc/default/homedrive.%i
-ExecStart=/usr/bin/homedrive run --config ${HOMEDRIVE_CONFIG}
+ExecStart=/usr/bin/homedrive run
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=10
 StateDirectory=homedrive/%i
 LogsDirectory=homedrive/%i
-ConfigurationDirectory=homedrive
 
 # hardening
 ProtectSystem=strict
 ProtectHome=read-only
-ReadOnlyPaths=/etc/homedrive
 PrivateTmp=true
 NoNewPrivileges=true
 ProtectKernelTunables=true

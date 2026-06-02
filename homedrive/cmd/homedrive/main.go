@@ -44,6 +44,15 @@ func main() {
 	}
 }
 
+// defaultConfigPath returns the XDG-compliant per-user config path.
+func defaultConfigPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "/etc/homedrive/config.yaml"
+	}
+	return filepath.Join(dir, "homedrive", "config.yaml")
+}
+
 func newRootCmd() *cobra.Command {
 	var dryRun bool
 
@@ -76,7 +85,7 @@ func newRunCmd() *cobra.Command {
 		Short: "Start the sync agent",
 		RunE:  runAgent,
 	}
-	cmd.Flags().StringVar(&configPath, "config", "/etc/homedrive/config.yaml",
+	cmd.Flags().StringVar(&configPath, "config", defaultConfigPath(),
 		"path to config file")
 	return cmd
 }
