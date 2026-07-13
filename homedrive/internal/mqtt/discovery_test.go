@@ -276,7 +276,8 @@ func TestPublishDiscovery_RetainTrue(t *testing.T) {
 	opts := paho.NewClientOptions().
 		AddBroker(brokerAddr).
 		SetClientID("retain_verifier").
-		SetCleanSession(true)
+		SetCleanSession(true).
+		SetAutoReconnect(false)
 	verifier := paho.NewClient(opts)
 	token := verifier.Connect()
 	token.Wait()

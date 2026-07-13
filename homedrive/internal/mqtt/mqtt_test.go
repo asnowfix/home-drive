@@ -157,7 +157,8 @@ func TestNew_ConnectAndLWT(t *testing.T) {
 	received := make(chan string, 1)
 	subOpts := paho.NewClientOptions().
 		AddBroker(addr).
-		SetClientID("test-sub-lwt")
+		SetClientID("test-sub-lwt").
+		SetAutoReconnect(false)
 	subClient := paho.NewClient(subOpts)
 	tok := subClient.Connect()
 	if !tok.WaitTimeout(5 * time.Second) {
@@ -202,7 +203,8 @@ func TestPublishJSON_RoundTrip(t *testing.T) {
 	received := make(chan []byte, 1)
 	subOpts := paho.NewClientOptions().
 		AddBroker(addr).
-		SetClientID("test-sub-json")
+		SetClientID("test-sub-json").
+		SetAutoReconnect(false)
 	subClient := paho.NewClient(subOpts)
 	tok := subClient.Connect()
 	if !tok.WaitTimeout(5 * time.Second) {
@@ -419,7 +421,8 @@ func TestClose_Clean(t *testing.T) {
 	received := make(chan string, 2)
 	subOpts := paho.NewClientOptions().
 		AddBroker(addr).
-		SetClientID("test-sub-close")
+		SetClientID("test-sub-close").
+		SetAutoReconnect(false)
 	subClient := paho.NewClient(subOpts)
 	tok := subClient.Connect()
 	if !tok.WaitTimeout(5 * time.Second) {
@@ -553,7 +556,8 @@ func TestPublish_StringPayload(t *testing.T) {
 	received := make(chan string, 1)
 	subOpts := paho.NewClientOptions().
 		AddBroker(addr).
-		SetClientID("test-sub-string")
+		SetClientID("test-sub-string").
+		SetAutoReconnect(false)
 	subClient := paho.NewClient(subOpts)
 	tok := subClient.Connect()
 	if !tok.WaitTimeout(5 * time.Second) {
