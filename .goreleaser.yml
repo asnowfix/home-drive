@@ -1,5 +1,8 @@
 version: 2
 
+release:
+  draft: true
+
 builds:
   - id: homedrive
     main: ./homedrive/cmd/homedrive
@@ -20,7 +23,7 @@ builds:
 
 nfpms:
   - id: homedrive
-    builds:
+    ids:
       - homedrive
     package_name: homedrive
     vendor: asnowfix
@@ -52,10 +55,11 @@ nfpms:
 
 archives:
   - id: homedrive
-    builds:
+    ids:
       - homedrive
     name_template: "homedrive_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format: tar.gz
+    formats:
+      - tar.gz
 
 checksum:
   name_template: "checksums.txt"

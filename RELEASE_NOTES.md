@@ -1,5 +1,28 @@
 # Release notes
 
+## homedrive v0.1.1
+
+Maintenance release. No functional changes to the sync engine, CLI, or MQTT
+wire protocol since v0.1.0.
+
+### Fixed
+
+- MQTT test suite: eliminated an intermittent CI hang where raw paho test
+  clients' `AutoReconnect` could race the embedded mochi-mqtt broker's
+  shutdown, deadlocking on its `Clients` RWMutex (#38).
+
+### Documentation
+
+- Refreshed the root `README.md` to reflect v0.1.0 released status.
+- Removed stale, duplicate root-level `PLAN.md` and `docs/architecture.md` /
+  `docs/dev-environment.md` scaffolding, superseded by `homedrive/PLAN.md`
+  and `homedrive/docs/` (#39).
+
+### Upgrade path
+
+No action required. Drop-in replacement for v0.1.0; no config, schema, or
+wire-protocol changes.
+
 ## homedrive v0.1.0
 
 First tagged release of homedrive, a bidirectional Google Drive sync agent

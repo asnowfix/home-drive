@@ -1,0 +1,58 @@
+name: homedrive-release
+
+on:
+  push:
+    tags:
+      - "homedrive/v*"
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+
+      # GoReleaser OSS has no way to strip a "homedrive/" tag prefix (that's
+      # a Pro-only "monorepo" feature), and its git-state check requires a
+      # tag literally named after the version it parses. So we create local,
+      # unpushed shadow tags ("homedrive/v0.1.1" -> "v0.1.1") pointing at the
+      # same commits as the real prefixed tags, and point GoReleaser at those
+      # via GORELEASER_CURRENT_TAG/GORELEASER_PREVIOUS_TAG. Nothing here is
+      # ever pushed back to origin.
+      - name: Compute shadow version tags
+        run: |
+          set -euo pipefail
+          current_prefixed="${GITHUB_REF_NAME}"
+          current="${current_prefixed#homedrive/}"
+
+          previous_prefixed=$(git tag -l 'homedrive/v*' --sort=-v:refname \
+            | grep -A1 -F -x "${current_prefixed}" | tail -1)
+          if [ "${previous_prefixed}" = "${current_prefixed}" ]; then
+            previous_prefixed=""
+          fi
+
+          git tag -a -m "shadow tag for goreleaser" "${current}" "${GITHUB_SHA}"
+          echo "GORELEASER_CURRENT_TAG=${current}" >> "$GITHUB_ENV"
+
+          if [ -n "${previous_prefixed}" ]; then
+            previous="${previous_prefixed#homedrive/}"
+            previous_commit=$(git rev-list -n1 "${previous_prefixed}")
+            git tag -a -m "shadow tag for goreleaser" "${previous}" "${previous_commit}"
+            echo "GORELEASER_PREVIOUS_TAG=${previous}" >> "$GITHUB_ENV"
+          fi
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
