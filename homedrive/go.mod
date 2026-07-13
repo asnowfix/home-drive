@@ -7,9 +7,10 @@ require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/mochi-mqtt/server/v2 v2.7.9
-	github.com/rclone/rclone v1.74.2
+	github.com/rclone/rclone v1.74.3
 	github.com/spf13/cobra v1.10.2
 	go.etcd.io/bbolt v1.4.3
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -85,6 +86,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	moul.io/http2curl/v2 v2.3.0 // indirect
 )
