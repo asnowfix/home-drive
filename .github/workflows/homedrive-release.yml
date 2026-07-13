@@ -58,3 +58,12 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # GoReleaser publishes the GitHub Release under the shadow tag (e.g.
+      # "v0.1.1") since that's the only tag it knows about. Re-point it at
+      # the real, pushed tag so the release page links to a tag that
+      # actually exists in the repo.
+      - name: Re-tag release to the real prefixed tag
+        run: gh release edit "${GORELEASER_CURRENT_TAG}" --tag "${GITHUB_REF_NAME}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
