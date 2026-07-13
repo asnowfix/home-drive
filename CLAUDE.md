@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Pre-alpha.** No Go source code exists yet. This repo contains the execution plan (`PLAN.md`), skill definitions (`.claude/skills/`), and Linux packaging files (`linux/`). All Go code will be written phase-by-phase per `PLAN.md` §14.
+**v0.1.0 released.** All 14 phases in `homedrive/PLAN.md` §14 are complete and tagged as `homedrive/v0.1.0`. See `RELEASE_NOTES.md` for what shipped and `homedrive/README.md` for install/usage docs. `homedrive/PLAN.md` remains the architecture reference and phase history; future work (e.g. a v0.2 feature) should still follow the phase workflow below.
 
 Use the `homedrive-implementer` agent for phase-by-phase implementation work.
 
@@ -21,9 +21,9 @@ Key design points:
 - MQTT publisher for Home Assistant integration (publish-only in v0.1).
 - HTTP control endpoint on `127.0.0.1:6090`.
 
-For architecture details (runtime topology, module layout, directory rename pairing, loop prevention, conflict algorithm), see `PLAN.md` §3–§11.
+For architecture details (runtime topology, module layout, directory rename pairing, loop prevention, conflict algorithm), see `homedrive/PLAN.md` §3–§11.
 
-## Build commands (after Phase 0 lands)
+## Build commands
 
 ```bash
 make build-mac        # local Mac build for type-checking
@@ -52,15 +52,15 @@ go tool nm homedrive-bin | grep -c rclone/backend  # must be 1
 
 ## Go workspace integration
 
-After Phase 0, add `./homedrive` to `go.work` and a `homedrive` build entry to `.goreleaser.yml` targeting `linux/arm64` and `linux/amd64`. See `PLAN.md` §3.1 and §17.3.
+`./homedrive` is registered in `go.work`, with a `homedrive` build entry in `.goreleaser.yml` targeting `linux/arm64` and `linux/amd64`. See `homedrive/PLAN.md` §3.1 and §17.3.
 
 ## Key design decisions
 
-**Directory rename pairing**: Cookie-paired inotify events collapse `mv dir_50k other_dir` to 1 Drive `MoveFile` call + 1 Bolt TX. See `PLAN.md` §6.
+**Directory rename pairing**: Cookie-paired inotify events collapse `mv dir_50k other_dir` to 1 Drive `MoveFile` call + 1 Bolt TX. See `homedrive/PLAN.md` §6.
 
-**Loop prevention**: Store records `{path, local_mtime, ...}` after every sync; watcher events matching the last mtime (±1s) are dropped. See `PLAN.md` §7.3.
+**Loop prevention**: Store records `{path, local_mtime, ...}` after every sync; watcher events matching the last mtime (±1s) are dropped. See `homedrive/PLAN.md` §7.3.
 
-**Conflict resolution** (`newer_wins`): `.old.<N>` suffix computed from the journal, not filesystem listing. Every conflict emits MQTT events. See `PLAN.md` §11.
+**Conflict resolution** (`newer_wins`): `.old.<N>` suffix computed from the journal, not filesystem listing. Every conflict emits MQTT events. See `homedrive/PLAN.md` §11.
 
 **rclone imports** — only these are allowed:
 ```go
@@ -94,7 +94,7 @@ Build pipeline order — run in this order, never skip, commit only after all pa
 2. `orb run -m dev -- go test -race ./homedrive/...` — Linux VM: real inotify, IN_MOVE_SELF, race detector
 3. Commit and push — CI validates on amd64 and arm64
 
-See `PLAN.md` §19 and `docs/dev-environment.md` for cross-compilation, build tags, and VS Code config.
+See `homedrive/PLAN.md` §19 and `homedrive/docs/dev-environment.md` for cross-compilation, build tags, and VS Code config.
 
 ## Skills and agent
 
@@ -109,7 +109,7 @@ Use `homedrive-implementer` agent (`.claude/agents/homedrive-implementer.md`) fo
 3. Read the relevant skills.
 4. Implement with tests; run `orb run -m dev -- go test -race ./homedrive/...`.
 5. Verify binary size and rclone backend count.
-6. Tick the phase in `PLAN.md` §14.
+6. Tick the phase in `homedrive/PLAN.md` §14.
 7. Open PR, link issue, paste test output.
 
-PRs that combine phases, skip required test scenarios from `PLAN.md` §16.3, exceed 25 MB binary, add rclone backends beyond `drive`, use unstructured logging, or add MQTT subscriptions in v0.1 are rejected.
+PRs that combine phases, skip required test scenarios from `homedrive/PLAN.md` §16.3, exceed 25 MB binary, add rclone backends beyond `drive`, use unstructured logging, or add MQTT subscriptions in v0.1 are rejected.

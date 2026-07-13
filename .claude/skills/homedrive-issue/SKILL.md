@@ -1,6 +1,6 @@
 ---
 name: homedrive-issue
-description: Standard format for creating GitHub issues for homedrive phases and features via gh CLI, with labels, milestones, and PLAN.md cross-references. Apply only when the user explicitly asks to create an issue.
+description: Standard format for creating GitHub issues for homedrive phases and features via gh CLI, with labels, milestones, and homedrive/PLAN.md cross-references. Apply only when the user explicitly asks to create an issue.
 ---
 
 # Creating issues for homedrive
@@ -18,7 +18,7 @@ proactively create issues — the user is in control.
 ```bash
 gh issue create \
   --repo asnowfix/home-drive \
-  --title "[homedrive] <Title from PLAN.md phase or feature>" \
+  --title "[homedrive] <Title from homedrive/PLAN.md phase or feature>" \
   --label "homedrive,<functional-label>" \
   --body "$BODY"
 ```
@@ -46,11 +46,11 @@ Always include `homedrive` plus exactly one functional label.
 ```markdown
 ## Phase
 
-Phase N from `PLAN.md` §14: <title>.
+Phase N from `homedrive/PLAN.md` §14: <title>.
 
 ## Acceptance criteria
 
-(Copy from PLAN.md §14 phase description.)
+(Copy from `homedrive/PLAN.md` §14 phase description.)
 
 - [ ] Item 1
 - [ ] Item 2
@@ -58,7 +58,7 @@ Phase N from `PLAN.md` §14: <title>.
 
 ## Tests
 
-(Copy from PLAN.md §16.3 if relevant.)
+(Copy from `homedrive/PLAN.md` §16.3 if relevant.)
 
 - [ ] Test 1
 - [ ] Test 2
@@ -66,7 +66,7 @@ Phase N from `PLAN.md` §14: <title>.
 
 ## References
 
-- `PLAN.md` §<section number>
+- `homedrive/PLAN.md` §<section number>
 - Skill: `.claude/skills/homedrive-<skill>`
 
 ## Definition of done
@@ -76,7 +76,7 @@ Phase N from `PLAN.md` §14: <title>.
 - Coverage > 70% for the package.
 - Binary < 25 MB stripped.
 - Exactly 1 rclone backend in the binary.
-- PLAN.md updated to mark phase complete.
+- `homedrive/PLAN.md` updated to mark phase complete.
 ```
 
 ## Body template for feature issues
@@ -101,16 +101,16 @@ What tests this requires.
 
 ## References
 
-- Related PLAN.md section: §<N>
+- Related `homedrive/PLAN.md` section: §<N>
 - Related skill: `.claude/skills/homedrive-<skill>`
 ```
 
-## Linking to PLAN.md
+## Linking to homedrive/PLAN.md
 
-Always link to the relevant PLAN.md section:
+Always link to the relevant homedrive/PLAN.md section:
 
 ```
-PLAN.md §14 phase 1 (https://github.com/asnowfix/home-drive/blob/main/PLAN.md#phase-1)
+homedrive/PLAN.md §14 phase 1 (https://github.com/asnowfix/home-drive/blob/main/homedrive/PLAN.md#phase-1)
 ```
 
 ## Milestones
@@ -130,7 +130,7 @@ gh issue create ... | xargs gh project item-add <project-number> --owner asnowfi
 
 ## What NOT to do
 
-- Don't create issues without checking PLAN.md for an existing phase
+- Don't create issues without checking `homedrive/PLAN.md` for an existing phase
   description.
 - Don't use generic labels like `priority/high` — they don't exist in
   this repo.

@@ -753,7 +753,7 @@ Each phase = one PR, reviewed before the next. Issues created via
   `docs/directory-rename.md`, `docs/dev-environment.md`,
   `docs/home-assistant.md`, `docs/manual-validation.md`.
 - [x] Update root `RELEASE_NOTES.md`.
-- [x] Tag `homedrive/v0.1.0` (deferred to post-merge — awaiting user approval).
+- [x] Tag `homedrive/v0.1.0`.
 
 **Estimated total: ~10 person-days, atomic 0.5–1.5 day PRs.**
 
@@ -974,83 +974,12 @@ land in the right place automatically.
 
 ## 18. Claude Code skills to create in `.claude/skills/`
 
-Each skill = a subdirectory with `SKILL.md` (frontmatter + procedure).
-
-### 18.1 `homedrive-conventions`
-**Trigger**: "homedrive module", "add feature to homedrive", "write code in homedrive".
-**Content**:
-- Mandatory layout (`cmd/`, `internal/`, `pkg/`, `linux/`, `docs/`).
-- Logging conventions (structured `slog`, never `fmt.Println`).
-- Error conventions (`%w` wrap, exported sentinel errors).
-- No `panic` outside `main`.
-- Table-driven tests, naming `TestXxx_Case`.
-- Files < 500 lines, functions < 80 lines.
-- rclone imports: only what is listed in §10.
-
-### 18.2 `homedrive-rclone-import`
-**Trigger**: "import rclone", "add rclone dependency", "call rclone from Go".
-**Content**:
-- Allow-list of rclone packages.
-- Post-build binary size verification procedure.
-- Mandatory wrapper pattern (never call rclone directly from the syncer).
-- How to load `rclone.conf`.
-- How to obtain a typed `*drive.Fs` for `Changes API` access.
-- `--dry-run` honored at the wrapper layer.
-
-### 18.3 `homedrive-mqtt-wrapper`
-**Trigger**: "homedrive MQTT", "publish from homedrive", "extend MQTT in homedrive".
-**Content**:
-- Use only `internal/mqtt/` package (never call paho directly elsewhere).
-- `Publisher` interface contract (Publish, PublishJSON, Topic, Close).
-- LWT setup pattern (set on connect, publish online after).
-- Reserved future namespaces — do not use `peers/`, `locks/`, `sync/` in v0.1.
-- Tests must use embedded `mochi-mqtt/server`, never a real broker.
-
-### 18.4 `homedrive-watcher-rename`
-**Trigger**: "homedrive watcher", "directory rename", "fsnotify rename pairing".
-**Content**:
-- Exact pairer algorithm from §6.
-- Cookie-based pairing, default 500ms window.
-- Suppression of child events post-pairing.
-- Re-watching subtree on rename.
-- Mandatory test scenarios from §6.6.
-- Performance assertion: O(1) Drive call regardless of subtree size.
-
-### 18.5 `homedrive-test-mocks`
-**Trigger**: "test homedrive", "mock rclone", "test syncer".
-**Content**:
-- `RemoteFS` interface (never real rclone calls in tests).
-- `MemFS` and `FlakyFS` patterns.
-- How to inject a testable clock.
-- `_test.go` format, table-driven.
-- No tests depending on the real Google API.
-
-### 18.6 `homedrive-systemd`
-**Trigger**: "homedrive systemd", "homedrive service", "/etc/default/homedrive".
-**Content**:
-- Full `homedrive@.service` template.
-- Mandatory hardening directives.
-- Per-user override pattern.
-- sysctl applied at install (`postinst.sh`), not via the unit file.
-- logrotate weekly with `keep 12`.
-
-### 18.7 `homedrive-conflict-resolution`
-**Trigger**: "homedrive conflict", "newer wins", ".old suffix".
-**Content**:
-- Exact algorithm from §11.2.
-- `.old.<N>` format and `<N>` computation.
-- Which MQTT events to emit.
-- Which log level.
-- Tests required for any modification.
-
-### 18.8 `homedrive-issue` (meta)
-**Trigger**: explicit user request ("create an issue for X").
-**Content**: `gh issue create` command with default labels (`homedrive` + a
-functional label per the README's project-specific label set).
-
-> Also create `.claude/agents/homedrive-implementer.md` referencing these
-> skills and providing a system prompt oriented toward "phase-by-phase
-> implementation, atomic PRs, no skipping tests".
+All 8 skills were created during Phase 0 planning and now live in
+`.claude/skills/`: `homedrive-conventions`, `homedrive-rclone-import`,
+`homedrive-mqtt-wrapper`, `homedrive-watcher-rename`, `homedrive-test-mocks`,
+`homedrive-systemd`, `homedrive-conflict-resolution`, `homedrive-issue`. See
+each skill's `SKILL.md` for its trigger and content. The phase-by-phase
+implementation agent is `.claude/agents/homedrive-implementer.md`.
 
 ---
 
@@ -1174,15 +1103,3 @@ Document all of the above in `docs/dev-environment.md`.
 | macOS dev → Linux runtime divergence | OrbStack VM for tests, GOOS=linux gopls, build tags |
 | Future cross-device sync collision | Reserved MQTT namespaces documented in §8.3 |
 
----
-
-## 21. Immediate next steps
-
-1. Create the 8 `.claude/skills/homedrive-*` skills (§18).
-2. Document `docs/dev-environment.md` and set up OrbStack locally.
-3. Run Phase 0 (bootstrap module) — PR #1.
-4. Run Phase 1 (watcher + rename pairer) — PR #2.
-5. Iterate phase by phase, one PR at a time.
-
-> Once approved, copy this file to `homedrive/PLAN.md` and keep it up to date
-> at each phase (tick progress, adjust estimates).
