@@ -9,7 +9,7 @@ require (
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/rclone/rclone v1.74.3
 	github.com/spf13/cobra v1.10.2
-	go.etcd.io/bbolt v1.4.3
+	go.etcd.io/bbolt v1.5.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
