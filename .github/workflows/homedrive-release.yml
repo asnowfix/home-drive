@@ -39,13 +39,15 @@ jobs:
             previous_prefixed=""
           fi
 
-          git tag -a -m "shadow tag for goreleaser" "${current}" "${GITHUB_SHA}"
+          # Lightweight (unannotated) tags: no committer identity required,
+          # and goreleaser only needs them to resolve to the right commits.
+          git tag "${current}" "${GITHUB_SHA}"
           echo "GORELEASER_CURRENT_TAG=${current}" >> "$GITHUB_ENV"
 
           if [ -n "${previous_prefixed}" ]; then
             previous="${previous_prefixed#homedrive/}"
             previous_commit=$(git rev-list -n1 "${previous_prefixed}")
-            git tag -a -m "shadow tag for goreleaser" "${previous}" "${previous_commit}"
+            git tag "${previous}" "${previous_commit}"
             echo "GORELEASER_PREVIOUS_TAG=${previous}" >> "$GITHUB_ENV"
           fi
 
