@@ -30,7 +30,7 @@ dynamic `Watcher.Add` on directory `Create` events.
    and Hugo ecosystems. Bug fixes flow from a much larger user base.
 3. The lower-level API gives explicit control over the rename-of-folder
    edge case, which we must handle anyway via cookie pairing
-   (see PLAN.md §6 and the `homedrive-watcher-rename` skill).
+   (see `homedrive/PLAN.md` §6 and the `homedrive-watcher-rename` skill).
 4. Lower dependency surface — `notify` adds a layer of abstraction for a
    problem we don't have on Linux.
 
@@ -54,6 +54,6 @@ If any of these fail, this ADR will be revisited.
 
 ## References
 
-- PLAN.md §5 (Watcher design notes)
-- PLAN.md §6 (Directory rename handling)
+- `homedrive/PLAN.md` §5 (Watcher design notes)
+- `homedrive/PLAN.md` §6 (Directory rename handling)
 - `.claude/skills/homedrive-watcher-rename/SKILL.md`
