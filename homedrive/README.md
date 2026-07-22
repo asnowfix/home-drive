@@ -52,7 +52,13 @@ Key properties:
 
 - Go 1.22+ (build host)
 - An `rclone.conf` with a configured Google Drive remote (see
-  [rclone drive docs](https://rclone.org/drive/))
+  [rclone drive docs](https://rclone.org/drive/)) -- **use your own
+  `client_id`/`client_secret`** (`rclone config` → "Google Application
+  Client Id"), not rclone's shared default client. `homedrive` polls the
+  Drive Changes API directly (PLAN.md §7.1) using the OAuth2 token stored
+  in `rclone.conf`; without your own client credentials there, token
+  refresh will start failing once the currently cached access token
+  expires (a warning is logged at startup when they're missing).
 - A Linux ARM64 or AMD64 target (Raspberry Pi 4/5, any Ubuntu/Debian box)
 
 ### Install from source

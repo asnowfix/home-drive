@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 	"github.com/asnowfix/home-drive/homedrive/internal/store"
 	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
 )
@@ -195,6 +198,30 @@ func TestRcloneSyncerAdapter_DelegatesToRemoteFS(t *testing.T) {
 	}
 	if err := adapter.DeleteFile(ctx, "moved"); err != nil {
 		t.Fatalf("DeleteFile: %v", err)
+	}
+}
+
+// fakeRemoteFSGone wraps fakeRemoteFS and makes ListChanges return
+// rcloneclient.ErrGone, simulating a Drive API 410 response.
+type fakeRemoteFSGone struct {
+	*fakeRemoteFS
+}
+
+func (f *fakeRemoteFSGone) ListChanges(_ context.Context, _ string) (rcloneclient.Changes, error) {
+	return rcloneclient.Changes{}, fmt.Errorf("changes.list: %w", rcloneclient.ErrGone)
+}
+
+// TestRcloneSyncerAdapter_ListChanges_TranslatesErrGone verifies the
+// rcloneclient-level 410 sentinel is translated into syncer.ErrGone so
+// Puller.fetchChanges' errors.Is check (PLAN.md §7.1) fires in production,
+// not just against the syncer package's own hand-rolled test mock.
+func TestRcloneSyncerAdapter_ListChanges_TranslatesErrGone(t *testing.T) {
+	remote := &fakeRemoteFSGone{fakeRemoteFS: newFakeRemoteFS()}
+	adapter := &rcloneSyncerAdapter{fs: remote}
+
+	_, err := adapter.ListChanges(context.Background(), "stale-token")
+	if !errors.Is(err, syncer.ErrGone) {
+		t.Errorf("ListChanges error = %v, want errors.Is(err, syncer.ErrGone)", err)
 	}
 }
 

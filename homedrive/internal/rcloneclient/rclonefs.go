@@ -7,15 +7,21 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 
 	// Single rclone backend -- keep this as the ONLY backend import.
 	// Verify with: go tool nm <binary> | grep -c rclone/backend/
-	_ "github.com/rclone/rclone/backend/drive"
+	// Imported by name (not "_") because NewRcloneFS asserts fsObj is a
+	// *drive.Fs -- see homedrive-rclone-import skill, "Obtaining a typed
+	// *drive.Fs for Changes API".
+	"github.com/rclone/rclone/backend/drive"
 
 	rclonefs "github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config"
 	"github.com/rclone/rclone/fs/config/configfile"
 	"github.com/rclone/rclone/fs/operations"
+	drivev3 "google.golang.org/api/drive/v3"
 )
 
 func init() {
@@ -32,6 +38,12 @@ type RcloneFSConfig struct {
 	// ConfigPath is the path to rclone.conf.
 	ConfigPath string
 
+	// Exclude is the list of watcher.exclude doublestar glob patterns
+	// (config.WatcherConfig.Exclude) also applied to the pull-side walk
+	// and Changes API polling, so excluded paths never come back down
+	// from Drive (PLAN.md §7, issue #50 point 5 / #54 filter parity).
+	Exclude []string
+
 	// Log is the structured logger.
 	Log *slog.Logger
 }
@@ -39,9 +51,18 @@ type RcloneFSConfig struct {
 // RcloneFS is the production implementation of RemoteFS backed by rclone
 // libraries. It imports only backend/drive to keep the binary small.
 type RcloneFS struct {
-	remote string
-	fsObj  rclonefs.Fs
-	log    *slog.Logger
+	remote     string
+	remoteName string // rclone.conf section name, e.g. "gdrive"
+	fsObj      rclonefs.Fs
+	exclude    []string
+	log        *slog.Logger
+
+	// mu guards changesSvc and rootID, which are lazily resolved on first
+	// use of the Drive Changes API and cached for the life of the process.
+	mu         sync.Mutex
+	changesSvc *drivev3.Service
+	rootID     string
+	pathCache  *idPathCache
 }
 
 // NewRcloneFS initializes the rclone backend from the given config.
@@ -68,15 +89,26 @@ func NewRcloneFS(ctx context.Context, cfg RcloneFSConfig) (*RcloneFS, error) {
 		return nil, fmt.Errorf("rcloneclient: init remote %q: %w", remote, err)
 	}
 
+	// Only backend/drive is registered in this binary, so NewFs can only
+	// ever have returned a *drive.Fs or already failed above -- this is a
+	// defensive, documented cast (homedrive-rclone-import skill), not a
+	// runtime behavior change.
+	if _, ok := fsObj.(*drive.Fs); !ok {
+		return nil, fmt.Errorf("rcloneclient: remote %q is not a drive backend (got %T)", remote, fsObj)
+	}
+
 	log.Info("rclone remote initialized",
 		"remote", remote,
 		"config_path", cfg.ConfigPath,
 	)
 
 	return &RcloneFS{
-		remote: remote,
-		fsObj:  fsObj,
-		log:    log,
+		remote:     remote,
+		remoteName: remoteSectionName(remote),
+		fsObj:      fsObj,
+		exclude:    cfg.Exclude,
+		log:        log,
+		pathCache:  newIDPathCache(),
 	}, nil
 }
 
@@ -128,23 +160,50 @@ func (r *RcloneFS) Stat(ctx context.Context, remotePath string) (RemoteObject, e
 	return remoteObjectFromRclone(obj), nil
 }
 
-// GetStartPageToken returns the sentinel token that triggers a full
-// remote walk on the first pull cycle.
-func (r *RcloneFS) GetStartPageToken(_ context.Context) (string, error) {
-	return "initial_sync", nil
+// GetStartPageToken calls the Drive API's changes.getStartPageToken and
+// returns a token marking "from now on". The caller (syncer.Puller)
+// persists the returned string verbatim; ListChanges recognizes and strips
+// the initialSyncPrefix marker to know a full walk is still owed before
+// incremental polling can begin (PLAN.md §7.1).
+func (r *RcloneFS) GetStartPageToken(ctx context.Context) (string, error) {
+	svc, err := r.driveService(ctx)
+	if err != nil {
+		return "", fmt.Errorf("rcloneclient: build changes client: %w", err)
+	}
+
+	tok, err := svc.Changes.GetStartPageToken().SupportsAllDrives(true).Context(ctx).Do()
+	if err != nil {
+		return "", fmt.Errorf("rcloneclient: changes.getStartPageToken: %w", err)
+	}
+
+	return initialSyncPrefix + tok.StartPageToken, nil
 }
 
 // ListChanges returns remote changes since the given page token.
 //
-// When pageToken == "initial_sync", performs a full recursive walk of
-// the remote and returns every file as a change, triggering a complete
-// pull on first startup or after a token reset.
-//
-// Any other token returns empty changes with the same stable token
-// until the Drive Changes API is wired in.
+// A token minted by GetStartPageToken (or an empty token) triggers a full
+// recursive walk of the remote, since changes.list only ever reports
+// changes *after* a start token, never pre-existing files. Any other token
+// is polled incrementally via the real Drive Changes API, returning
+// ErrGone (wrapped) on HTTP 410 so the caller resets and re-walks.
 func (r *RcloneFS) ListChanges(ctx context.Context, pageToken string) (Changes, error) {
-	if pageToken != "initial_sync" {
-		return Changes{NextPageToken: pageToken}, nil
+	if pageToken == "" || strings.HasPrefix(pageToken, initialSyncPrefix) {
+		return r.fullWalkThenResume(ctx, strings.TrimPrefix(pageToken, initialSyncPrefix))
+	}
+	return r.pollChanges(ctx, pageToken)
+}
+
+// fullWalkThenResume performs the one-time full recursive walk and returns
+// resumeToken (a real, unprefixed Drive page token) as NextPageToken so the
+// following poll cycle switches to incremental polling. If resumeToken is
+// empty, a fresh start token is minted first.
+func (r *RcloneFS) fullWalkThenResume(ctx context.Context, resumeToken string) (Changes, error) {
+	if resumeToken == "" {
+		tok, err := r.GetStartPageToken(ctx)
+		if err != nil {
+			return Changes{}, err
+		}
+		resumeToken = strings.TrimPrefix(tok, initialSyncPrefix)
 	}
 
 	r.log.Info("ListChanges: full remote walk (initial sync)", "op", "ListChanges")
@@ -155,10 +214,13 @@ func (r *RcloneFS) ListChanges(ctx context.Context, pageToken string) (Changes, 
 	}
 
 	r.log.Info("ListChanges: walk complete", "files", len(items))
-	return Changes{Items: items, NextPageToken: "synced"}, nil
+	return Changes{Items: items, NextPageToken: resumeToken}, nil
 }
 
-// listRecursive walks dir on the remote Fs, appending file changes to items.
+// listRecursive walks dir on the remote Fs, appending file changes to items
+// and seeding the id-path cache (used later by incremental ListChanges
+// calls to resolve Drive change parent IDs back into paths). Excluded
+// paths are skipped and not recursed into.
 func (r *RcloneFS) listRecursive(ctx context.Context, dir string, items *[]Change) error {
 	entries, err := r.fsObj.List(ctx, dir)
 	if err != nil {
@@ -168,8 +230,16 @@ func (r *RcloneFS) listRecursive(ctx context.Context, dir string, items *[]Chang
 		switch v := entry.(type) {
 		case rclonefs.Object:
 			ro := remoteObjectFromRclone(v)
+			if r.excluded(ro.Path) {
+				continue
+			}
+			r.pathCache.put(ro.RemoteID, ro.Path)
 			*items = append(*items, Change{Path: ro.Path, Object: &ro})
-		default:
+		case rclonefs.Directory:
+			r.pathCache.put(v.ID(), entry.Remote())
+			if r.excluded(entry.Remote()) {
+				continue
+			}
 			if err := r.listRecursive(ctx, entry.Remote(), items); err != nil {
 				return err
 			}

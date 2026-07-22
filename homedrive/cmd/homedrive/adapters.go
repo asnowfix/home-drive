@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"strings"
@@ -84,6 +85,12 @@ func (a *rcloneSyncerAdapter) List(ctx context.Context, dir string) ([]syncer.Re
 func (a *rcloneSyncerAdapter) ListChanges(ctx context.Context, pageToken string) (syncer.Changes, error) {
 	ch, err := a.fs.ListChanges(ctx, pageToken)
 	if err != nil {
+		// Translate the rcloneclient-level sentinel into the syncer-level
+		// one so Puller.fetchChanges' errors.Is(err, syncer.ErrGone) check
+		// (PLAN.md §7.1) fires for a real Drive API 410 response.
+		if errors.Is(err, rcloneclient.ErrGone) {
+			return syncer.Changes{}, syncer.ErrGone
+		}
 		return syncer.Changes{}, err
 	}
 	items := make([]syncer.Change, len(ch.Items))

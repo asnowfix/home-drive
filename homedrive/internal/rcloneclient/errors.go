@@ -25,4 +25,9 @@ var (
 
 	// ErrAlreadyExists indicates a destination path already exists.
 	ErrAlreadyExists = errors.New("remote object already exists")
+
+	// ErrGone indicates the Drive Changes API page token has expired or is
+	// otherwise invalid (HTTP 410). Callers must obtain a fresh start page
+	// token via GetStartPageToken and retry (PLAN.md §7.1).
+	ErrGone = errors.New("rcloneclient: page token expired (410 GONE)")
 )
