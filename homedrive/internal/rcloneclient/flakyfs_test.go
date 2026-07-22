@@ -57,6 +57,15 @@ func TestFlakyFS_ErrorInjection(t *testing.T) {
 			wantErr: ErrNotFound,
 		},
 		{
+			name: "ListError",
+			rule: FlakyRule{
+				Method: "List",
+				Action: FlakyAction{Err: ErrNetworkUnavailable},
+			},
+			method:  "List",
+			wantErr: ErrNetworkUnavailable,
+		},
+		{
 			name: "ListChangesError",
 			rule: FlakyRule{
 				Method: "ListChanges",
@@ -99,6 +108,8 @@ func TestFlakyFS_ErrorInjection(t *testing.T) {
 				err = f.MoveFile(ctx, "file.txt", "moved.txt")
 			case "Stat":
 				_, err = f.Stat(ctx, "file.txt")
+			case "List":
+				_, err = f.List(ctx, "")
 			case "ListChanges":
 				_, err = f.ListChanges(ctx, "")
 			case "Quota":
@@ -286,6 +297,84 @@ func TestFlakyFS_AllMethodsPassthrough(t *testing.T) {
 	}
 	if q.Total <= 0 {
 		t.Error("Quota passthrough: expected positive total")
+	}
+
+	// List passthrough.
+	objs, err := f.List(ctx, "")
+	if err != nil {
+		t.Errorf("List passthrough: %v", err)
+	}
+	if len(objs) == 0 {
+		t.Error("List passthrough: expected at least one object")
+	}
+
+	// GetStartPageToken passthrough.
+	if _, err := f.GetStartPageToken(ctx); err != nil {
+		t.Errorf("GetStartPageToken passthrough: %v", err)
+	}
+
+	// DownloadFile passthrough.
+	inner.Seed("dl_src.txt", time.Now(), "hash3")
+	if err := f.DownloadFile(ctx, "dl_src.txt", t.TempDir()+"/dl_dst.txt"); err != nil {
+		t.Errorf("DownloadFile passthrough: %v", err)
+	}
+}
+
+// TestFlakyFS_List covers RemoteFS.List through FlakyFS: passthrough to
+// the inner RemoteFS, and error injection via a matching FlakyRule.
+func TestFlakyFS_List(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		rule    *FlakyRule
+		wantErr error
+		wantLen int
+	}{
+		{
+			name:    "Passthrough",
+			rule:    nil,
+			wantLen: 2,
+		},
+		{
+			name: "ErrorInjected",
+			rule: &FlakyRule{
+				Method: "List",
+				Action: FlakyAction{Err: ErrNetworkUnavailable},
+			},
+			wantErr: ErrNetworkUnavailable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inner := NewMemFS()
+			inner.Seed("dir/a.txt", time.Now(), "h1")
+			inner.Seed("dir/b.txt", time.Now(), "h2")
+
+			var f *FlakyFS
+			if tt.rule != nil {
+				f = NewFlakyFS(inner, *tt.rule)
+			} else {
+				f = NewFlakyFS(inner)
+			}
+
+			objs, err := f.List(ctx, "dir")
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("List error = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("List error: %v", err)
+			}
+			if len(objs) != tt.wantLen {
+				t.Errorf("List returned %d objects, want %d", len(objs), tt.wantLen)
+			}
+		})
 	}
 }
 

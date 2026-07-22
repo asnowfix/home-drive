@@ -68,7 +68,7 @@ Refuse to proceed (or ask before proceeding) if:
 - `gh pr create` — open the PR at the end of a phase.
 - `go test -race -coverprofile=coverage.out ./homedrive/...` — required
   before declaring a phase done.
-- `go tool nm <binary> | grep -c rclone/backend/` — must equal 1.
+- `grep -rn '"github.com/rclone/rclone/backend/' homedrive/ --include='*.go' | grep -v _test.go | grep -v rclone/backend/drive` — must print nothing (only `drive` may be explicitly imported; `crypt` is a transitive dependency of `drive` itself, so a raw `go tool nm` binary symbol count is not a reliable check).
 - `du -h <binary>` — must be < 25 MB.
 
 ## Reporting back
