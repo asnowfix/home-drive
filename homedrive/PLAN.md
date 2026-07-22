@@ -48,6 +48,7 @@ Docs/Sheets/Slides binary export (skipped + warned), cross-device peer sync
 | Home Assistant integration | Enabled, MQTT discovery |
 | Directory rename handling | Cookie-paired event detection, single Drive `MoveFile` call |
 | Dev environment | macOS host + OrbStack Ubuntu VM for Linux tests |
+| Drive Changes API client | Low-level `google.golang.org/api/drive/v3` client (already a transitive rclone dependency, zero extra binary size), authenticated by reading the OAuth2 token rclone already stores in `rclone.conf` -- not an rclone package, so outside the `homedrive-rclone-import` allow-list scope; see Phase 15 (§14) |
 
 ---
 
@@ -804,6 +805,58 @@ control.
   `crypt`), not the 1 required by the binary-size/backend-count
   invariant. Not introduced by this phase; see issue #51.
 - Issue: `[homedrive] Wire the full sync engine into cmd/homedrive/main.go` (#49).
+
+### Phase 15 — Real Drive Changes API pull (issue #50) [DONE]
+
+Phase 6 was marked `[DONE]` but `rcloneclient.RcloneFS.GetStartPageToken`/
+`ListChanges` were a stub: `GetStartPageToken` returned the literal
+sentinel `"initial_sync"`, and `ListChanges` did one real full walk on
+first call, then returned an empty change set forever. Combined with
+Phase 14's wiring, this meant the deployed `homedrive@fix.service` polled
+a no-op every 30s after its first sync (found by the #47 umbrella audit).
+
+- [x] `internal/rcloneclient/driveapi.go`, `rootid.go`: real
+  `changes.getStartPageToken` / `changes.list` calls against a low-level
+  `google.golang.org/api/drive/v3` client, authenticated by reusing the
+  OAuth2 token (and, when present, `client_id`/`client_secret`) rclone
+  already stores in `rclone.conf` for the remote -- no second credential
+  path. `operations`/`fs` (the allow-listed rclone packages) don't expose
+  `changes.list`, and rclone's own `*drive.Fs.ChangeNotify` is a fire-
+  and-forget internal-token callback that can't round-trip an
+  externally-persisted page token, so this wraps the low-level client
+  directly per the `homedrive-rclone-import` skill.
+- [x] `GetStartPageToken` returns a real Drive page token prefixed with an
+  `initial_sync:` marker consumed by the very next `ListChanges` call (in
+  the same poll cycle) to trigger one full recursive walk -- `changes.list`
+  only ever reports changes *after* a start token, never pre-existing
+  files, so the full-walk step from the old stub is still required and is
+  preserved, just re-triggered off the marker instead of a fixed sentinel.
+  A crash between the two calls simply redoes the full walk on restart
+  (safe, idempotent); a clean poll cycle immediately overwrites the
+  marker with a real, unprefixed token in the Bolt store, so restarts
+  resume incremental polling rather than re-walking.
+- [x] Drive's Changes API reports changes by file ID and parent ID, not by
+  path. An in-memory `idPathCache` (seeded during the full walk, kept warm
+  by subsequent changes) resolves changed files' paths from their parent
+  ID; the sync root's own Drive ID is resolved once via `rootid.go` so
+  top-level changes resolve too. A change whose parent isn't yet cached
+  (e.g. a brand-new top-level folder created between polls) is logged and
+  skipped rather than guessed -- the hourly bisync safety net (§7.2)
+  reconciles it on its next pass.
+- [x] HTTP 410 from `changes.list` is wrapped as `rcloneclient.ErrGone` and
+  translated to `syncer.ErrGone` by `cmd/homedrive/adapters.go`'s
+  `rcloneSyncerAdapter.ListChanges`, so `syncer.Puller.fetchChanges`'s
+  existing `errors.Is(err, ErrGone)` handling (token reset + MQTT warning,
+  unchanged from Phase 6) fires against a real Drive response.
+- [x] `watcher.exclude` doublestar patterns are now applied on the pull
+  side too, via a shared `matchesExclude` helper in
+  `internal/rcloneclient/filter.go` (kept as one function so issue #54's
+  push/pull filter-parity work can extend it without duplicating).
+- [x] Tests use `httptest.Server` + `option.WithEndpoint` to fake the Drive
+  REST API (never the real Google Drive API), plus hand-rolled
+  `rclonefs.Fs`/`Object`/`Directory` fakes for the full-walk path.
+  `internal/rcloneclient` coverage: 79.3%.
+- Issue: `[homedrive] Implement real Google Drive Changes API pull` (#50).
 
 ---
 

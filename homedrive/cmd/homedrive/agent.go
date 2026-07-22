@@ -117,6 +117,7 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 	rfs, err := rcloneclient.NewRcloneFS(ctx, rcloneclient.RcloneFSConfig{
 		Remote:     cfg.Remote,
 		ConfigPath: cfg.RcloneConfig,
+		Exclude:    cfg.Watcher.Exclude,
 		Log:        log,
 	})
 	if err != nil {
