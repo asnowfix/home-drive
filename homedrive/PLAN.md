@@ -757,6 +757,54 @@ Each phase = one PR, reviewed before the next. Issues created via
 
 **Estimated total: ~10 person-days, atomic 0.5–1.5 day PRs.**
 
+### Phase 14 — Wire the full sync engine into `main` (issue #49) [DONE]
+
+Post-v0.1.0 audit (umbrella issue #47) found that despite Phases 4-9 above
+being marked `[DONE]`, `cmd/homedrive/main.go` only ever constructed and
+started the Changes-API puller: the watcher, push syncer, bisync ticker,
+real MQTT publisher, and HTTP control server existed as tested packages
+but were never instantiated together in `main`, and the `ctl` sub-commands
+were no-op log lines. In production this left `homedrive@fix.service`
+running an inert 30s pull-tick loop with zero push, zero MQTT, zero HTTP
+control.
+
+- [x] `cmd/homedrive/agent.go` / `agent_run.go` / `agent_control.go`: new
+  `Agent` type builds and runs the watcher, push syncer worker pool, pull
+  loop, bisync ticker, real MQTT publisher (when `mqtt.enabled`), and HTTP
+  control server from one process, per §3.2.
+- [x] `ctl status/pause/resume/resync` now make real HTTP calls
+  (`cmd/homedrive/ctl.go`) against the running agent instead of logging a
+  stub line.
+- [x] Graceful shutdown: SIGTERM/SIGINT drains in-flight watcher → push
+  syncer work before closing the Bolt journal; SIGHUP reloads config
+  (log level + status-reported `dry_run`) without restarting the process.
+- [x] Two correctness bugs found and fixed while wiring, both pre-dating
+  this issue:
+  - `internal/syncer/bisync_ops.go`'s remote-to-local paths wrote an
+    **empty placeholder file** instead of calling `RemoteFS.DownloadFile`
+    (the method the Changes-API puller already used). Left as-is, the
+    first real hourly bisync run would have silently truncated any
+    remote-only file to 0 bytes. Fixed by calling `DownloadFile`; the
+    existing `TestBisync_DetectsDrift_RemoteOnlyPulls` and
+    `TestBisync_ConflictRemoteWins` tests now assert real content, not
+    just file existence.
+  - `syncer.Puller` never coordinated with the bisync `sync.RWMutex`
+    described in §7.2 ("blocking push/pull workers during execution").
+    Rather than changing the tested `Puller`/`Bisync` internals, the new
+    pull loop in `agent_run.go` (`pollOnceGuarded`) takes `bisyncMu.RLock()`
+    around each Changes-API poll cycle at the wiring layer, achieving the
+    same guarantee without touching `internal/syncer`.
+- [x] `cmd/homedrive/adapters.go` gained a local `remoteFS` interface
+  (the union of what `rcloneSyncerAdapter` and `Agent.Status`/`Healthz`
+  need) so the whole wiring layer can be exercised in tests against a
+  fake remote instead of a real rclone/Drive connection, per
+  `homedrive-test-mocks`.
+- [x] Known, not fixed here (tracked separately): the production binary
+  currently links 2 rclone backends (`drive` + a transitively-pulled
+  `crypt`), not the 1 required by the binary-size/backend-count
+  invariant. Not introduced by this phase; see issue #51.
+- Issue: `[homedrive] Wire the full sync engine into cmd/homedrive/main.go` (#49).
+
 ---
 
 ## 15. Packaging
