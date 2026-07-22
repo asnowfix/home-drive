@@ -214,10 +214,8 @@ func (b *Bisync) syncRemoteToLocal(ctx context.Context, d FileDiff) error {
 		return fmt.Errorf("mkdir for %s: %w", d.Path, err)
 	}
 
-	// In the real implementation, rclone downloads the file.
-	// For now we create a placeholder so the journal is consistent.
-	if err := os.WriteFile(localPath, []byte{}, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", d.Path, err)
+	if err := b.remote.DownloadFile(ctx, d.Path, localPath); err != nil {
+		return fmt.Errorf("download %s: %w", d.Path, err)
 	}
 
 	return b.journal.Put(JournalEntry{
@@ -336,9 +334,8 @@ func (b *Bisync) resolveRemoteWins(ctx context.Context, d FileDiff) error {
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir for %s: %w", d.Path, err)
 	}
-	// In production, rclone downloads the file here.
-	if err := os.WriteFile(localPath, []byte{}, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", d.Path, err)
+	if err := b.remote.DownloadFile(ctx, d.Path, localPath); err != nil {
+		return fmt.Errorf("download %s: %w", d.Path, err)
 	}
 
 	if err := b.journal.Put(JournalEntry{

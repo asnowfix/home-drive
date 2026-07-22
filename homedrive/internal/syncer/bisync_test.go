@@ -46,8 +46,15 @@ func TestBisync_DetectsDrift_RemoteOnlyPulls(t *testing.T) {
 	bisync.execute(context.Background())
 
 	localPath := filepath.Join(root, "photos", "sunset.jpg")
-	if _, err := os.Stat(localPath); os.IsNotExist(err) {
-		t.Error("expected file photos/sunset.jpg to be pulled to local")
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		t.Fatalf("expected file photos/sunset.jpg to be pulled to local: %v", err)
+	}
+	// Regression check: bisync used to write an empty placeholder file
+	// instead of actually downloading the remote content (see PLAN.md
+	// §7.2 and issue #49). RemoteFS.DownloadFile must be used instead.
+	if want := "content-of-photos/sunset.jpg"; string(data) != want {
+		t.Errorf("expected downloaded content %q, got %q", want, string(data))
 	}
 	if !journal.Exists("photos/sunset.jpg") {
 		t.Error("expected journal entry for photos/sunset.jpg")
@@ -352,6 +359,17 @@ func TestBisync_ConflictRemoteWins(t *testing.T) {
 	}
 	if !journal.Exists("conflict.txt.old.1") {
 		t.Error("expected journal entry for conflict.txt.old.1")
+	}
+
+	// Regression check: resolveRemoteWins used to write an empty
+	// placeholder instead of downloading the winning remote content.
+	localPath := filepath.Join(root, "conflict.txt")
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		t.Fatalf("read resolved conflict.txt: %v", err)
+	}
+	if want := "content-of-conflict.txt"; string(data) != want {
+		t.Errorf("expected downloaded content %q, got %q", want, string(data))
 	}
 }
 

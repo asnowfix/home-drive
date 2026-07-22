@@ -212,6 +212,13 @@ func (c *Client) ErrorCount() int64 {
 	return c.errors.Load()
 }
 
+// Connected reports whether the client currently holds an open connection
+// to the broker. paho manages reconnection automatically; this is used by
+// the HTTP /healthz endpoint to report live MQTT connectivity.
+func (c *Client) Connected() bool {
+	return c.paho.IsConnectionOpen()
+}
+
 // onConnect is the paho OnConnect callback. It publishes the "online"
 // retained message after each (re)connection.
 func (c *Client) onConnect(_ paho.Client) {

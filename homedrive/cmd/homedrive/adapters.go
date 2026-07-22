@@ -3,19 +3,42 @@ package main
 import (
 	"context"
 	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 	"github.com/asnowfix/home-drive/homedrive/internal/store"
 	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
+	"github.com/asnowfix/home-drive/homedrive/internal/watcher"
 )
 
+// remoteFS is the union of every remote filesystem method the sync engine
+// needs: everything syncer.RemoteFS requires (via rcloneSyncerAdapter),
+// plus Quota for /status and health reporting. *rcloneclient.RcloneFS
+// implements it in production. Defining it here (rather than importing
+// rcloneclient.RemoteFS, which omits List/GetStartPageToken/DownloadFile,
+// or syncer.RemoteFS, which omits Quota) lets Agent -- and the whole
+// wiring layer in this package -- be constructed against a test double in
+// unit tests, per the homedrive-test-mocks skill: never call rclone
+// directly in tests.
+type remoteFS interface {
+	CopyFile(ctx context.Context, src, dstDir string) (rcloneclient.RemoteObject, error)
+	DeleteFile(ctx context.Context, path string) error
+	MoveFile(ctx context.Context, src, dst string) error
+	Stat(ctx context.Context, path string) (rcloneclient.RemoteObject, error)
+	List(ctx context.Context, dir string) ([]rcloneclient.RemoteObject, error)
+	ListChanges(ctx context.Context, pageToken string) (rcloneclient.Changes, error)
+	GetStartPageToken(ctx context.Context) (string, error)
+	DownloadFile(ctx context.Context, remotePath, localPath string) error
+	Quota(ctx context.Context) (rcloneclient.Quota, error)
+}
+
 // ---------------------------------------------------------------------------
-// rcloneSyncerAdapter: *rcloneclient.RcloneFS → syncer.RemoteFS
+// rcloneSyncerAdapter: remoteFS → syncer.RemoteFS
 // ---------------------------------------------------------------------------
 
 type rcloneSyncerAdapter struct {
-	fs *rcloneclient.RcloneFS
+	fs remoteFS
 }
 
 func toSyncerObject(ro rcloneclient.RemoteObject) syncer.RemoteObject {
@@ -178,4 +201,68 @@ func (al *auditLoggerAdapter) Log(entry syncer.AuditEntry) error {
 		Error:     entry.Error,
 	})
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// watcherStoreAdapter: *store.Journal → watcher.SyncStore
+// ---------------------------------------------------------------------------
+
+// watcherStoreAdapter bridges *store.Journal to watcher.SyncStore for the
+// inode/mtime self-induced-echo guard (PLAN.md §7.3: "the syncer ignores
+// any incoming watcher event whose mtime matches the last-recorded
+// local_mtime for that path, within 1s tolerance" -- a mtime-only check).
+//
+// watcher.SyncRecord additionally carries a Size field so the watcher can
+// require an exact size match too, but store.JournalEntry (by design,
+// per PLAN.md §7.3) does not persist a file size. This adapter fills Size
+// from a fresh os.Stat of the same path the watcher is about to compare
+// against, which makes that term of the comparison trivially true and
+// correctly reduces the guard to the documented mtime-only check without
+// requiring a schema change to the journal.
+type watcherStoreAdapter struct {
+	j *store.Journal
+}
+
+func (a *watcherStoreAdapter) GetSyncRecord(path string) *watcher.SyncRecord {
+	entry, err := a.j.Get(path)
+	if err != nil {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+	return &watcher.SyncRecord{LocalMtime: entry.LocalMtime, Size: info.Size()}
+}
+
+// ---------------------------------------------------------------------------
+// bisyncJournalAdapter: *store.Journal → syncer.Journal (bisync)
+// ---------------------------------------------------------------------------
+
+// bisyncJournalAdapter bridges *store.Journal to the syncer.Journal
+// interface used by the bisync safety net. It is distinct from
+// journalSyncerAdapter because syncer.Journal (bisync) is context-free
+// and returns a pointer entry, while syncer.Store (push/pull) is
+// context-aware and returns (entry, bool, error).
+type bisyncJournalAdapter struct {
+	j *store.Journal
+}
+
+func (a *bisyncJournalAdapter) Get(path string) (*syncer.JournalEntry, error) {
+	e, err := a.j.Get(path)
+	if err != nil {
+		// Callers (bisync_ops.go: hasDivergence) treat any error the same
+		// as "no entry" and fall back to a direct local/remote compare.
+		return nil, err
+	}
+	se := toSyncerJournalEntry(e)
+	return &se, nil
+}
+
+func (a *bisyncJournalAdapter) Put(entry syncer.JournalEntry) error {
+	return a.j.Put(toStoreJournalEntry(entry))
+}
+
+func (a *bisyncJournalAdapter) Exists(path string) bool {
+	return a.j.Exists(path)
 }

@@ -10,14 +10,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/asnowfix/home-drive/homedrive/internal/config"
-	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
-	"github.com/asnowfix/home-drive/homedrive/internal/store"
-	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
 )
 
 // version is set at build time via -ldflags.
@@ -32,12 +26,14 @@ const (
 )
 
 func main() {
+	logLevel := &slog.LevelVar{}
+	logLevel.Set(slog.LevelInfo)
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: logLevel,
 	}))
 	slog.SetDefault(logger)
 
-	root := newRootCmd()
+	root := newRootCmd(logLevel)
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		slog.Error("fatal error", "error", err)
 		os.Exit(1)
@@ -53,7 +49,10 @@ func defaultConfigPath() string {
 	return filepath.Join(dir, "homedrive", "config.yaml")
 }
 
-func newRootCmd() *cobra.Command {
+// newRootCmd builds the cobra command tree. logLevel is the shared,
+// mutable log level applied by `run` and updated live by SIGHUP/POST
+// /reload; it is nil in tests that don't exercise reload.
+func newRootCmd(logLevel *slog.LevelVar) *cobra.Command {
 	var dryRun bool
 
 	root := &cobra.Command{
@@ -71,120 +70,58 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().BoolVar(&dryRun, "dry-run", false,
 		"log intended actions without making remote changes")
 
-	root.AddCommand(newRunCmd())
+	root.AddCommand(newRunCmd(logLevel))
 	root.AddCommand(newCtlCmd())
 
 	return root
 }
 
-func newRunCmd() *cobra.Command {
+func newRunCmd(logLevel *slog.LevelVar) *cobra.Command {
 	var configPath string
 
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Start the sync agent",
-		RunE:  runAgent,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runAgent(cmd, configPath, logLevel)
+		},
 	}
 	cmd.Flags().StringVar(&configPath, "config", defaultConfigPath(),
 		"path to config file")
 	return cmd
 }
 
-func runAgent(cmd *cobra.Command, _ []string) error {
+// runAgent builds the full sync engine (watcher, push syncer, pull,
+// bisync, MQTT, HTTP control endpoint) and runs it until SIGTERM/SIGINT.
+func runAgent(cmd *cobra.Command, configPath string, logLevel *slog.LevelVar) error {
 	dryRun, _ := cmd.Context().Value(DryRunKey).(bool)
-	configPath, _ := cmd.Flags().GetString("config")
-
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	if dryRun {
-		cfg.DryRun = true
-	}
-
-	if err := os.MkdirAll(filepath.Dir(cfg.State.Path), 0o755); err != nil {
-		return fmt.Errorf("create state dir: %w", err)
-	}
-	if err := os.MkdirAll(cfg.LocalRoot, 0o755); err != nil {
-		return fmt.Errorf("create local root: %w", err)
-	}
-
-	journal, err := store.OpenJournal(cfg.State.Path, slog.Default())
-	if err != nil {
-		return fmt.Errorf("open journal: %w", err)
-	}
-	defer func() { _ = journal.Close() }()
-
-	var auditAdapter syncer.AuditLogger
-	if cfg.State.AuditLog != "" {
-		if err := os.MkdirAll(filepath.Dir(cfg.State.AuditLog), 0o755); err != nil {
-			return fmt.Errorf("create audit log dir: %w", err)
-		}
-		f, err := os.OpenFile(cfg.State.AuditLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640)
-		if err != nil {
-			return fmt.Errorf("open audit log: %w", err)
-		}
-		defer func() { _ = f.Close() }()
-		auditAdapter = &auditLoggerAdapter{a: store.NewAuditor(f, slog.Default())}
-	}
-
-	slog.Info("starting homedrive agent",
-		"version", version,
-		"config", configPath,
-		"local_root", cfg.LocalRoot,
-		"remote", cfg.Remote,
-		"dry_run", cfg.DryRun,
-	)
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	rfs, err := rcloneclient.NewRcloneFS(ctx, rcloneclient.RcloneFSConfig{
-		Remote:     cfg.Remote,
-		ConfigPath: cfg.RcloneConfig,
+	agent, err := newAgent(ctx, AgentOpts{
+		ConfigPath: configPath,
+		DryRun:     dryRun,
+		Version:    version,
 		Log:        slog.Default(),
+		LogLevel:   logLevel,
 	})
 	if err != nil {
-		return fmt.Errorf("init rclone remote: %w", err)
+		return fmt.Errorf("build agent: %w", err)
 	}
 
-	interval := cfg.Pull.ChangesAPIInterval.Duration
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
-
-	puller := syncer.NewPuller(
-		syncer.PullerConfig{
-			Interval:       interval,
-			LocalRoot:      cfg.LocalRoot,
-			ConflictPolicy: syncer.ConflictPolicy(cfg.Conflict.Policy),
-			DryRun:         cfg.DryRun,
-		},
-		&rcloneSyncerAdapter{fs: rfs},
-		&journalSyncerAdapter{j: journal, logger: slog.Default()},
-		auditAdapter,
-		noopPublisher{},
-		slog.Default(),
-		time.Now,
-	)
-
-	pullerDone := make(chan error, 1)
-	go func() { pullerDone <- puller.Run(ctx) }()
-
-	<-ctx.Done()
-	err = <-pullerDone
-	slog.Info("homedrive agent stopped")
-	if err != nil && err != context.Canceled {
-		return err
-	}
-	return nil
+	return agent.Run(ctx)
 }
 
 func newCtlCmd() *cobra.Command {
+	var configPath string
+
 	ctl := &cobra.Command{
 		Use:   "ctl",
 		Short: "Control a running homedrive agent via HTTP",
 	}
+	ctl.PersistentFlags().StringVar(&configPath, "config", defaultConfigPath(),
+		"path to config file (used to find the control endpoint address)")
 
 	ctl.AddCommand(newCtlStatusCmd())
 	ctl.AddCommand(newCtlPauseCmd())
@@ -199,8 +136,7 @@ func newCtlStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show agent status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			slog.Info("ctl: status requested")
-			return nil
+			return ctlRunStatus(cmd)
 		},
 	}
 }
@@ -210,8 +146,7 @@ func newCtlPauseCmd() *cobra.Command {
 		Use:   "pause",
 		Short: "Pause the sync agent",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			slog.Info("ctl: pause requested")
-			return nil
+			return ctlRunAction(cmd, "pause")
 		},
 	}
 }
@@ -221,8 +156,7 @@ func newCtlResumeCmd() *cobra.Command {
 		Use:   "resume",
 		Short: "Resume the sync agent",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			slog.Info("ctl: resume requested")
-			return nil
+			return ctlRunAction(cmd, "resume")
 		},
 	}
 }
@@ -232,8 +166,7 @@ func newCtlResyncCmd() *cobra.Command {
 		Use:   "resync",
 		Short: "Force an immediate bisync",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			slog.Info("ctl: resync requested")
-			return nil
+			return ctlRunAction(cmd, "resync")
 		},
 	}
 }
