@@ -3,6 +3,7 @@ package rcloneclient
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 )
@@ -431,4 +432,119 @@ func TestMemFS_Files(t *testing.T) {
 	if len(files2) != 2 {
 		t.Error("Files map leak: modification affected MemFS")
 	}
+}
+
+func TestMemFS_List(t *testing.T) {
+	t.Parallel()
+
+	m := NewMemFS()
+	ctx := context.Background()
+	now := time.Now()
+
+	m.Seed("root.txt", now, "h1")
+	m.Seed("dir/child.txt", now, "h2")
+	m.Seed("dir/sibling.txt", now, "h3")
+	m.Seed("dir/sub/grandchild.txt", now, "h4")
+
+	tests := []struct {
+		name      string
+		dir       string
+		wantPaths []string
+	}{
+		{
+			name:      "RootDirectory",
+			dir:       "",
+			wantPaths: []string{"root.txt"},
+		},
+		{
+			name:      "SubDirectory",
+			dir:       "dir",
+			wantPaths: []string{"dir/child.txt", "dir/sibling.txt"},
+		},
+		{
+			name:      "NestedSubDirectory",
+			dir:       "dir/sub",
+			wantPaths: []string{"dir/sub/grandchild.txt"},
+		},
+		{
+			name:      "EmptyDirectory",
+			dir:       "does/not/exist",
+			wantPaths: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			objs, err := m.List(ctx, tt.dir)
+			if err != nil {
+				t.Fatalf("List(%q) error: %v", tt.dir, err)
+			}
+			got := make(map[string]bool, len(objs))
+			for _, o := range objs {
+				got[o.Path] = true
+			}
+			if len(got) != len(tt.wantPaths) {
+				t.Fatalf("List(%q) = %v, want %v", tt.dir, objs, tt.wantPaths)
+			}
+			for _, want := range tt.wantPaths {
+				if !got[want] {
+					t.Errorf("List(%q) missing %q, got %v", tt.dir, want, objs)
+				}
+			}
+		})
+	}
+}
+
+func TestMemFS_GetStartPageToken(t *testing.T) {
+	t.Parallel()
+
+	m := NewMemFS()
+	ctx := context.Background()
+
+	got, err := m.GetStartPageToken(ctx)
+	if err != nil {
+		t.Fatalf("GetStartPageToken error: %v", err)
+	}
+	if got != "start" {
+		t.Errorf("GetStartPageToken = %q, want default %q", got, "start")
+	}
+
+	m.SetStartPageToken("custom-token")
+	got, err = m.GetStartPageToken(ctx)
+	if err != nil {
+		t.Fatalf("GetStartPageToken error: %v", err)
+	}
+	if got != "custom-token" {
+		t.Errorf("GetStartPageToken = %q, want %q", got, "custom-token")
+	}
+}
+
+func TestMemFS_DownloadFile(t *testing.T) {
+	t.Parallel()
+
+	m := NewMemFS()
+	ctx := context.Background()
+	mtime := time.Date(2026, 4, 28, 14, 0, 0, 0, time.UTC)
+
+	t.Run("MissingFile", func(t *testing.T) {
+		dst := t.TempDir() + "/out.txt"
+		if err := m.DownloadFile(ctx, "missing.txt", dst); !errors.Is(err, ErrNotFound) {
+			t.Errorf("DownloadFile error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("SeededFile", func(t *testing.T) {
+		m.Seed("docs/readme.md", mtime, "checksum")
+		dst := t.TempDir() + "/readme.md"
+		if err := m.DownloadFile(ctx, "docs/readme.md", dst); err != nil {
+			t.Fatalf("DownloadFile error: %v", err)
+		}
+		data, err := os.ReadFile(dst)
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if string(data) != "content-of-docs/readme.md" {
+			t.Errorf("downloaded content = %q", data)
+		}
+	})
 }

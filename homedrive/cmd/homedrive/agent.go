@@ -39,7 +39,7 @@ type Agent struct {
 	journal   *store.Journal
 	auditFile *os.File // nil if audit logging is disabled
 
-	rfs remoteFS
+	rfs rcloneclient.RemoteFS
 
 	mqttReal *mqtt.Client // non-nil only when MQTT is enabled and connected
 
@@ -254,8 +254,8 @@ func (a *Agent) buildPushSyncer(pub syncer.Publisher, audit syncer.AuditLogger) 
 	}
 	a.pushSyncer = syncer.New(
 		pushCfg,
-		&rcloneSyncerAdapter{fs: a.rfs},
-		&journalSyncerAdapter{j: a.journal, logger: a.log},
+		a.rfs,
+		store.NewJournalStore(a.journal, a.log),
 		audit,
 		pub,
 		a.log,
@@ -276,8 +276,8 @@ func (a *Agent) buildPuller(pub syncer.Publisher, audit syncer.AuditLogger) {
 			ConflictPolicy: syncer.ConflictPolicy(a.cfg.Conflict.Policy),
 			DryRun:         a.cfg.DryRun,
 		},
-		&rcloneSyncerAdapter{fs: a.rfs},
-		&journalSyncerAdapter{j: a.journal, logger: a.log},
+		a.rfs,
+		store.NewJournalStore(a.journal, a.log),
 		audit,
 		pub,
 		a.log,
@@ -298,7 +298,7 @@ func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer) {
 			LocalRoot: a.cfg.LocalRoot,
 			DryRun:    a.cfg.DryRun,
 		},
-		Remote:  &rcloneSyncerAdapter{fs: a.rfs},
+		Remote:  a.rfs,
 		Journal: &bisyncJournalAdapter{j: a.journal},
 		MQTT:    pub,
 		Audit:   rawAudit,

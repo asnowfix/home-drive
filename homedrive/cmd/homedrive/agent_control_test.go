@@ -38,7 +38,7 @@ func newBisyncTestAgent(t *testing.T) *Agent {
 	j := newTestJournal(t)
 	b, _ := syncer.NewBisync(syncer.BisyncOpts{
 		Config:  syncer.BisyncConfig{LocalRoot: t.TempDir(), Interval: time.Hour},
-		Remote:  &rcloneSyncerAdapter{fs: newFakeRemoteFS()},
+		Remote:  newFakeRemoteFS(),
 		Journal: &bisyncJournalAdapter{j: j},
 		Logger:  slog.Default(),
 	})

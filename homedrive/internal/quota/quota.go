@@ -32,13 +32,24 @@ func (q QuotaInfo) UsedPercent() float64 {
 // RemoteFS is the subset of the rclone client interface needed by the
 // quota monitor. Defined locally so this package compiles independently
 // of internal/rcloneclient.
+//
+// Deliberately left as a package-local, single-method interface rather
+// than importing rcloneclient.RemoteFS wholesale (issue #51 judgment
+// call): internal/quota is not yet wired into cmd/homedrive (orphaned
+// since Phase 10 -- see PLAN.md §14), and Go idiom favors small
+// consumer-defined interfaces. QuotaInfo mirrors the shape of
+// rcloneclient.Quota; if/when this package is wired up, that duplication
+// should be revisited alongside the wiring change, not speculatively now.
 type RemoteFS interface {
 	Quota(ctx context.Context) (QuotaInfo, error)
 }
 
 // Publisher is the subset of the MQTT publisher interface needed to emit
 // quota warning and exhaustion events. Defined locally so this package
-// compiles independently of internal/mqtt.
+// compiles independently of internal/mqtt. Same issue #51 judgment call
+// as RemoteFS above: a strict two-method subset of mqtt.Publisher using
+// only primitive types, so there is no struct-shape drift risk in
+// keeping it narrow.
 type Publisher interface {
 	PublishJSON(topic string, payload any) error
 	Topic(parts ...string) string

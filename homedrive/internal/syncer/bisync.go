@@ -21,7 +21,7 @@ type Bisync struct {
 	cfg     BisyncConfig
 	remote  RemoteFS
 	journal Journal
-	mqtt    EventPublisher // may be nil if MQTT is disabled
+	mqtt    Publisher // may be nil if MQTT is disabled
 	audit   AuditWriter    // may be nil if audit is disabled
 	clock   Clock
 	log     *slog.Logger
@@ -44,7 +44,7 @@ type BisyncOpts struct {
 	Config  BisyncConfig
 	Remote  RemoteFS
 	Journal Journal
-	MQTT    EventPublisher // optional
+	MQTT    Publisher // optional
 	Audit   AuditWriter    // optional
 	Clock   Clock          // defaults to realClock
 	Logger  *slog.Logger   // defaults to slog.Default()

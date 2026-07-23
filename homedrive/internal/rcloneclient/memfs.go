@@ -3,7 +3,10 @@ package rcloneclient
 import (
 	"context"
 	"fmt"
+	"maps"
+	"os"
 	"path"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -31,20 +34,22 @@ func WithClock(c Clock) MemFSOption {
 // MemFS is an in-memory, thread-safe implementation of RemoteFS for tests.
 // It simulates a remote filesystem with deterministic behavior.
 type MemFS struct {
-	mu      sync.Mutex
-	files   map[string]RemoteObject
-	clock   Clock
-	changes []Change
-	quota   Quota
-	idSeq   int64
+	mu         sync.Mutex
+	files      map[string]RemoteObject
+	clock      Clock
+	changes    []Change
+	quota      Quota
+	idSeq      int64
+	startToken string
 }
 
 // NewMemFS creates a new in-memory remote filesystem.
 func NewMemFS(opts ...MemFSOption) *MemFS {
 	m := &MemFS{
-		files: make(map[string]RemoteObject),
-		clock: RealClock{},
-		quota: Quota{Used: 0, Total: 15 * 1024 * 1024 * 1024}, // 15 GB default
+		files:      make(map[string]RemoteObject),
+		clock:      RealClock{},
+		quota:      Quota{Used: 0, Total: 15 * 1024 * 1024 * 1024}, // 15 GB default
+		startToken: "start",
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -88,6 +93,14 @@ func (m *MemFS) SetQuota(used, total int64) {
 	m.quota = Quota{Used: used, Total: total}
 }
 
+// SetStartPageToken overrides the token returned by GetStartPageToken.
+// Defaults to "start" if never called.
+func (m *MemFS) SetStartPageToken(token string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.startToken = token
+}
+
 // AddChange appends a simulated remote change for ListChanges to return.
 func (m *MemFS) AddChange(c Change) {
 	m.mu.Lock()
@@ -101,9 +114,7 @@ func (m *MemFS) Files() map[string]RemoteObject {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make(map[string]RemoteObject, len(m.files))
-	for k, v := range m.files {
-		out[k] = v
-	}
+	maps.Copy(out, m.files)
 	return out
 }
 
@@ -203,4 +214,57 @@ func (m *MemFS) Quota(_ context.Context) (Quota, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.quota, nil
+}
+
+// List returns all objects whose immediate parent directory is dir
+// (non-recursive), matching the semantics of RcloneFS.List. dir="" means
+// the remote root.
+func (m *MemFS) List(_ context.Context, dir string) ([]RemoteObject, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	clean := path.Clean(dir)
+	if dir == "" {
+		clean = ""
+	}
+	var out []RemoteObject
+	for p, obj := range m.files {
+		if path.Dir(p) == clean || (clean == "" && path.Dir(p) == ".") {
+			out = append(out, obj)
+		}
+	}
+	return out, nil
+}
+
+// GetStartPageToken returns the configured start token (see
+// SetStartPageToken), defaulting to "start".
+func (m *MemFS) GetStartPageToken(_ context.Context) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.startToken, nil
+}
+
+// DownloadFile writes deterministic synthetic content for the seeded
+// remote object at remotePath to localPath, preserving its ModTime.
+func (m *MemFS) DownloadFile(_ context.Context, remotePath, localPath string) error {
+	m.mu.Lock()
+	obj, ok := m.files[remotePath]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("download %q: %w", remotePath, ErrNotFound)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+		return fmt.Errorf("mkdirall for %q: %w", localPath, err)
+	}
+	content := []byte("content-of-" + remotePath)
+	if err := os.WriteFile(localPath, content, 0o644); err != nil {
+		return fmt.Errorf("write %q: %w", localPath, err)
+	}
+	if !obj.ModTime.IsZero() {
+		if err := os.Chtimes(localPath, obj.ModTime, obj.ModTime); err != nil {
+			return fmt.Errorf("chtimes %q: %w", localPath, err)
+		}
+	}
+	return nil
 }

@@ -46,8 +46,11 @@ GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
   -o homedrive-bin ./homedrive/cmd/homedrive
 du -h homedrive-bin
 
-# Exactly 1 rclone backend
-go tool nm homedrive-bin | grep -c rclone/backend  # must be 1
+# Exactly 1 rclone backend explicitly imported (crypt is a transitive
+# dependency of drive itself, so a raw binary symbol count is not a
+# reliable check -- verify at the source-import level instead)
+grep -rn '"github.com/rclone/rclone/backend/' homedrive/ --include='*.go' \
+  | grep -v '_test.go' | grep -v 'rclone/backend/drive'  # must print nothing
 ```
 
 ## Go workspace integration

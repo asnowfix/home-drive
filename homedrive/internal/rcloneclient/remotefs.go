@@ -68,8 +68,12 @@ func (q Quota) UsedPercent() float64 {
 	return float64(q.Used) / float64(q.Total) * 100
 }
 
-// RemoteFS is the interface for all remote filesystem operations.
-// The production implementation wraps rclone; tests use MemFS or FlakyFS.
+// RemoteFS is the canonical interface for all remote filesystem
+// operations used anywhere in homedrive -- the push/pull sync engine
+// (internal/syncer), the bisync safety net, and the cmd/homedrive wiring
+// layer all depend on this single definition (no package should declare
+// its own local copy; see the homedrive-test-mocks skill). The production
+// implementation (RcloneFS) wraps rclone; tests use MemFS or FlakyFS.
 type RemoteFS interface {
 	// CopyFile uploads a local file to the given remote directory.
 	// src is the local filesystem path; dstDir is the remote directory.
@@ -84,9 +88,22 @@ type RemoteFS interface {
 	// Stat returns metadata for the remote object at path.
 	Stat(ctx context.Context, path string) (RemoteObject, error)
 
+	// List returns all objects in the given remote directory
+	// (non-recursive). Required by the bisync safety net (PLAN.md §7.2)
+	// to diff the remote tree against the local one.
+	List(ctx context.Context, dir string) ([]RemoteObject, error)
+
 	// ListChanges returns changes since the given page token.
 	// Pass an empty string to get the initial page token.
 	ListChanges(ctx context.Context, pageToken string) (Changes, error)
+
+	// GetStartPageToken returns a token marking "from now on", used to
+	// seed the first ListChanges call before incremental polling begins.
+	GetStartPageToken(ctx context.Context) (string, error)
+
+	// DownloadFile downloads the remote file at remotePath to localPath,
+	// preserving the remote mtime for loop-prevention.
+	DownloadFile(ctx context.Context, remotePath, localPath string) error
 
 	// Quota returns the current remote storage usage.
 	Quota(ctx context.Context) (Quota, error)

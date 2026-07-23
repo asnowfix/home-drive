@@ -129,12 +129,36 @@ func (f *FlakyFS) Stat(ctx context.Context, path string) (RemoteObject, error) {
 	return f.inner.Stat(ctx, path)
 }
 
+// List implements RemoteFS.
+func (f *FlakyFS) List(ctx context.Context, dir string) ([]RemoteObject, error) {
+	if err := f.applyRule(ctx, "List", dir); err != nil {
+		return nil, err
+	}
+	return f.inner.List(ctx, dir)
+}
+
 // ListChanges implements RemoteFS.
 func (f *FlakyFS) ListChanges(ctx context.Context, pageToken string) (Changes, error) {
 	if err := f.applyRule(ctx, "ListChanges", pageToken); err != nil {
 		return Changes{}, err
 	}
 	return f.inner.ListChanges(ctx, pageToken)
+}
+
+// GetStartPageToken implements RemoteFS.
+func (f *FlakyFS) GetStartPageToken(ctx context.Context) (string, error) {
+	if err := f.applyRule(ctx, "GetStartPageToken", ""); err != nil {
+		return "", err
+	}
+	return f.inner.GetStartPageToken(ctx)
+}
+
+// DownloadFile implements RemoteFS.
+func (f *FlakyFS) DownloadFile(ctx context.Context, remotePath, localPath string) error {
+	if err := f.applyRule(ctx, "DownloadFile", remotePath); err != nil {
+		return err
+	}
+	return f.inner.DownloadFile(ctx, remotePath, localPath)
 }
 
 // Quota implements RemoteFS.

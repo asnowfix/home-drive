@@ -119,9 +119,12 @@ Dry-run also disables store writes so re-runs replay the same plan.
 # Binary size
 test "$(stat -c%s homedrive)" -lt 26214400  # < 25 MB
 
-# Backend count must equal 1
-backends=$(go tool nm homedrive | grep -c 'rclone/backend/')
-test "$backends" -eq 1
+# Only "drive" may be explicitly imported anywhere in source. crypt is a
+# transitive dependency of drive itself, so a raw go tool nm binary symbol
+# count is not a reliable check -- verify at the source-import level.
+imports=$(grep -rn '"github.com/rclone/rclone/backend/' . --include='*.go' \
+  | grep -v '_test.go' | grep -v 'rclone/backend/drive' || true)
+test -z "$imports"
 ```
 
 CI enforces both. Local builds should run these too.

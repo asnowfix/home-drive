@@ -138,7 +138,7 @@ func resolveConflict(
 			Path:         oldPath,
 			RemoteMtime:  change.Object.ModTime,
 			RemoteMD5:    change.Object.MD5,
-			RemoteID:     change.Object.ID,
+			RemoteID:     change.Object.RemoteID,
 			LastSyncedAt: clock(),
 			LastOrigin:   "remote",
 		}); err != nil {

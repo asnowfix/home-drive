@@ -3,15 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 	"github.com/asnowfix/home-drive/homedrive/internal/store"
 	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
 )
@@ -150,11 +147,18 @@ func TestBisyncJournalAdapter_GetMissing_ReturnsError(t *testing.T) {
 	}
 }
 
-// TestRcloneSyncerAdapter_DelegatesToRemoteFS covers every thin
-// pass-through method on rcloneSyncerAdapter against fakeRemoteFS.
-func TestRcloneSyncerAdapter_DelegatesToRemoteFS(t *testing.T) {
+// TestFakeRemoteFS_SatisfiesRemoteFS exercises fakeRemoteFS directly --
+// since #51, cmd/homedrive no longer wraps rcloneclient.RemoteFS in a
+// local adapter (fakeRemoteFS itself implements the canonical
+// rcloneclient.RemoteFS / syncer.RemoteFS interface and is passed
+// straight through to syncer.New / syncer.NewPuller / syncer.NewBisync).
+// This test covers the pass-through methods directly; the
+// rcloneclient.ErrGone 410-handling path is covered by
+// internal/syncer/puller_test.go (TestPuller_..._ErrGone), since there is
+// no longer a translation step at this package boundary: syncer.ErrGone
+// is rcloneclient.ErrGone (see internal/syncer/errors.go).
+func TestFakeRemoteFS_SatisfiesRemoteFS(t *testing.T) {
 	remote := newFakeRemoteFS()
-	adapter := &rcloneSyncerAdapter{fs: remote}
 	ctx := context.Background()
 
 	src := filepath.Join(t.TempDir(), "f.txt")
@@ -162,115 +166,66 @@ func TestRcloneSyncerAdapter_DelegatesToRemoteFS(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := adapter.CopyFile(ctx, src, "dst"); err != nil {
+	if _, err := remote.CopyFile(ctx, src, "dst"); err != nil {
 		t.Fatalf("CopyFile: %v", err)
 	}
-	if _, err := adapter.Stat(ctx, src); err != nil {
+	if _, err := remote.Stat(ctx, src); err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
-	if _, err := adapter.List(ctx, ""); err != nil {
+	if _, err := remote.List(ctx, ""); err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if _, err := adapter.ListChanges(ctx, ""); err != nil {
+	if _, err := remote.ListChanges(ctx, ""); err != nil {
 		t.Fatalf("ListChanges: %v", err)
 	}
 	changesWithObject := &fakeRemoteFSWithChanges{fakeRemoteFS: remote}
-	adapterWithChanges := &rcloneSyncerAdapter{fs: changesWithObject}
-	changes, err := adapterWithChanges.ListChanges(ctx, "")
+	changes, err := changesWithObject.ListChanges(ctx, "")
 	if err != nil {
 		t.Fatalf("ListChanges with object: %v", err)
 	}
 	if len(changes.Items) != 1 || changes.Items[0].Object.Path != "obj.txt" {
 		t.Errorf("unexpected changes: %+v", changes)
 	}
-	if _, err := adapter.GetStartPageToken(ctx); err != nil {
+	if _, err := remote.GetStartPageToken(ctx); err != nil {
 		t.Fatalf("GetStartPageToken: %v", err)
 	}
 	dst := filepath.Join(t.TempDir(), "downloaded.txt")
-	if err := adapter.DownloadFile(ctx, "remote/path.txt", dst); err != nil {
+	if err := remote.DownloadFile(ctx, "remote/path.txt", dst); err != nil {
 		t.Fatalf("DownloadFile: %v", err)
 	}
 	if data, err := os.ReadFile(dst); err != nil || string(data) != "content-of-remote/path.txt" {
 		t.Errorf("unexpected downloaded content: %q, err=%v", data, err)
 	}
-	if err := adapter.MoveFile(ctx, src, "moved"); err != nil {
+	if err := remote.MoveFile(ctx, src, "moved"); err != nil {
 		t.Fatalf("MoveFile: %v", err)
 	}
-	if err := adapter.DeleteFile(ctx, "moved"); err != nil {
+	if err := remote.DeleteFile(ctx, "moved"); err != nil {
 		t.Fatalf("DeleteFile: %v", err)
 	}
-}
-
-// fakeRemoteFSGone wraps fakeRemoteFS and makes ListChanges return
-// rcloneclient.ErrGone, simulating a Drive API 410 response.
-type fakeRemoteFSGone struct {
-	*fakeRemoteFS
-}
-
-func (f *fakeRemoteFSGone) ListChanges(_ context.Context, _ string) (rcloneclient.Changes, error) {
-	return rcloneclient.Changes{}, fmt.Errorf("changes.list: %w", rcloneclient.ErrGone)
-}
-
-// TestRcloneSyncerAdapter_ListChanges_TranslatesErrGone verifies the
-// rcloneclient-level 410 sentinel is translated into syncer.ErrGone so
-// Puller.fetchChanges' errors.Is check (PLAN.md §7.1) fires in production,
-// not just against the syncer package's own hand-rolled test mock.
-func TestRcloneSyncerAdapter_ListChanges_TranslatesErrGone(t *testing.T) {
-	remote := &fakeRemoteFSGone{fakeRemoteFS: newFakeRemoteFS()}
-	adapter := &rcloneSyncerAdapter{fs: remote}
-
-	_, err := adapter.ListChanges(context.Background(), "stale-token")
-	if !errors.Is(err, syncer.ErrGone) {
-		t.Errorf("ListChanges error = %v, want errors.Is(err, syncer.ErrGone)", err)
+	if _, err := remote.Quota(ctx); err != nil {
+		t.Fatalf("Quota: %v", err)
 	}
 }
 
-// TestJournalSyncerAdapter_DelegatesToJournal covers every method on
-// journalSyncerAdapter against a real store.Journal.
-func TestJournalSyncerAdapter_DelegatesToJournal(t *testing.T) {
+// TestJournalStore_UsedByBisyncAdapter is a light sanity check that
+// bisyncJournalAdapter (this package's remaining Journal-shaped adapter,
+// distinct from the canonical store.Store) still round-trips through a
+// real store.Journal now that syncer.JournalEntry is an alias of
+// store.JournalEntry. The exhaustive Store-interface coverage now lives
+// in internal/store/store_test.go (TestJournalStore_DelegatesToJournal),
+// since store.JournalStore -- not a cmd/homedrive-local type -- is the
+// canonical Store implementation since #51.
+func TestJournalStore_UsedByBisyncAdapter(t *testing.T) {
 	j := newTestJournal(t)
-	adapter := &journalSyncerAdapter{j: j, logger: slog.Default()}
+	s := store.NewJournalStore(j, slog.Default())
 	ctx := context.Background()
 
-	if err := adapter.SetPageToken(ctx, "tok-1"); err != nil {
-		t.Fatalf("SetPageToken: %v", err)
-	}
-	got, err := adapter.GetPageToken(ctx)
-	if err != nil || got != "tok-1" {
-		t.Fatalf("GetPageToken = %q, %v", got, err)
-	}
-
-	if _, found, err := adapter.Get(ctx, "missing.txt"); err != nil || found {
-		t.Fatalf("expected not-found for missing.txt, got found=%v err=%v", found, err)
-	}
-
-	entry := syncer.JournalEntry{Path: "dir/old.txt", LastOrigin: "local"}
-	if err := adapter.Put(ctx, entry); err != nil {
+	if err := s.Put(ctx, syncer.JournalEntry{Path: "a.txt", LastOrigin: "local"}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	got2, found, err := adapter.Get(ctx, "dir/old.txt")
-	if err != nil || !found || got2.LastOrigin != "local" {
-		t.Fatalf("Get after Put = %+v, found=%v, err=%v", got2, found, err)
-	}
-
-	n, err := adapter.NextOldN(ctx, "dir/old.txt")
-	if err != nil || n != 1 {
-		t.Fatalf("NextOldN = %d, %v", n, err)
-	}
-
-	if err := adapter.Put(ctx, syncer.JournalEntry{Path: "dir/child.txt"}); err != nil {
-		t.Fatal(err)
-	}
-	count, err := adapter.RewritePrefix(ctx, "dir/", "dir2/")
-	if err != nil {
-		t.Fatalf("RewritePrefix: %v", err)
-	}
-	if count == 0 {
-		t.Error("expected RewritePrefix to move at least one entry")
-	}
-
-	if err := adapter.Delete(ctx, "dir2/old.txt"); err != nil {
-		t.Fatalf("Delete: %v", err)
+	got, found, err := s.Get(ctx, "a.txt")
+	if err != nil || !found || got.LastOrigin != "local" {
+		t.Fatalf("Get = %+v, found=%v, err=%v", got, found, err)
 	}
 }
 

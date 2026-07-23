@@ -21,6 +21,7 @@ type mockRemoteFS struct {
 	startToken  string
 	goneTokens  map[string]bool // tokens that trigger ErrGone
 	downloadErr map[string]error
+	quota       Quota
 
 	// error hooks for push tests
 	copyErr func(path string) error
@@ -76,7 +77,7 @@ func (m *mockRemoteFS) CopyFile(_ context.Context, src, dstDir string) (RemoteOb
 	} else if filepath.Base(remotePath) != name {
 		remotePath = remotePath + "/" + name
 	}
-	obj := RemoteObject{Path: remotePath, Size: 100, MD5: "md5-" + remotePath, ModTime: time.Now(), ID: "id-" + remotePath}
+	obj := RemoteObject{Path: remotePath, Size: 100, MD5: "md5-" + remotePath, ModTime: time.Now(), RemoteID: "id-" + remotePath}
 	m.files[remotePath] = obj
 	return obj, nil
 }
@@ -159,6 +160,14 @@ func (m *mockRemoteFS) List(_ context.Context, _ string) ([]RemoteObject, error)
 	return result, nil
 }
 
+// Quota implements RemoteFS (canonical rcloneclient.RemoteFS). It is
+// unused by push/pull/bisync but required to satisfy the interface.
+func (m *mockRemoteFS) Quota(_ context.Context) (Quota, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.quota, nil
+}
+
 // Seed adds a file to the remote store (for bisync tests).
 func (m *mockRemoteFS) Seed(path string, modTime time.Time, md5 string) {
 	m.mu.Lock()
@@ -168,7 +177,7 @@ func (m *mockRemoteFS) Seed(path string, modTime time.Time, md5 string) {
 		Size:    100,
 		MD5:     md5,
 		ModTime: modTime,
-		ID:      "id-" + path,
+		RemoteID:      "id-" + path,
 	}
 }
 

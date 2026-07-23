@@ -225,9 +225,12 @@ GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
 du -h homedrive-bin
 # Expected: < 25M
 
-# Exactly 1 rclone backend registered
-go tool nm homedrive-bin | grep -c rclone/backend/
-# Expected: 1
+# Exactly 1 rclone backend explicitly imported (crypt is a transitive
+# dependency of drive itself, so a raw binary symbol count over-counts;
+# verify at the source-import level instead)
+grep -rn '"github.com/rclone/rclone/backend/' homedrive/ --include='*.go' \
+  | grep -v '_test.go' | grep -v 'rclone/backend/drive'
+# Expected: no output
 
 # Test coverage above 70%
 go test -race -coverprofile=coverage.out ./homedrive/...
