@@ -144,6 +144,7 @@ state:
 
 http:
   listen: 127.0.0.1:6090
+  # auth_token: ""   # required if listen is ever bound off loopback
 
 mqtt:
   enabled: true
@@ -156,6 +157,23 @@ dry_run: false
 
 See [PLAN.md](PLAN.md) section 4 for the full configuration reference
 with all available fields.
+
+### HTTP control endpoint auth
+
+`http.listen` defaults to `127.0.0.1:6090` and, with `http.auth_token`
+left unset, the control endpoint stays unauthenticated for loopback
+access -- this is unchanged, zero-config behavior.
+
+If you set `http.listen` to anything other than a loopback address
+(`127.0.0.1`, `::1`, or `localhost`) -- e.g. to let another host on the
+LAN poll `/status` directly -- you **must** also set `http.auth_token`.
+The server fails closed: it refuses to start if it would otherwise bind
+off loopback without a token. When `http.auth_token` is set, every
+request to every route (`/status`, `/pause`, `/resume`, `/resync`,
+`/reload`, `/healthz`, `/metrics`) must carry a matching
+`Authorization: Bearer <auth_token>` header, regardless of bind address.
+`homedrive ctl <cmd>` reads `http.auth_token` from the same `--config`
+file and sends it automatically.
 
 ## CLI usage
 

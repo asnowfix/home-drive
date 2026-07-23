@@ -69,6 +69,12 @@ type StateConfig struct {
 type HTTPConfig struct {
 	Listen  string `yaml:"listen"`
 	Metrics bool   `yaml:"metrics"`
+	// AuthToken, if set, is required as a Bearer token on every request to
+	// the control endpoint (see PLAN.md §12). Loopback-only, no-token setups
+	// remain unauthenticated for zero-config local use; a non-loopback
+	// Listen address without AuthToken causes the server to refuse to
+	// start (fail closed).
+	AuthToken string `yaml:"auth_token"`
 }
 
 // MQTTConfig configures the MQTT publisher.

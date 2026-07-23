@@ -15,7 +15,10 @@ func TestServer_GracefulShutdown(t *testing.T) {
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	m := NewMetrics()
 	cfg := ServerConfig{ListenAddr: "127.0.0.1:0", EnableMetrics: true}
-	srv := NewServer(cfg, deps, m, log)
+	srv, err := NewServer(cfg, deps, m, log)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

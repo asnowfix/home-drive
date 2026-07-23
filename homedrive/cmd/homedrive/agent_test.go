@@ -74,7 +74,9 @@ func newIntegrationTestAgent(t *testing.T) (*Agent, *fakeRemoteFS) {
 	a.buildPushSyncer(noopPublisher{}, nil)
 	a.buildPuller(noopPublisher{}, nil)
 	a.buildBisync(noopPublisher{}, nil)
-	a.buildHTTPServer()
+	if err := a.buildHTTPServer(); err != nil {
+		t.Fatalf("build http server: %v", err)
+	}
 
 	return a, remote
 }

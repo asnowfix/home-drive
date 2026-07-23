@@ -7,7 +7,7 @@
 //
 // Typical usage:
 //
-//	srv := http.NewServer(cfg, deps, metrics, logger)
+//	srv, err := http.NewServer(cfg, deps, metrics, logger)
 //	go srv.ListenAndServe()
 //	// ... on shutdown:
 //	srv.Shutdown(ctx)

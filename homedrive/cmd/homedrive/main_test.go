@@ -181,7 +181,10 @@ func startStubCtlServer(t *testing.T) (configPath string) {
 		HealthChecker:  stubCtlDeps{},
 	}
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	srv := httpctl.NewServer(httpctl.ServerConfig{}, deps, httpctl.NewMetrics(), log)
+	srv, err := httpctl.NewServer(httpctl.ServerConfig{}, deps, httpctl.NewMetrics(), log)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
 
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() {
@@ -257,10 +260,14 @@ func TestCtl_NoServerRunning_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestCtlAddr_Cases(t *testing.T) {
+func TestCtlTarget_Cases(t *testing.T) {
 	t.Run("missing config falls back to default", func(t *testing.T) {
-		if got := ctlAddr("/nonexistent/config.yaml"); got != defaultCtlAddr {
-			t.Errorf("ctlAddr = %q, want %q", got, defaultCtlAddr)
+		addr, token := ctlTarget("/nonexistent/config.yaml")
+		if addr != defaultCtlAddr {
+			t.Errorf("addr = %q, want %q", addr, defaultCtlAddr)
+		}
+		if token != "" {
+			t.Errorf("token = %q, want empty", token)
 		}
 	})
 
@@ -270,8 +277,12 @@ func TestCtlAddr_Cases(t *testing.T) {
 		if err := os.WriteFile(configPath, []byte("local_root: /tmp\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if got := ctlAddr(configPath); got != defaultCtlAddr {
-			t.Errorf("ctlAddr = %q, want %q", got, defaultCtlAddr)
+		addr, token := ctlTarget(configPath)
+		if addr != defaultCtlAddr {
+			t.Errorf("addr = %q, want %q", addr, defaultCtlAddr)
+		}
+		if token != "" {
+			t.Errorf("token = %q, want empty", token)
 		}
 	})
 
@@ -281,8 +292,28 @@ func TestCtlAddr_Cases(t *testing.T) {
 		if err := os.WriteFile(configPath, []byte("http:\n  listen: \"10.0.0.1:9999\"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if got := ctlAddr(configPath); got != "10.0.0.1:9999" {
-			t.Errorf("ctlAddr = %q, want 10.0.0.1:9999", got)
+		addr, token := ctlTarget(configPath)
+		if addr != "10.0.0.1:9999" {
+			t.Errorf("addr = %q, want 10.0.0.1:9999", addr)
+		}
+		if token != "" {
+			t.Errorf("token = %q, want empty", token)
+		}
+	})
+
+	t.Run("auth_token is read from config", func(t *testing.T) {
+		dir := t.TempDir()
+		configPath := filepath.Join(dir, "config.yaml")
+		yaml := "http:\n  listen: \"127.0.0.1:6090\"\n  auth_token: \"s3cr3t\"\n"
+		if err := os.WriteFile(configPath, []byte(yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		addr, token := ctlTarget(configPath)
+		if addr != "127.0.0.1:6090" {
+			t.Errorf("addr = %q, want 127.0.0.1:6090", addr)
+		}
+		if token != "s3cr3t" {
+			t.Errorf("token = %q, want s3cr3t", token)
 		}
 	})
 }

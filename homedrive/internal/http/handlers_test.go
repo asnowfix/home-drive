@@ -363,7 +363,10 @@ func TestMethodNotAllowed_Returns405(t *testing.T) {
 func TestDefaultListenAddr(t *testing.T) {
 	deps, _, _, _, _, _ := defaultDeps()
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	srv := NewServer(ServerConfig{}, deps, nil, log)
+	srv, err := NewServer(ServerConfig{}, deps, nil, log)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
 	if srv.cfg.ListenAddr != "127.0.0.1:6090" {
 		t.Errorf("default listen addr = %q, want %q", srv.cfg.ListenAddr, "127.0.0.1:6090")
 	}
