@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/asnowfix/home-drive/homedrive/internal/store"
 	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
 	"github.com/asnowfix/home-drive/homedrive/internal/watcher"
 )
@@ -121,8 +122,8 @@ func TestPollOnceGuarded_BlocksDuringBisyncLock(t *testing.T) {
 		bisyncMu: &sync.RWMutex{},
 		puller: syncer.NewPuller(
 			syncer.PullerConfig{LocalRoot: t.TempDir()},
-			&rcloneSyncerAdapter{fs: remote},
-			&journalSyncerAdapter{j: j, logger: slog.Default()},
+			remote,
+			store.NewJournalStore(j, slog.Default()),
 			nil,
 			noopPublisher{},
 			slog.Default(),

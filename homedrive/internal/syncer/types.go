@@ -33,12 +33,6 @@ type Journal interface {
 	Exists(path string) bool
 }
 
-// EventPublisher abstracts MQTT publishing for bisync events.
-type EventPublisher interface {
-	PublishJSON(topic string, payload any) error
-	Topic(parts ...string) string
-}
-
 // AuditWriter abstracts the JSONL audit log writer used by bisync.
 type AuditWriter interface {
 	io.Writer

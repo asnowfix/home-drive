@@ -29,9 +29,9 @@ func TestResolveConflict_LocalNewer(t *testing.T) {
 
 	ch := Change{
 		Path: "file.txt",
-		Object: RemoteObject{
+		Object: &RemoteObject{
 			Path: "file.txt", Size: 100, MD5: "remote-md5",
-			ModTime: remoteModTime, ID: "remote-id",
+			ModTime: remoteModTime, RemoteID: "remote-id",
 		},
 	}
 	journal := JournalEntry{Path: "file.txt"}
@@ -86,9 +86,9 @@ func TestResolveConflict_RemoteNewer(t *testing.T) {
 
 	ch := Change{
 		Path: "file.txt",
-		Object: RemoteObject{
+		Object: &RemoteObject{
 			Path: "file.txt", Size: 200, MD5: "new-remote",
-			ModTime: remoteModTime, ID: "remote-id",
+			ModTime: remoteModTime, RemoteID: "remote-id",
 		},
 	}
 	journal := JournalEntry{Path: "file.txt"}
@@ -138,9 +138,9 @@ func TestResolveConflict_EqualMtime_DefaultLocalWins(t *testing.T) {
 
 	ch := Change{
 		Path: "same.txt",
-		Object: RemoteObject{
+		Object: &RemoteObject{
 			Path: "same.txt", Size: 100, MD5: "different-md5",
-			ModTime: mtime, ID: "id",
+			ModTime: mtime, RemoteID: "id",
 		},
 	}
 
@@ -172,9 +172,9 @@ func TestResolveConflict_EqualMtime_RemoteWinsPolicy(t *testing.T) {
 
 	ch := Change{
 		Path: "policy.txt",
-		Object: RemoteObject{
+		Object: &RemoteObject{
 			Path: "policy.txt", Size: 100, MD5: "diff",
-			ModTime: mtime, ID: "id",
+			ModTime: mtime, RemoteID: "id",
 		},
 	}
 
@@ -210,8 +210,8 @@ func TestResolveConflict_DryRun(t *testing.T) {
 
 	ch := Change{
 		Path: "dry.txt",
-		Object: RemoteObject{
-			Path: "dry.txt", ModTime: remoteModTime, ID: "id",
+		Object: &RemoteObject{
+			Path: "dry.txt", ModTime: remoteModTime, RemoteID: "id",
 		},
 	}
 
@@ -260,8 +260,8 @@ func TestResolveConflict_MQTTEvents(t *testing.T) {
 
 	ch := Change{
 		Path: "mqtt-test.txt",
-		Object: RemoteObject{
-			Path: "mqtt-test.txt", MD5: "m", ModTime: remoteModTime, ID: "id",
+		Object: &RemoteObject{
+			Path: "mqtt-test.txt", MD5: "m", ModTime: remoteModTime, RemoteID: "id",
 		},
 	}
 

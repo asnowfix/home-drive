@@ -190,7 +190,7 @@ func (p *Puller) buildConflictEntry(
 		Path:         ch.Path,
 		RemoteMtime:  ch.Object.ModTime,
 		RemoteMD5:    ch.Object.MD5,
-		RemoteID:     ch.Object.ID,
+		RemoteID:     ch.Object.RemoteID,
 		LastSyncedAt: now,
 		LastOrigin:   "remote",
 	}
@@ -278,7 +278,7 @@ func (p *Puller) recordDownload(
 		LocalMtime:   info.ModTime(),
 		RemoteMtime:  ch.Object.ModTime,
 		RemoteMD5:    ch.Object.MD5,
-		RemoteID:     ch.Object.ID,
+		RemoteID:     ch.Object.RemoteID,
 		LastSyncedAt: now,
 		LastOrigin:   "remote",
 	}

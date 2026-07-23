@@ -1,13 +1,22 @@
 // Package syncer implements the push/pull sync engine with conflict
 // resolution, exponential backoff retry, and bisync safety net.
 //
-// This file defines local interfaces for external dependencies so the
-// syncer compiles and tests independently of rcloneclient, store, and mqtt.
+// This file re-exports the canonical RemoteFS (internal/rcloneclient) and
+// Store (internal/store) interfaces and their associated data types as
+// local aliases, so the rest of this package can keep using the short,
+// unqualified names (RemoteObject, JournalEntry, ...) while there is
+// exactly one real definition of each -- see the homedrive-test-mocks
+// skill and issue #51. Publisher stays a small, syncer-local interface:
+// it is a strict two-method subset of mqtt.Publisher using only
+// primitive types, so there is no struct-shape drift risk in keeping it
+// narrow (Go idiom: consumer-defined interfaces).
 package syncer
 
 import (
-	"context"
 	"time"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
+	"github.com/asnowfix/home-drive/homedrive/internal/store"
 )
 
 // Op represents a filesystem operation type from the watcher.
@@ -54,65 +63,35 @@ type DirRename struct {
 	At   time.Time
 }
 
-// RemoteFS is the subset of rcloneclient.RemoteFS used by the syncer.
-// Tests supply a mock; production wires in the real rclone wrapper.
-type RemoteFS interface {
-	CopyFile(ctx context.Context, src, dstDir string) (RemoteObject, error)
-	DeleteFile(ctx context.Context, path string) error
-	MoveFile(ctx context.Context, src, dst string) error
-	Stat(ctx context.Context, path string) (RemoteObject, error)
-	List(ctx context.Context, dir string) ([]RemoteObject, error)
-	ListChanges(ctx context.Context, pageToken string) (Changes, error)
-	GetStartPageToken(ctx context.Context) (string, error)
-	DownloadFile(ctx context.Context, remotePath, localPath string) error
-}
+// RemoteFS is the canonical remote-filesystem interface, defined in
+// internal/rcloneclient. Aliased here so the rest of this package can
+// keep referring to the short name "RemoteFS".
+type RemoteFS = rcloneclient.RemoteFS
 
-// RemoteObject describes a file on the remote side.
-type RemoteObject struct {
-	Path    string
-	Size    int64
-	MD5     string
-	ModTime time.Time
-	ID      string
-}
+// RemoteObject describes a file on the remote side. Alias of
+// rcloneclient.RemoteObject (see package doc above).
+type RemoteObject = rcloneclient.RemoteObject
 
 // Change represents a single change reported by the Drive Changes API.
-type Change struct {
-	Path    string
-	Deleted bool
-	Object  RemoteObject
-}
+// Alias of rcloneclient.Change.
+type Change = rcloneclient.Change
 
-// Changes is the result of a ListChanges call.
-type Changes struct {
-	Items         []Change
-	NextPageToken string
-}
+// Changes is the result of a ListChanges call. Alias of
+// rcloneclient.Changes.
+type Changes = rcloneclient.Changes
 
-// JournalEntry records the last-known sync state for a file path.
-type JournalEntry struct {
-	Path         string
-	LocalMtime   time.Time
-	RemoteMtime  time.Time
-	RemoteMD5    string
-	RemoteID     string
-	LastSyncedAt time.Time
-	LastOrigin   string // "local" | "remote"
-}
+// JournalEntry records the last-known sync state for a file path. Alias
+// of store.JournalEntry.
+type JournalEntry = store.JournalEntry
 
-// Store is the subset of store.Store used by the syncer for journal
-// operations and page token persistence.
-type Store interface {
-	GetPageToken(ctx context.Context) (string, error)
-	SetPageToken(ctx context.Context, token string) error
-	Get(ctx context.Context, path string) (JournalEntry, bool, error)
-	Put(ctx context.Context, entry JournalEntry) error
-	Delete(ctx context.Context, path string) error
-	NextOldN(ctx context.Context, path string) (int, error)
-	// RewritePrefix renames all journal paths under oldPrefix to newPrefix.
-	// Used by the push syncer when a directory is renamed.
-	RewritePrefix(ctx context.Context, oldPrefix, newPrefix string) (int, error)
-}
+// Quota holds remote storage usage information. Alias of
+// rcloneclient.Quota.
+type Quota = rcloneclient.Quota
+
+// Store is the canonical sync-state persistence interface, defined in
+// internal/store. Aliased here so the rest of this package can keep
+// referring to the short name "Store".
+type Store = store.Store
 
 // AuditLogger appends structured audit entries to the JSONL log.
 type AuditLogger interface {

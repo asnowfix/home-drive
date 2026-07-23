@@ -39,12 +39,12 @@ func TestPuller_SingleRemoteChange(t *testing.T) {
 		Items: []Change{
 			{
 				Path: "docs/readme.txt",
-				Object: RemoteObject{
+				Object: &RemoteObject{
 					Path:    "docs/readme.txt",
 					Size:    42,
 					MD5:     "abc123",
 					ModTime: now,
-					ID:      "remote-id-1",
+					RemoteID:      "remote-id-1",
 				},
 			},
 		},
@@ -148,19 +148,19 @@ func TestPuller_ConflictDetected(t *testing.T) {
 		Items: []Change{
 			{
 				Path: "notes.md",
-				Object: RemoteObject{
+				Object: &RemoteObject{
 					Path:    "notes.md",
 					Size:    100,
 					MD5:     "new-remote-md5",
 					ModTime: remoteModTime,
-					ID:      "remote-id-notes",
+					RemoteID:      "remote-id-notes",
 				},
 			},
 		},
 		NextPageToken: "tok-2",
 	}
 	remote.files["notes.md"] = RemoteObject{
-		Path: "notes.md", MD5: "new-remote-md5", ModTime: remoteModTime, ID: "remote-id-notes",
+		Path: "notes.md", MD5: "new-remote-md5", ModTime: remoteModTime, RemoteID: "remote-id-notes",
 	}
 
 	store := newMockStore()
@@ -250,12 +250,12 @@ func TestPuller_ConflictRemoteNewer(t *testing.T) {
 		Items: []Change{
 			{
 				Path: "report.pdf",
-				Object: RemoteObject{
+				Object: &RemoteObject{
 					Path:    "report.pdf",
 					Size:    200,
 					MD5:     "new-remote-md5",
 					ModTime: remoteModTime,
-					ID:      "remote-id-report",
+					RemoteID:      "remote-id-report",
 				},
 			},
 		},
@@ -325,9 +325,9 @@ func TestPuller_PageTokenPersistedAcrossRestarts(t *testing.T) {
 		Items: []Change{
 			{
 				Path: "file1.txt",
-				Object: RemoteObject{
+				Object: &RemoteObject{
 					Path: "file1.txt", Size: 10, MD5: "m1",
-					ModTime: now, ID: "id-1",
+					ModTime: now, RemoteID: "id-1",
 				},
 			},
 		},
@@ -337,9 +337,9 @@ func TestPuller_PageTokenPersistedAcrossRestarts(t *testing.T) {
 		Items: []Change{
 			{
 				Path: "file2.txt",
-				Object: RemoteObject{
+				Object: &RemoteObject{
 					Path: "file2.txt", Size: 20, MD5: "m2",
-					ModTime: now, ID: "id-2",
+					ModTime: now, RemoteID: "id-2",
 				},
 			},
 		},
@@ -371,9 +371,9 @@ func TestPuller_PageTokenPersistedAcrossRestarts(t *testing.T) {
 		Items: []Change{
 			{
 				Path: "file2.txt",
-				Object: RemoteObject{
+				Object: &RemoteObject{
 					Path: "file2.txt", Size: 20, MD5: "m2",
-					ModTime: now, ID: "id-2",
+					ModTime: now, RemoteID: "id-2",
 				},
 			},
 		},
@@ -468,9 +468,9 @@ func TestPuller_DryRun(t *testing.T) {
 		Items: []Change{
 			{
 				Path: "secret.txt",
-				Object: RemoteObject{
+				Object: &RemoteObject{
 					Path: "secret.txt", Size: 99, MD5: "dry-md5",
-					ModTime: now, ID: "dry-id",
+					ModTime: now, RemoteID: "dry-id",
 				},
 			},
 		},
@@ -543,9 +543,9 @@ func TestPuller_LoopPrevention(t *testing.T) {
 		Items: []Change{
 			{
 				Path: "loop-test.txt",
-				Object: RemoteObject{
+				Object: &RemoteObject{
 					Path: "loop-test.txt", Size: 50, MD5: "loop-md5",
-					ModTime: remoteMtime, ID: "loop-id",
+					ModTime: remoteMtime, RemoteID: "loop-id",
 				},
 			},
 		},
@@ -592,9 +592,9 @@ func TestPuller_LoopPrevention(t *testing.T) {
 	// Simulate a second remote change where MD5 is the same (no real change).
 	ch := Change{
 		Path: "loop-test.txt",
-		Object: RemoteObject{
+		Object: &RemoteObject{
 			Path: "loop-test.txt", Size: 50, MD5: "loop-md5",
-			ModTime: remoteMtime, ID: "loop-id",
+			ModTime: remoteMtime, RemoteID: "loop-id",
 		},
 	}
 
@@ -609,9 +609,9 @@ func TestPuller_LoopPrevention(t *testing.T) {
 	// Now simulate a change with different MD5 but matching local mtime.
 	ch2 := Change{
 		Path: "loop-test.txt",
-		Object: RemoteObject{
+		Object: &RemoteObject{
 			Path: "loop-test.txt", Size: 55, MD5: "different-md5",
-			ModTime: remoteMtime.Add(time.Minute), ID: "loop-id",
+			ModTime: remoteMtime.Add(time.Minute), RemoteID: "loop-id",
 		},
 	}
 	// Update journal to reflect the actual local mtime.
@@ -771,15 +771,15 @@ func TestPuller_MultipleChanges(t *testing.T) {
 		Items: []Change{
 			{
 				Path:   "a.txt",
-				Object: RemoteObject{Path: "a.txt", Size: 10, MD5: "m1", ModTime: now, ID: "id-a"},
+				Object: &RemoteObject{Path: "a.txt", Size: 10, MD5: "m1", ModTime: now, RemoteID: "id-a"},
 			},
 			{
 				Path:   "b.txt",
-				Object: RemoteObject{Path: "b.txt", Size: 20, MD5: "m2", ModTime: now, ID: "id-b"},
+				Object: &RemoteObject{Path: "b.txt", Size: 20, MD5: "m2", ModTime: now, RemoteID: "id-b"},
 			},
 			{
 				Path:   "sub/c.txt",
-				Object: RemoteObject{Path: "sub/c.txt", Size: 30, MD5: "m3", ModTime: now, ID: "id-c"},
+				Object: &RemoteObject{Path: "sub/c.txt", Size: 30, MD5: "m3", ModTime: now, RemoteID: "id-c"},
 			},
 		},
 		NextPageToken: "tok-2",
@@ -931,9 +931,9 @@ func TestPuller_OldNCollision(t *testing.T) {
 		Items: []Change{
 			{
 				Path: "data.csv",
-				Object: RemoteObject{
+				Object: &RemoteObject{
 					Path: "data.csv", Size: 100, MD5: "new-md5",
-					ModTime: remoteModTime, ID: "id-data",
+					ModTime: remoteModTime, RemoteID: "id-data",
 				},
 			},
 		},
@@ -993,9 +993,9 @@ func TestPuller_DryRunConflict(t *testing.T) {
 		Items: []Change{
 			{
 				Path: "doc.txt",
-				Object: RemoteObject{
+				Object: &RemoteObject{
 					Path: "doc.txt", Size: 100, MD5: "new-md5",
-					ModTime: remoteModTime, ID: "id-doc",
+					ModTime: remoteModTime, RemoteID: "id-doc",
 				},
 			},
 		},
@@ -1058,9 +1058,9 @@ func TestPuller_FileDoesNotExistLocally(t *testing.T) {
 		Items: []Change{
 			{
 				Path: "gone-local.txt",
-				Object: RemoteObject{
+				Object: &RemoteObject{
 					Path: "gone-local.txt", Size: 30, MD5: "new-md5",
-					ModTime: now, ID: "id-gone",
+					ModTime: now, RemoteID: "id-gone",
 				},
 			},
 		},
