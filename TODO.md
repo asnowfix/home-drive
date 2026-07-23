@@ -21,12 +21,12 @@ Merge in dependency order:
 
 ## Interface alignment
 
-- [ ] Wire local interface copies in each package to canonical definitions during merge (each phase defined its own `RemoteFS`, `Publisher`, `Store` interfaces locally)
-- [ ] Add `List(ctx context.Context, dir string) ([]RemoteObject, error)` method to canonical `RemoteFS` interface in `internal/rcloneclient/` (required by bisync, Phase 7)
+- [x] Wire local interface copies in each package to canonical definitions during merge (each phase defined its own `RemoteFS`, `Publisher`, `Store` interfaces locally) — done in #51: `internal/rcloneclient.RemoteFS` and `internal/store.Store` are now the single canonical definitions, aliased (not duplicated) from `internal/syncer`; `cmd/homedrive`'s local `remoteFS` and the `rcloneSyncerAdapter`/`journalSyncerAdapter` translation layer were removed. `Publisher` stays a narrow, syncer/quota-local subset of `internal/mqtt.Publisher` by design (Go idiom: small consumer-defined interfaces over primitive types carry no drift risk) — see #51 PR description.
+- [x] Add `List(ctx context.Context, dir string) ([]RemoteObject, error)` method to canonical `RemoteFS` interface in `internal/rcloneclient/` (required by bisync, Phase 7) — done in #51, implemented on `RcloneFS`, `MemFS`, `FlakyFS`, `DryRunFS` with `TestXxx_List` coverage.
 
 ## CI fixes
 
-- [ ] Adjust rclone backend CI check — `crypt` is a transitive dependency of `drive`, so the `go tool nm` count will be >1; check should verify only `drive` is explicitly imported (noted in Phase 2, PR #7)
+- [x] Adjust rclone backend CI check — `crypt` is a transitive dependency of `drive`, so the `go tool nm` count will be >1; check should verify only `drive` is explicitly imported (noted in Phase 2, PR #7) — `.github/workflows/homedrive.yml` already checks source-level imports (`grep` for `"github.com/rclone/rclone/backend/`, excluding `drive` and `_test.go`) rather than binary symbol counts; confirmed correct in #51, and stale `go tool nm` guidance in `CLAUDE.md`, `homedrive/PLAN.md`, `homedrive/docs/dev-environment.md`, and the `homedrive-implementer`/`homedrive-rclone-import` skill docs was updated to match.
 
 ## Release
 
