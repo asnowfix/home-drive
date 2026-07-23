@@ -169,7 +169,8 @@ tagging a release.
 
 - [ ] Stop the service: `sudo systemctl stop homedrive@fix.service`
 - [ ] Start in dry-run mode:
-      `homedrive run --dry-run --config /etc/homedrive/config.yaml`
+      `homedrive run --dry-run` (defaults `--config` to
+      `~/.config/homedrive/config.yaml`)
 - [ ] Create a file:
       `echo "dry run" > /mnt/external/gdrive/test-validation/dry-test.txt`
 - [ ] Wait 5 seconds

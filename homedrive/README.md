@@ -82,14 +82,24 @@ scp dist/homedrive user@pi:/usr/local/bin/
 ### Run
 
 ```bash
-# Start the sync agent
-homedrive run --config /etc/homedrive/config.yaml
+# Create the per-user config first (see "Configuration" below)
+mkdir -p ~/.config/homedrive
+cp homedrive/linux/config.yaml ~/.config/homedrive/config.yaml
+$EDITOR ~/.config/homedrive/config.yaml
+
+# Start the sync agent -- `--config` is optional; it defaults to
+# ~/.config/homedrive/config.yaml (XDG per-user config dir)
+homedrive run
 
 # Dry-run mode (no remote changes, useful for verification)
-homedrive run --dry-run --config /etc/homedrive/config.yaml
+homedrive run --dry-run
 ```
 
 ### Systemd (production)
+
+`homedrive@<user>.service` refuses to start (via `ExecCondition`) until
+`/home/<user>/.config/homedrive/config.yaml` exists -- create it first (see
+"Run" above), as the target user, before enabling the unit.
 
 ```bash
 # Enable and start for a specific user
@@ -105,8 +115,14 @@ journalctl -u homedrive@fix.service -f
 homedrive uses two configuration layers:
 
 1. `/etc/default/homedrive` -- minimal environment variables for systemd
-   (config path, log level).
-2. `/etc/homedrive/config.yaml` -- full YAML configuration.
+   (log level, log destination).
+2. `~/.config/homedrive/config.yaml` -- full YAML configuration, per-user
+   (XDG config dir). This is the file the `homedrive@<user>.service`
+   systemd instance requires before it will start (`ExecCondition`), and
+   the path `homedrive run` defaults `--config` to when the flag is
+   omitted. It is *not* set via `/etc/default/homedrive`; the binary
+   resolves it itself via `os.UserConfigDir()` at startup (see
+   [PLAN.md §4.2](PLAN.md#4-configuration)).
 
 ### Example `config.yaml`
 
