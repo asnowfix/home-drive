@@ -55,6 +55,10 @@ state:
 http:
   listen: 127.0.0.1:6090
   metrics: true
+  # auth_token: ""
+  # Required (server fails closed) if listen is ever bound off loopback.
+  # `homedrive ctl` reads this same value and sends it automatically as
+  # "Authorization: Bearer <auth_token>".
 
 mqtt:
   enabled: true

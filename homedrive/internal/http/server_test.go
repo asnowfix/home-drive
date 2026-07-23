@@ -19,7 +19,7 @@ type mockPausable struct {
 }
 
 func (m *mockPausable) Pause(_ context.Context) error  { m.pauseCalled = true; return m.pauseErr }
-func (m *mockPausable) Resume(_ context.Context) error  { m.resumeCalled = true; return m.resumeErr }
+func (m *mockPausable) Resume(_ context.Context) error { m.resumeCalled = true; return m.resumeErr }
 
 type mockResyncable struct {
 	called bool
@@ -63,7 +63,10 @@ func newTestServer(t *testing.T, deps Deps) (*Server, *Metrics) {
 		ListenAddr:    "127.0.0.1:0",
 		EnableMetrics: true,
 	}
-	srv := NewServer(cfg, deps, m, log)
+	srv, err := NewServer(cfg, deps, m, log)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
 	return srv, m
 }
 

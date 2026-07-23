@@ -156,7 +156,10 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 	a.buildPushSyncer(pub, auditAdapter)
 	a.buildPuller(pub, auditAdapter)
 	a.buildBisync(pub, rawAudit)
-	a.buildHTTPServer()
+	if err := a.buildHTTPServer(); err != nil {
+		a.closeResources()
+		return nil, err
+	}
 
 	return a, nil
 }
@@ -308,12 +311,15 @@ func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer) {
 	a.bisync = b
 }
 
-// buildHTTPServer constructs the HTTP control endpoint per cfg.HTTP.
-func (a *Agent) buildHTTPServer() {
-	a.httpSrv = httpctl.NewServer(
+// buildHTTPServer constructs the HTTP control endpoint per cfg.HTTP. It
+// fails if cfg.HTTP.Listen is bound to a non-loopback address without
+// cfg.HTTP.AuthToken set (see httpctl.ErrAuthTokenRequired).
+func (a *Agent) buildHTTPServer() error {
+	srv, err := httpctl.NewServer(
 		httpctl.ServerConfig{
 			ListenAddr:    a.cfg.HTTP.Listen,
 			EnableMetrics: a.cfg.HTTP.Metrics,
+			AuthToken:     a.cfg.HTTP.AuthToken,
 		},
 		httpctl.Deps{
 			Pausable:       a,
@@ -325,6 +331,11 @@ func (a *Agent) buildHTTPServer() {
 		nil,
 		a.log,
 	)
+	if err != nil {
+		return fmt.Errorf("build http server: %w", err)
+	}
+	a.httpSrv = srv
+	return nil
 }
 
 // closeResources releases everything opened during construction. Used when

@@ -2,13 +2,22 @@ package http
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
+
+// ErrAuthTokenRequired is returned by NewServer when ListenAddr is bound to
+// a non-loopback address but no AuthToken is configured. Running an
+// unauthenticated control endpoint reachable off-host is the worse failure
+// mode, so the server fails closed instead of starting unauthenticated.
+var ErrAuthTokenRequired = errors.New("http: auth_token is required when listen is bound to a non-loopback address")
 
 // ServerConfig holds configuration for the HTTP control endpoint.
 type ServerConfig struct {
@@ -16,6 +25,12 @@ type ServerConfig struct {
 	ListenAddr string
 	// EnableMetrics controls whether GET /metrics is active.
 	EnableMetrics bool
+	// AuthToken, if set, is required as a Bearer token on every request
+	// regardless of bind address. If unset and ListenAddr is loopback,
+	// requests are unauthenticated (today's zero-config behavior). If
+	// unset and ListenAddr is not loopback, NewServer returns
+	// ErrAuthTokenRequired.
+	AuthToken string
 }
 
 // Deps groups the component interfaces the server controls.
@@ -37,13 +52,18 @@ type Server struct {
 }
 
 // NewServer creates a Server with the given config, dependencies, and logger.
-// If cfg.ListenAddr is empty, it defaults to "127.0.0.1:6090".
-func NewServer(cfg ServerConfig, deps Deps, metrics *Metrics, log *slog.Logger) *Server {
+// If cfg.ListenAddr is empty, it defaults to "127.0.0.1:6090". Returns
+// ErrAuthTokenRequired if cfg.ListenAddr is non-loopback and cfg.AuthToken
+// is empty (fail closed; see ErrAuthTokenRequired).
+func NewServer(cfg ServerConfig, deps Deps, metrics *Metrics, log *slog.Logger) (*Server, error) {
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = "127.0.0.1:6090"
 	}
 	if metrics == nil {
 		metrics = NewMetrics()
+	}
+	if cfg.AuthToken == "" && !isLoopbackAddr(cfg.ListenAddr) {
+		return nil, fmt.Errorf("%w (listen=%q)", ErrAuthTokenRequired, cfg.ListenAddr)
 	}
 
 	s := &Server{
@@ -57,7 +77,29 @@ func NewServer(cfg ServerConfig, deps Deps, metrics *Metrics, log *slog.Logger) 
 		Handler:           s.routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	return s
+	return s, nil
+}
+
+// isLoopbackAddr reports whether addr (a "host:port" listen address, a bare
+// host, or "" for empty host meaning all interfaces) resolves to a loopback
+// interface. A missing/empty host (e.g. ":6090") binds every interface and
+// is therefore treated as non-loopback.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
 }
 
 // ListenAndServe starts the HTTP server. It blocks until the server is shut
@@ -114,7 +156,38 @@ func (s *Server) routes() http.Handler {
 		mux.HandleFunc("/metrics", s.methodOnly(http.MethodGet, s.handleMetrics))
 	}
 
-	return mux
+	return s.withAuth(mux)
+}
+
+// withAuth wraps next with Bearer token authentication. When no AuthToken
+// is configured, requests pass through unauthenticated (NewServer already
+// guarantees this only happens on a loopback ListenAddr). When an
+// AuthToken is configured, every request -- regardless of bind address --
+// must carry a matching "Authorization: Bearer <token>" header.
+func (s *Server) withAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.AuthToken == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !hasValidBearerToken(r.Header.Get("Authorization"), s.cfg.AuthToken) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="homedrive"`)
+			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// hasValidBearerToken reports whether header is a well-formed
+// "Bearer <token>" value matching want, compared in constant time.
+func hasValidBearerToken(header, want string) bool {
+	const prefix = "Bearer "
+	if !strings.HasPrefix(header, prefix) {
+		return false
+	}
+	got := strings.TrimPrefix(header, prefix)
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 // methodOnly wraps a handler to enforce a single HTTP method, returning 405

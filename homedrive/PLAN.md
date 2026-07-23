@@ -188,6 +188,7 @@ state:
 http:
   listen: 127.0.0.1:6090
   metrics: true
+  auth_token: ""            # required (fail-closed) if listen is non-loopback
 
 mqtt:
   enabled: true
@@ -591,8 +592,20 @@ MQTT event. CLI command `homedrive ctl conflict resolve <path>
 
 ## 12. HTTP control endpoint
 
-Listens on `127.0.0.1:6090` by default (loopback, no auth required). If
-exposed to the network, a `Bearer` token must be set in config.
+Listens on `127.0.0.1:6090` by default (loopback, no auth required — this
+zero-config default is unchanged). `http.auth_token` (`internal/config`
+`HTTPConfig.AuthToken`) configures a Bearer token that, when set, is
+required on every request to every route below, regardless of bind
+address, compared in constant time.
+
+**Enforced (not just documented) since issue #53**: `internal/http.NewServer`
+fails closed — it refuses to construct the server (returns
+`ErrAuthTokenRequired`) if `http.listen` is bound to a non-loopback address
+(anything other than `127.0.0.1`, `::1`, or `localhost`) while
+`http.auth_token` is empty. Running an unauthenticated control endpoint
+reachable off-host was judged the worse failure mode versus refusing to
+start, so this is fail-closed rather than a warning. Loopback-only,
+no-token setups (today's default) are unaffected.
 
 | Route | Method | Description |
 |---|---|---|
@@ -605,7 +618,9 @@ exposed to the network, a `Bearer` token must be set in config.
 | `/metrics` | GET | Prometheus exposition (reuse `myhome` stack) |
 
 CLI sub-commands (`homedrive ctl status`, `homedrive ctl pause`, etc.) call
-this endpoint over HTTP.
+this endpoint over HTTP, reading `http.listen` and `http.auth_token` from
+the same config file (`--config`) and sending
+`Authorization: Bearer <token>` automatically when a token is configured.
 
 Port 6090 is free per the documented port allocation in the repo README.
 
