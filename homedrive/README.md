@@ -43,7 +43,7 @@ Key properties:
 | HTTP control | `/status`, `/pause`, `/resume`, `/resync`, `/reload`, `/healthz`, `/metrics` |
 | MQTT publishing | HA Discovery, state sensors, event stream, LWT |
 | Dry-run mode | `--dry-run` flag logs intended actions without remote writes |
-| Exclusion filters | Glob patterns for `.git`, editor temps, `node_modules`, etc. |
+| Exclusion filters | Glob patterns for `.git`, editor temps, `node_modules`, etc. (exclude-only, no includes -- see [migration doc](docs/migrating-rclone-filters.md)) |
 | Systemd packaging | Templated per-user unit, hardened, with logrotate and sysctl tuning |
 
 ## Quick start
@@ -288,6 +288,7 @@ development setup guide.
 | [docs/dev-environment.md](docs/dev-environment.md) | macOS + OrbStack setup, cross-compilation, VS Code |
 | [docs/home-assistant.md](docs/home-assistant.md) | MQTT entities, topics, and HA automations |
 | [docs/manual-validation.md](docs/manual-validation.md) | End-to-end test checklist for Pi validation |
+| [docs/migrating-rclone-filters.md](docs/migrating-rclone-filters.md) | Translating rclone `--filter`/`--exclude` rules to `watcher.exclude`; no include/allow-list support |
 | [docs/nas-install-log.md](docs/nas-install-log.md) | Log of the actual install on `gruissan` (2026-05-31) |
 
 ## License

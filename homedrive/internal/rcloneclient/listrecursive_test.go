@@ -166,3 +166,50 @@ func TestListChanges_DispatchesOnTokenShape(t *testing.T) {
 		})
 	}
 }
+
+// TestListChanges_RemoteOnlyExcludedFileNotPulled exercises the exact
+// public entrypoint syncer.Puller calls in production (see
+// rclonefs.go:ListChanges) with a file that exists only on the remote
+// (".git/HEAD" in the fake tree below has no local counterpart at all) and
+// matches a watcher.exclude pattern. It must never appear in the returned
+// Items -- if it did, the Puller would download it to the local root on
+// the next poll, which is exactly what issue #54's filter-parity
+// requirement forbids (PLAN.md §7, §10; see also
+// homedrive/docs/migrating-rclone-filters.md).
+func TestListChanges_RemoteOnlyExcludedFileNotPulled(t *testing.T) {
+	r := &RcloneFS{
+		log:       slog.Default(),
+		pathCache: newIDPathCache(),
+		exclude:   []string{"**/.git/**"},
+		fsObj:     newTestFullWalkFS(),
+	}
+
+	// A prefixed token (already minted by a prior GetStartPageToken call)
+	// triggers a full walk without needing a real OAuth-backed Drive
+	// client, the same path a brand-new agent takes on first sync per
+	// PLAN.md §7.1.
+	changes, err := r.ListChanges(context.Background(), initialSyncPrefix+"resume-tok")
+	if err != nil {
+		t.Fatalf("ListChanges: %v", err)
+	}
+
+	for _, ch := range changes.Items {
+		if strings.HasPrefix(ch.Path, ".git") {
+			t.Fatalf("excluded remote-only path %q was returned by ListChanges and would be pulled", ch.Path)
+		}
+	}
+
+	// Non-excluded remote-only files must still come through.
+	var sawTop, sawChild bool
+	for _, ch := range changes.Items {
+		switch ch.Path {
+		case "top.txt":
+			sawTop = true
+		case "sub/child.txt":
+			sawChild = true
+		}
+	}
+	if !sawTop || !sawChild {
+		t.Errorf("expected non-excluded files to be pulled, got items %+v", changes.Items)
+	}
+}

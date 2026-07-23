@@ -2,14 +2,16 @@ package watcher
 
 import (
 	"path/filepath"
-	"strings"
 
-	"github.com/bmatcuk/doublestar/v4"
+	"github.com/asnowfix/home-drive/homedrive/internal/pathfilter"
 )
 
 // filter evaluates doublestar exclusion patterns against paths relative to
 // a root directory. Patterns are checked at watch-add time and at event
-// emission time (defense in depth).
+// emission time (defense in depth). The actual glob matching is delegated
+// to internal/pathfilter so push-side (here) and pull-side
+// (internal/rcloneclient) exclusion behave identically for the same
+// watcher.exclude patterns -- see homedrive/docs/migrating-rclone-filters.md.
 type filter struct {
 	root     string
 	patterns []string
@@ -36,23 +38,5 @@ func (f *filter) excluded(absPath string) bool {
 	// Normalize to forward slashes for doublestar matching.
 	rel = filepath.ToSlash(rel)
 
-	for _, pattern := range f.patterns {
-		// Match against the relative path.
-		if matched, _ := doublestar.Match(pattern, rel); matched {
-			return true
-		}
-		// Also try matching with a trailing slash for directory patterns.
-		if matched, _ := doublestar.Match(pattern, rel+"/"); matched {
-			return true
-		}
-		// For patterns like "**/.git/**", check if the path is a prefix
-		// that would match (e.g. ".git" itself matches "**/.git/**").
-		if strings.HasSuffix(pattern, "/**") {
-			dirPattern := strings.TrimSuffix(pattern, "/**")
-			if matched, _ := doublestar.Match(dirPattern, rel); matched {
-				return true
-			}
-		}
-	}
-	return false
+	return pathfilter.Excluded(f.patterns, rel)
 }
