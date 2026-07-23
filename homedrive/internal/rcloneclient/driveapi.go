@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/asnowfix/home-drive/homedrive/internal/pathfilter"
 	"github.com/rclone/rclone/fs/config"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -221,9 +222,11 @@ func (r *RcloneFS) resolveChangePath(f *drivev3.File) (string, bool) {
 }
 
 // excluded reports whether relPath matches any configured watcher.exclude
-// pattern (see matchesExclude for the shared matching logic).
+// pattern. Matching is delegated to internal/pathfilter, the single matcher
+// shared with the push-side watcher (see internal/watcher/filter.go and
+// homedrive/docs/migrating-rclone-filters.md).
 func (r *RcloneFS) excluded(relPath string) bool {
-	return matchesExclude(r.exclude, relPath)
+	return pathfilter.Excluded(r.exclude, relPath)
 }
 
 // parseDriveTime parses a Drive API RFC3339 modifiedTime, returning the

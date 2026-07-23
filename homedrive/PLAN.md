@@ -879,14 +879,58 @@ a no-op every 30s after its first sync (found by the #47 umbrella audit).
   existing `errors.Is(err, ErrGone)` handling (token reset + MQTT warning,
   unchanged from Phase 6) fires against a real Drive response.
 - [x] `watcher.exclude` doublestar patterns are now applied on the pull
-  side too, via a shared `matchesExclude` helper in
-  `internal/rcloneclient/filter.go` (kept as one function so issue #54's
-  push/pull filter-parity work can extend it without duplicating).
+  side too, via a `matchesExclude` helper in `internal/rcloneclient/filter.go`
+  (kept as one function so issue #54's push/pull filter-parity work can
+  extend it without duplicating). Superseded by Phase 16: that helper and
+  its push-side twin in `internal/watcher/filter.go` turned out to be two
+  independent copies of the same logic, consolidated into
+  `internal/pathfilter`.
 - [x] Tests use `httptest.Server` + `option.WithEndpoint` to fake the Drive
   REST API (never the real Google Drive API), plus hand-rolled
   `rclonefs.Fs`/`Object`/`Directory` fakes for the full-walk path.
   `internal/rcloneclient` coverage: 79.3%.
 - Issue: `[homedrive] Implement real Google Drive Changes API pull` (#50).
+
+### Phase 16 — Filter parity: consolidate exclude matcher + rclone migration doc (issue #54) [DONE]
+
+Umbrella audit #47 noted that `watcher.exclude` was originally applied only
+on the push side. Phase 15 (#50) already closed that functional gap by
+adding pull-side filtering, but code inspection for #54 found the fix had
+been done by copy-pasting the same three-tier doublestar matching logic
+into `internal/rcloneclient/filter.go` (`matchesExclude`) instead of
+sharing `internal/watcher/filter.go`'s existing `filter.excluded` --
+two independent copies of one algorithm that could silently drift apart.
+
+- [x] New `internal/pathfilter` package: one exported `Excluded(patterns
+  []string, relPath string) bool`, preserving the exact three-tier
+  semantics (direct match, trailing-slash directory match, `/**`-suffix
+  bare-directory match) both prior copies implemented. `internal/watcher`
+  and `internal/rcloneclient` are siblings under `internal/`, so a third,
+  lower-level package avoids a circular import between them.
+- [x] `internal/watcher/filter.go`'s `filter.excluded` now computes the
+  root-relative path (its own responsibility) and delegates matching to
+  `pathfilter.Excluded`; `internal/rcloneclient/filter.go` and its
+  `matchesExclude` wrapper were deleted outright, with
+  `RcloneFS.excluded` calling `pathfilter.Excluded` directly. No behavior
+  change: existing tests in both packages pass unmodified except for the
+  import/call-site update.
+- [x] Verified (not assumed) that pull-side exclusion already prevented a
+  remote-only excluded file from being pulled, via the pre-existing
+  `TestFullWalkThenResume_ExcludesPatterns` and
+  `TestPollChanges_ExcludedPathSkipped`; added
+  `TestListChanges_RemoteOnlyExcludedFileNotPulled` to exercise the exact
+  public `RcloneFS.ListChanges` entrypoint `syncer.Puller` calls in
+  production, confirming an excluded remote-only file never appears in
+  the `Changes` handed back (and therefore is never downloaded).
+- [x] `homedrive/docs/migrating-rclone-filters.md`: exclude-only model,
+  a translation table for common rclone `--filter`/`--exclude` patterns,
+  and an explicit callout that homedrive has **no include/allow-list
+  filtering** -- flagged as a known gap, not built here. Linked from
+  `homedrive/README.md`'s features table and documentation index.
+- [x] Coverage on touched packages: `internal/pathfilter` 84.6%,
+  `internal/watcher` 86.7%, `internal/rcloneclient` 79.3%.
+- Issue: `[homedrive] Filter parity: honor excludes on pull path + rclone
+  migration doc` (#54).
 
 ---
 
