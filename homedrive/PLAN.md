@@ -38,6 +38,7 @@ Docs/Sheets/Slides binary export (skipped + warned), cross-device peer sync
 | inotify library | `fsnotify/fsnotify` (no spike, well-known patterns) |
 | Pull strategy | Drive Changes API every 30s + hourly bisync safety net |
 | Config format | YAML rich + `/etc/default/homedrive` minimal for systemd |
+| Config file location | Per-user XDG path `~/.config/homedrive/config.yaml`, resolved via `os.UserConfigDir()` at runtime (`defaultConfigPath()` in `main.go`); falls back to `/etc/homedrive/config.yaml` only if `UserConfigDir()` itself errors. Matches the templated `homedrive@%i.service` per-user model; the systemd unit's `ExecCondition` gates startup on this path existing. |
 | HTTP control port | `6090` (loopback) |
 | Dry-run | Supported from Phase 0 (`--dry-run` flag, no remote writes) |
 | Google native files | Skip + log warning, out of scope v0.1 |
@@ -125,8 +126,9 @@ Add `./homedrive` to `go.work`. Add a `homedrive` build entry in
 
 ```sh
 # Variables consumed by systemd (homedrive@.service).
-# Rich config lives in HOMEDRIVE_CONFIG (YAML).
-HOMEDRIVE_CONFIG=/etc/homedrive/config.yaml
+# Rich config lives at the per-user path below (§4.2); no path variable
+# is needed here since the binary resolves it itself via
+# os.UserConfigDir().
 HOMEDRIVE_LOG_LEVEL=info
 HOMEDRIVE_LOG=stderr
 ```
@@ -134,7 +136,20 @@ HOMEDRIVE_LOG=stderr
 Optional per-user override file `/etc/default/homedrive.<user>` (loaded with
 `-` prefix in `EnvironmentFile=` so it's optional).
 
-### 4.2 `/etc/homedrive/config.yaml` (rich config)
+### 4.2 `~/.config/homedrive/config.yaml` (rich config)
+
+Canonical location: the per-user XDG config directory, i.e.
+`~/.config/homedrive/config.yaml` for the user the `homedrive@<user>.service`
+instance runs as (e.g. `/home/fix/.config/homedrive/config.yaml` for
+`homedrive@fix.service`). `defaultConfigPath()` in `cmd/homedrive/main.go`
+resolves this via `os.UserConfigDir()` at runtime -- it is **not** passed on
+the command line by the systemd unit, avoiding the `%h` specifier (which
+resolves to `/root` in system units regardless of `User=`). If
+`os.UserConfigDir()` itself fails (unset `$HOME`, no `os/user` entry),
+`defaultConfigPath()` falls back to `/etc/homedrive/config.yaml`, but this
+fallback is not part of the supported install path -- the templated
+`homedrive@%i.service` unit's `ExecCondition` only checks the per-user path.
+Override either default with `homedrive run --config <path>`.
 
 ```yaml
 local_root: /mnt/external/gdrive
@@ -864,30 +879,33 @@ a no-op every 30s after its first sync (found by the #47 umbrella audit).
 
 ### 15.1 `linux/homedrive@.service`
 
+Source of truth is the file at `homedrive/linux/homedrive@.service`; kept in
+sync here for reference:
+
 ```ini
 [Unit]
 Description=homedrive sync agent for %i
-Documentation=https://github.com/asnowfix/home-automation/blob/main/homedrive/README.md
+Documentation=https://github.com/asnowfix/home-drive/blob/main/homedrive/README.md
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
+Type=simple
 User=%i
 Group=%i
 EnvironmentFile=/etc/default/homedrive
 EnvironmentFile=-/etc/default/homedrive.%i
-ExecStart=/usr/bin/homedrive run --config ${HOMEDRIVE_CONFIG}
+ExecCondition=/bin/sh -c 'test -f $(getent passwd %i | cut -d: -f6)/.config/homedrive/config.yaml'
+ExecStart=/usr/bin/homedrive run
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=10
-WatchdogSec=60
+StateDirectory=homedrive/%i
+LogsDirectory=homedrive/%i
 
 # hardening
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/var/lib/homedrive /var/log/homedrive
-ReadOnlyPaths=/etc/homedrive
 PrivateTmp=true
 NoNewPrivileges=true
 ProtectKernelTunables=true
@@ -899,6 +917,13 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 ```
+
+`ExecStart` intentionally omits `--config`: the binary resolves the per-user
+config path itself via `defaultConfigPath()` (§4.2), which avoids the `%h`
+systemd specifier issue (it resolves to `/root` in system units regardless
+of `User=`). `ExecCondition` gates startup on that same path so the unit
+fails fast with a clear reason if the user hasn't created their config yet,
+instead of crash-looping.
 
 ### 15.2 `linux/99-homedrive-inotify.conf`
 
@@ -927,15 +952,20 @@ fs.inotify.max_user_instances=512
 
 ### 15.4 `linux/postinst.sh`
 
+No `/etc/homedrive` directory is created -- config is per-user and created by
+each user themselves (or by the operator on their behalf) at
+`~/.config/homedrive/config.yaml`; state/log directories are created by
+systemd itself via `StateDirectory=`/`LogsDirectory=` in the unit (§15.1).
+
 ```sh
 #!/bin/sh
 set -e
-install -d -m 0755 -o root -g root /etc/homedrive
-install -d -m 0750 -o root -g root /var/lib/homedrive
-install -d -m 0750 -o root -g root /var/log/homedrive
-install -m 0644 99-homedrive-inotify.conf /etc/sysctl.d/
-install -m 0644 homedrive.logrotate /etc/logrotate.d/homedrive
+# Per-user config lives at ~/.config/homedrive/config.yaml.
+# Per-user state/log dirs are created by systemd at service start
+# via StateDirectory=homedrive/%i and LogsDirectory=homedrive/%i.
+# Apply inotify sysctl (file already placed by the package).
 sysctl --system
+systemctl daemon-reload
 ```
 
 ---

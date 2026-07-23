@@ -4,6 +4,17 @@ Validated on: 2026-05-31
 Target: Debian 12 (bookworm) aarch64 — Raspberry Pi (`gruissan.local`, `192.168.1.2`)  
 User instance: `homedrive@fix.service`
 
+> **Historical note:** this log is an immutable record of a validation run
+> performed on 2026-05-31. Two days later (commit `70d2482`,
+> 2026-06-02) the config path moved from the shared `/etc/homedrive/config.yaml`
+> shown below to the per-user XDG path `~/.config/homedrive/config.yaml`
+> (e.g. `/home/fix/.config/homedrive/config.yaml`), which is what
+> `defaultConfigPath()` and the `homedrive@.service` `ExecCondition` actually
+> use today -- see [PLAN.md §4.2](../PLAN.md#4-configuration) and
+> [README.md](../README.md#configuration). The transcript below is left
+> as-recorded rather than edited to match; do not use the
+> `/etc/homedrive/config.yaml` path from a fresh install.
+
 ---
 
 ## Prerequisites

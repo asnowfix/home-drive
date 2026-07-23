@@ -1,4 +1,8 @@
-# /etc/homedrive/config.yaml — default configuration.
+# ~/.config/homedrive/config.yaml — default configuration.
+# Copy to the per-user XDG config path for the account the
+# homedrive@<user>.service instance runs as, e.g. for user "fix":
+#   mkdir -p /home/fix/.config/homedrive
+#   cp config.yaml /home/fix/.config/homedrive/config.yaml
 # Adjust local_root, remote, and rclone_config before starting the service.
 # Enable: systemctl enable --now homedrive@fix.service
 
