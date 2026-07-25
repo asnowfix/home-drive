@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 )
 
 // Config is the root homedrive configuration.
@@ -55,8 +57,38 @@ type PullConfig struct {
 
 // ConflictCfg configures conflict resolution.
 type ConflictCfg struct {
-	Policy          string `yaml:"policy"`
-	OldSuffixFormat string `yaml:"old_suffix_format"`
+	Policy          string       `yaml:"policy"`
+	OldSuffixFormat string       `yaml:"old_suffix_format"`
+	Retention       RetentionCfg `yaml:"retention"`
+
+	// RepairChains controls whether the one-time repair pass (PLAN.md
+	// §11.5) collapses any pre-existing nested .old.<N> chains on the
+	// first bisync pass after upgrade. nil means enabled (the default);
+	// a pointer is used specifically so "omitted" (enabled) can be told
+	// apart from an explicit "repair_chains: false" (disabled).
+	RepairChains *bool `yaml:"repair_chains"`
+}
+
+// RetentionCfg bounds how many .old.<N> conflict losers are kept. See
+// PLAN.md §11.5.
+type RetentionCfg struct {
+	// MaxPerFile caps how many .old.<N> siblings are kept per base file;
+	// the oldest (by LastSyncedAt) beyond this count are pruned. Defaults
+	// to 3 when the whole retention: block is omitted; an explicit
+	// non-positive value is clamped up to 1 rather than treated as
+	// "unlimited" (see Config.applyDefaults).
+	MaxPerFile int `yaml:"max_per_file"`
+
+	// MaxAge expires losers older than this regardless of MaxPerFile.
+	// Zero (the default) means never expire by age -- age-based deletion
+	// can remove a user's only surviving copy of a genuine edit purely
+	// because time passed, so it is opt-in.
+	MaxAge Duration `yaml:"max_age"`
+
+	// SweepInterval controls how often the periodic full-journal sweep
+	// (piggybacked on the bisync tick) runs. Defaults to 24h when the
+	// whole retention: block is omitted.
+	SweepInterval Duration `yaml:"sweep_interval"`
 }
 
 // StateConfig configures BoltDB and audit log paths.
@@ -114,7 +146,17 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-// Load reads and parses the YAML config file at path.
+// defaultMaxPerFile and defaultSweepInterval are applied by applyDefaults
+// when the whole conflict.retention: block is omitted from YAML. See
+// PLAN.md §11.5.
+const (
+	defaultMaxPerFile    = 3
+	defaultSweepInterval = 24 * time.Hour
+)
+
+// Load reads and parses the YAML config file at path, validates
+// conflict.old_suffix_format, and applies defaults for any omitted
+// fields covered by applyDefaults.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -124,5 +166,40 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("config: parse %q: %w", path, err)
 	}
+	if _, err := oldsuffix.New(cfg.Conflict.OldSuffixFormat); err != nil {
+		return nil, fmt.Errorf("config: conflict.old_suffix_format: %w", err)
+	}
+	cfg.applyDefaults()
 	return &cfg, nil
+}
+
+// applyDefaults fills in zero-valued fields of Config with their
+// documented defaults. Currently scoped to ConflictCfg.Retention and
+// ConflictCfg.RepairChains -- the rest of Config has always relied on
+// each consumer (agent.go, syncer constructors) applying its own
+// zero-value fallback, and widening applyDefaults to cover those too is
+// out of scope for this change.
+//
+// RetentionCfg is a plain value struct (per PLAN.md §11.5), so YAML
+// gives no way to distinguish "conflict.retention: was omitted
+// entirely" from "conflict.retention: was present with every field left
+// at its zero value" -- both unmarshal identically. This method treats
+// them the same: if the whole block is the zero value, the documented
+// defaults (max_per_file: 3, sweep_interval: 24h) are applied. If the
+// block is only partially configured, an explicit non-positive
+// max_per_file is clamped up to 1 rather than silently becoming
+// "unlimited" (see PLAN.md §11.5); every other field is left as given,
+// including an explicit sweep_interval: 0s (periodic sweep disabled).
+func (c *Config) applyDefaults() {
+	if c.Conflict.Retention == (RetentionCfg{}) {
+		c.Conflict.Retention.MaxPerFile = defaultMaxPerFile
+		c.Conflict.Retention.SweepInterval = Duration{Duration: defaultSweepInterval}
+	} else if c.Conflict.Retention.MaxPerFile <= 0 {
+		c.Conflict.Retention.MaxPerFile = 1
+	}
+
+	if c.Conflict.RepairChains == nil {
+		enabled := true
+		c.Conflict.RepairChains = &enabled
+	}
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/asnowfix/home-drive/homedrive/internal/config"
 	"github.com/asnowfix/home-drive/homedrive/internal/mqtt"
+	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 	"github.com/asnowfix/home-drive/homedrive/internal/store"
 	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
@@ -38,6 +39,12 @@ type Agent struct {
 
 	journal   *store.Journal
 	auditFile *os.File // nil if audit logging is disabled
+
+	// oldSuffixMatcher is compiled once from cfg.Conflict.OldSuffixFormat
+	// and shared (same pointer) across every component that names or
+	// parses conflict-loser paths, so their collapsing decisions
+	// (oldsuffix.NextOldN) always agree. See PLAN.md §11.2/§11.5.
+	oldSuffixMatcher *oldsuffix.Matcher
 
 	rfs rcloneclient.RemoteFS
 
@@ -133,19 +140,30 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 		return nil, err
 	}
 
+	// config.Load already validated cfg.Conflict.OldSuffixFormat, so this
+	// cannot actually fail here; treat a failure as an internal
+	// invariant violation rather than silently falling back.
+	matcher, err := oldsuffix.New(cfg.Conflict.OldSuffixFormat)
+	if err != nil {
+		_ = journal.Close()
+		closeAuditFile(auditFile, log)
+		return nil, fmt.Errorf("compile old-suffix matcher: %w", err)
+	}
+
 	a := &Agent{
-		cfg:         cfg,
-		configPath:  opts.ConfigPath,
-		version:     opts.Version,
-		log:         log,
-		logLevel:    opts.LogLevel,
-		journal:     journal,
-		auditFile:   auditFile,
-		rfs:         rfs,
-		mqttReal:    mqttReal,
-		bisyncMu:    &sync.RWMutex{},
-		pushEvents:  make(chan syncer.Event, cfg.Push.Workers*4+4),
-		pushRenames: make(chan syncer.DirRename, cfg.Push.Workers*4+4),
+		cfg:              cfg,
+		configPath:       opts.ConfigPath,
+		version:          opts.Version,
+		log:              log,
+		logLevel:         opts.LogLevel,
+		journal:          journal,
+		auditFile:        auditFile,
+		oldSuffixMatcher: matcher,
+		rfs:              rfs,
+		mqttReal:         mqttReal,
+		bisyncMu:         &sync.RWMutex{},
+		pushEvents:       make(chan syncer.Event, cfg.Push.Workers*4+4),
+		pushRenames:      make(chan syncer.DirRename, cfg.Push.Workers*4+4),
 	}
 	a.reloadedDryRun.Store(cfg.DryRun)
 
@@ -255,10 +273,12 @@ func (a *Agent) buildPushSyncer(pub syncer.Publisher, audit syncer.AuditLogger) 
 		DryRun:    a.cfg.DryRun,
 		LocalRoot: a.cfg.LocalRoot,
 	}
+	js := store.NewJournalStore(a.journal, a.log)
+	js.Matcher = a.oldSuffixMatcher
 	a.pushSyncer = syncer.New(
 		pushCfg,
 		a.rfs,
-		store.NewJournalStore(a.journal, a.log),
+		js,
 		audit,
 		pub,
 		a.log,
@@ -272,15 +292,18 @@ func (a *Agent) buildPuller(pub syncer.Publisher, audit syncer.AuditLogger) {
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
+	js := store.NewJournalStore(a.journal, a.log)
+	js.Matcher = a.oldSuffixMatcher
 	a.puller = syncer.NewPuller(
 		syncer.PullerConfig{
 			Interval:       interval,
 			LocalRoot:      a.cfg.LocalRoot,
 			ConflictPolicy: syncer.ConflictPolicy(a.cfg.Conflict.Policy),
+			Matcher:        a.oldSuffixMatcher,
 			DryRun:         a.cfg.DryRun,
 		},
 		a.rfs,
-		store.NewJournalStore(a.journal, a.log),
+		js,
 		audit,
 		pub,
 		a.log,
@@ -300,6 +323,7 @@ func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer) {
 			Interval:  interval,
 			LocalRoot: a.cfg.LocalRoot,
 			DryRun:    a.cfg.DryRun,
+			Matcher:   a.oldSuffixMatcher,
 		},
 		Remote:  a.rfs,
 		Journal: &bisyncJournalAdapter{j: a.journal},
