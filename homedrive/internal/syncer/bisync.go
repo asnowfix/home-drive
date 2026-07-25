@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 )
 
 // Bisync is the periodic safety-net syncer that performs a full directory
@@ -66,11 +68,15 @@ func NewBisync(opts BisyncOpts) (*Bisync, chan<- struct{}) {
 	if mu == nil {
 		mu = &sync.RWMutex{}
 	}
+	cfg := opts.Config
+	if cfg.Matcher == nil {
+		cfg.Matcher, _ = oldsuffix.New("") // never errors for the empty/default format
+	}
 
 	forceCh := make(chan struct{}, 1)
 
 	b := &Bisync{
-		cfg:     opts.Config,
+		cfg:     cfg,
 		remote:  opts.Remote,
 		journal: opts.Journal,
 		mqtt:    opts.MQTT,

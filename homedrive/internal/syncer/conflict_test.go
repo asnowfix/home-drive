@@ -7,7 +7,20 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 )
+
+// testMatcher returns the default ".old.%d" matcher for use in
+// conflictDeps in tests that do not exercise a custom format.
+func testMatcher(t *testing.T) *oldsuffix.Matcher {
+	t.Helper()
+	m, err := oldsuffix.New("")
+	if err != nil {
+		t.Fatalf("oldsuffix.New: %v", err)
+	}
+	return m
+}
 
 func TestResolveConflict_LocalNewer(t *testing.T) {
 	// When local mtime > remote mtime, local wins: remote is moved to .old.1
@@ -36,11 +49,17 @@ func TestResolveConflict_LocalNewer(t *testing.T) {
 	}
 	journal := JournalEntry{Path: "file.txt"}
 
-	result, err := resolveConflict(
-		context.Background(), slog.Default(), store, remote, pub,
-		localRoot, ch, journal, localModTime,
-		PolicyNewerWins, false, fixedClock(now),
-	)
+	result, err := resolveConflict(context.Background(), conflictDeps{
+		log:       slog.Default(),
+		store:     store,
+		remote:    remote,
+		pub:       pub,
+		localRoot: localRoot,
+		matcher:   testMatcher(t),
+		policy:    PolicyNewerWins,
+		dryRun:    false,
+		clock:     fixedClock(now),
+	}, ch, journal, localModTime)
 	if err != nil {
 		t.Fatalf("resolveConflict: %v", err)
 	}
@@ -93,11 +112,17 @@ func TestResolveConflict_RemoteNewer(t *testing.T) {
 	}
 	journal := JournalEntry{Path: "file.txt"}
 
-	result, err := resolveConflict(
-		context.Background(), slog.Default(), store, remote, pub,
-		localRoot, ch, journal, localModTime,
-		PolicyNewerWins, false, fixedClock(now),
-	)
+	result, err := resolveConflict(context.Background(), conflictDeps{
+		log:       slog.Default(),
+		store:     store,
+		remote:    remote,
+		pub:       pub,
+		localRoot: localRoot,
+		matcher:   testMatcher(t),
+		policy:    PolicyNewerWins,
+		dryRun:    false,
+		clock:     fixedClock(now),
+	}, ch, journal, localModTime)
 	if err != nil {
 		t.Fatalf("resolveConflict: %v", err)
 	}
@@ -144,11 +169,16 @@ func TestResolveConflict_EqualMtime_DefaultLocalWins(t *testing.T) {
 		},
 	}
 
-	result, err := resolveConflict(
-		context.Background(), slog.Default(), store, remote, nil,
-		localRoot, ch, JournalEntry{}, mtime,
-		PolicyNewerWins, false, fixedClock(now),
-	)
+	result, err := resolveConflict(context.Background(), conflictDeps{
+		log:       slog.Default(),
+		store:     store,
+		remote:    remote,
+		localRoot: localRoot,
+		matcher:   testMatcher(t),
+		policy:    PolicyNewerWins,
+		dryRun:    false,
+		clock:     fixedClock(now),
+	}, ch, JournalEntry{}, mtime)
 	if err != nil {
 		t.Fatalf("resolveConflict: %v", err)
 	}
@@ -178,11 +208,16 @@ func TestResolveConflict_EqualMtime_RemoteWinsPolicy(t *testing.T) {
 		},
 	}
 
-	result, err := resolveConflict(
-		context.Background(), slog.Default(), store, remote, nil,
-		localRoot, ch, JournalEntry{}, mtime,
-		PolicyRemoteWins, false, fixedClock(now),
-	)
+	result, err := resolveConflict(context.Background(), conflictDeps{
+		log:       slog.Default(),
+		store:     store,
+		remote:    remote,
+		localRoot: localRoot,
+		matcher:   testMatcher(t),
+		policy:    PolicyRemoteWins,
+		dryRun:    false,
+		clock:     fixedClock(now),
+	}, ch, JournalEntry{}, mtime)
 	if err != nil {
 		t.Fatalf("resolveConflict: %v", err)
 	}
@@ -215,11 +250,16 @@ func TestResolveConflict_DryRun(t *testing.T) {
 		},
 	}
 
-	result, err := resolveConflict(
-		context.Background(), slog.Default(), store, remote, nil,
-		localRoot, ch, JournalEntry{}, localModTime,
-		PolicyNewerWins, true, fixedClock(now),
-	)
+	result, err := resolveConflict(context.Background(), conflictDeps{
+		log:       slog.Default(),
+		store:     store,
+		remote:    remote,
+		localRoot: localRoot,
+		matcher:   testMatcher(t),
+		policy:    PolicyNewerWins,
+		dryRun:    true,
+		clock:     fixedClock(now),
+	}, ch, JournalEntry{}, localModTime)
 	if err != nil {
 		t.Fatalf("resolveConflict: %v", err)
 	}
@@ -265,11 +305,17 @@ func TestResolveConflict_MQTTEvents(t *testing.T) {
 		},
 	}
 
-	_, err := resolveConflict(
-		context.Background(), slog.Default(), store, remote, pub,
-		localRoot, ch, JournalEntry{}, localModTime,
-		PolicyNewerWins, false, fixedClock(now),
-	)
+	_, err := resolveConflict(context.Background(), conflictDeps{
+		log:       slog.Default(),
+		store:     store,
+		remote:    remote,
+		pub:       pub,
+		localRoot: localRoot,
+		matcher:   testMatcher(t),
+		policy:    PolicyNewerWins,
+		dryRun:    false,
+		clock:     fixedClock(now),
+	}, ch, JournalEntry{}, localModTime)
 	if err != nil {
 		t.Fatalf("resolveConflict: %v", err)
 	}
@@ -304,5 +350,111 @@ func TestResolveConflict_MQTTEvents(t *testing.T) {
 	}
 	if rp["kept_old_as"] != "mqtt-test.txt.old.1" {
 		t.Errorf("kept_old_as = %v, want mqtt-test.txt.old.1", rp["kept_old_as"])
+	}
+}
+
+func TestResolveConflict_AlreadySuffixedPathCollapses(t *testing.T) {
+	// Regression for issue #65: a conflict on an already-suffixed path
+	// (e.g. file.txt.old.1, itself re-conflicted) must collapse onto the
+	// tracked base file.txt and produce file.txt.old.2, never nest as
+	// file.txt.old.1.old.1.
+	localRoot := t.TempDir()
+	localModTime := time.Date(2026, 4, 28, 14, 0, 0, 0, time.UTC)
+	remoteModTime := time.Date(2026, 4, 28, 13, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 4, 28, 15, 0, 0, 0, time.UTC)
+
+	writeTestFileWithMtime(t,
+		filepath.Join(localRoot, "file.txt.old.1"),
+		"local content",
+		localModTime,
+	)
+
+	remote := newMockRemoteFS()
+	store := newMockStore()
+	// Seed the journal: "file.txt" and "file.txt.old.1" are both tracked
+	// paths, which is what triggers the collapse (see oldsuffix.NextOldN).
+	for _, p := range []string{"file.txt", "file.txt.old.1"} {
+		if err := store.Put(context.Background(), JournalEntry{Path: p}); err != nil {
+			t.Fatalf("seed %q: %v", p, err)
+		}
+	}
+
+	ch := Change{
+		Path: "file.txt.old.1",
+		Object: &RemoteObject{
+			Path: "file.txt.old.1", Size: 100, MD5: "remote-md5",
+			ModTime: remoteModTime, RemoteID: "remote-id",
+		},
+	}
+	journal := JournalEntry{Path: "file.txt.old.1"}
+
+	result, err := resolveConflict(context.Background(), conflictDeps{
+		log:       slog.Default(),
+		store:     store,
+		remote:    remote,
+		localRoot: localRoot,
+		matcher:   testMatcher(t),
+		policy:    PolicyNewerWins,
+		dryRun:    false,
+		clock:     fixedClock(now),
+	}, ch, journal, localModTime)
+	if err != nil {
+		t.Fatalf("resolveConflict: %v", err)
+	}
+
+	if result.OldPath != "file.txt.old.2" {
+		t.Errorf("OldPath = %s, want file.txt.old.2 (collapsed, not nested)", result.OldPath)
+	}
+}
+
+func TestResolveConflict_HonorsCustomSuffixFormat(t *testing.T) {
+	// Finding (a) from the design doc: conflict.old_suffix_format used to
+	// be parsed but never consulted by the live pull path, which always
+	// hardcoded ".old.%d". resolveConflict must now honor a configured
+	// custom format end-to-end.
+	localRoot := t.TempDir()
+	localModTime := time.Date(2026, 4, 28, 14, 0, 0, 0, time.UTC)
+	remoteModTime := time.Date(2026, 4, 28, 13, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 4, 28, 15, 0, 0, 0, time.UTC)
+
+	writeTestFileWithMtime(t,
+		filepath.Join(localRoot, "file.txt"),
+		"local content",
+		localModTime,
+	)
+
+	remote := newMockRemoteFS()
+	store := newMockStore()
+	m, err := oldsuffix.New(".conflict-%d")
+	if err != nil {
+		t.Fatalf("oldsuffix.New: %v", err)
+	}
+	store.matcher = m
+
+	ch := Change{
+		Path: "file.txt",
+		Object: &RemoteObject{
+			Path: "file.txt", Size: 100, MD5: "remote-md5",
+			ModTime: remoteModTime, RemoteID: "remote-id",
+		},
+	}
+	journal := JournalEntry{Path: "file.txt"}
+
+	result, err := resolveConflict(context.Background(), conflictDeps{
+		log:       slog.Default(),
+		store:     store,
+		remote:    remote,
+		localRoot: localRoot,
+		matcher:   m,
+		policy:    PolicyNewerWins,
+		dryRun:    false,
+		clock:     fixedClock(now),
+	}, ch, journal, localModTime)
+	if err != nil {
+		t.Fatalf("resolveConflict: %v", err)
+	}
+
+	if result.OldPath != "file.txt.conflict-1" {
+		t.Errorf("OldPath = %s, want file.txt.conflict-1", result.OldPath)
 	}
 }

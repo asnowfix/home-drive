@@ -139,11 +139,17 @@ func (p *Puller) handleConflict(
 	localMtime time.Time,
 	start time.Time,
 ) error {
-	result, err := resolveConflict(
-		ctx, p.log, p.store, p.remote, p.pub,
-		p.cfg.LocalRoot, ch, journal, localMtime,
-		p.cfg.ConflictPolicy, p.cfg.DryRun, p.clock,
-	)
+	result, err := resolveConflict(ctx, conflictDeps{
+		log:       p.log,
+		store:     p.store,
+		remote:    p.remote,
+		pub:       p.pub,
+		localRoot: p.cfg.LocalRoot,
+		matcher:   p.cfg.Matcher,
+		policy:    p.cfg.ConflictPolicy,
+		dryRun:    p.cfg.DryRun,
+		clock:     p.clock,
+	}, ch, journal, localMtime)
 	if err != nil {
 		p.emitPullFailure(ch.Path, err)
 		p.logAudit(AuditEntry{

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"time"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 )
 
 // ---------------------------------------------------------------------------
@@ -68,6 +70,12 @@ type BisyncConfig struct {
 	Interval  time.Duration // default 1h
 	LocalRoot string        // absolute path to the local sync root
 	DryRun    bool          // if true, detect but do not sync
+
+	// Matcher controls the .old.<N> suffix format used when naming
+	// conflict losers. Defaults to the default ".old.%d" format if nil
+	// (see oldsuffix.New). Set from config.ConflictCfg.OldSuffixFormat
+	// during wiring (cmd/homedrive/agent.go).
+	Matcher *oldsuffix.Matcher
 }
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"time"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 )
 
 // ConflictPolicy defines how conflicts are resolved.
@@ -24,6 +26,23 @@ type ConflictResult struct {
 	Resolution string // e.g. "newer_wins:local"
 }
 
+// conflictDeps groups the per-Puller dependencies resolveConflict needs
+// (as opposed to the per-call arguments change/journal/localMtime), so the
+// parameter list does not keep growing every time a new cross-cutting
+// dependency (like Matcher) is threaded through. See homedrive-conventions
+// (functions < 80 lines) and homedrive-conflict-resolution.
+type conflictDeps struct {
+	log       *slog.Logger
+	store     Store
+	remote    RemoteFS
+	pub       Publisher
+	localRoot string
+	matcher   *oldsuffix.Matcher
+	policy    ConflictPolicy
+	dryRun    bool
+	clock     func() time.Time
+}
+
 // resolveConflict handles a conflict between local and remote versions
 // of a file during a pull operation. It follows the algorithm in
 // PLAN.md section 11.2.
@@ -32,25 +51,19 @@ type ConflictResult struct {
 // be resolved (e.g. rename of loser failed).
 func resolveConflict(
 	ctx context.Context,
-	log *slog.Logger,
-	store Store,
-	remote RemoteFS,
-	pub Publisher,
-	localRoot string,
+	deps conflictDeps,
 	change Change,
 	journal JournalEntry,
 	localMtime time.Time,
-	policy ConflictPolicy,
-	dryRun bool,
-	clock func() time.Time,
 ) (ConflictResult, error) {
+	log := deps.log
 	remoteMtime := change.Object.ModTime
 	path := change.Path
 
 	// Emit conflict.detected event.
-	if pub != nil {
-		_ = pub.PublishJSON(pub.Topic("events", "conflict.detected"), map[string]any{
-			"ts":           clock().UTC().Format(time.RFC3339),
+	if deps.pub != nil {
+		_ = deps.pub.PublishJSON(deps.pub.Topic("events", "conflict.detected"), map[string]any{
+			"ts":           deps.clock().UTC().Format(time.RFC3339),
 			"type":         "conflict.detected",
 			"path":         path,
 			"local_mtime":  localMtime.UTC().Format(time.RFC3339),
@@ -58,7 +71,7 @@ func resolveConflict(
 		})
 	}
 
-	winner := determineWinner(localMtime, remoteMtime, policy)
+	winner := determineWinner(localMtime, remoteMtime, deps.policy)
 
 	log.Info("conflict detected",
 		"path", path,
@@ -76,19 +89,19 @@ func resolveConflict(
 		)
 	}
 
-	n, err := store.NextOldN(ctx, path)
+	base, n, err := deps.store.NextOldN(ctx, path)
 	if err != nil {
 		return ConflictResult{}, fmt.Errorf("computing next .old.N for %s: %w", path, err)
 	}
-	oldPath := fmt.Sprintf("%s.old.%d", path, n)
+	oldPath := deps.matcher.Format(base, n)
 
 	result := ConflictResult{
 		Winner:     winner,
 		OldPath:    oldPath,
-		Resolution: fmt.Sprintf("%s:%s", policy, winner),
+		Resolution: fmt.Sprintf("%s:%s", deps.policy, winner),
 	}
 
-	if dryRun {
+	if deps.dryRun {
 		log.Info("dry-run: would resolve conflict",
 			"path", path,
 			"op", "conflict",
@@ -100,8 +113,8 @@ func resolveConflict(
 
 	if winner == "remote" {
 		// Remote wins: rename local file to .old.<N>, then download remote.
-		localFile := fmt.Sprintf("%s/%s", localRoot, path)
-		localOld := fmt.Sprintf("%s/%s", localRoot, oldPath)
+		localFile := fmt.Sprintf("%s/%s", deps.localRoot, path)
+		localOld := fmt.Sprintf("%s/%s", deps.localRoot, oldPath)
 		if err := os.Rename(localFile, localOld); err != nil {
 			log.Error("failed to rename local loser",
 				"path", path,
@@ -111,21 +124,21 @@ func resolveConflict(
 			return ConflictResult{}, fmt.Errorf("renaming local loser %s: %w", path, err)
 		}
 		// Record the .old.<N> in the journal so NextOldN skips it next time.
-		if err := store.Put(ctx, JournalEntry{
+		if err := deps.store.Put(ctx, JournalEntry{
 			Path:         oldPath,
 			LocalMtime:   localMtime,
-			LastSyncedAt: clock(),
+			LastSyncedAt: deps.clock(),
 			LastOrigin:   "local",
 		}); err != nil {
 			return ConflictResult{}, fmt.Errorf("recording old entry %s: %w", oldPath, err)
 		}
 		// Download the remote winner.
-		if err := remote.DownloadFile(ctx, path, localFile); err != nil {
+		if err := deps.remote.DownloadFile(ctx, path, localFile); err != nil {
 			return ConflictResult{}, fmt.Errorf("downloading remote winner %s: %w", path, err)
 		}
 	} else {
 		// Local wins: rename remote file to .old.<N> on remote side.
-		if err := remote.MoveFile(ctx, path, oldPath); err != nil {
+		if err := deps.remote.MoveFile(ctx, path, oldPath); err != nil {
 			log.Error("failed to rename remote loser",
 				"path", path,
 				"old_path", oldPath,
@@ -134,27 +147,27 @@ func resolveConflict(
 			return ConflictResult{}, fmt.Errorf("renaming remote loser %s: %w", path, err)
 		}
 		// Record the .old.<N> in the journal.
-		if err := store.Put(ctx, JournalEntry{
+		if err := deps.store.Put(ctx, JournalEntry{
 			Path:         oldPath,
 			RemoteMtime:  change.Object.ModTime,
 			RemoteMD5:    change.Object.MD5,
 			RemoteID:     change.Object.RemoteID,
-			LastSyncedAt: clock(),
+			LastSyncedAt: deps.clock(),
 			LastOrigin:   "remote",
 		}); err != nil {
 			return ConflictResult{}, fmt.Errorf("recording old entry %s: %w", oldPath, err)
 		}
 		// Upload the local winner.
-		localFile := fmt.Sprintf("%s/%s", localRoot, path)
-		if _, err := remote.CopyFile(ctx, localFile, path); err != nil {
+		localFile := fmt.Sprintf("%s/%s", deps.localRoot, path)
+		if _, err := deps.remote.CopyFile(ctx, localFile, path); err != nil {
 			return ConflictResult{}, fmt.Errorf("uploading local winner %s: %w", path, err)
 		}
 	}
 
 	// Emit conflict.resolved event.
-	if pub != nil {
-		_ = pub.PublishJSON(pub.Topic("events", "conflict.resolved"), map[string]any{
-			"ts":          clock().UTC().Format(time.RFC3339),
+	if deps.pub != nil {
+		_ = deps.pub.PublishJSON(deps.pub.Topic("events", "conflict.resolved"), map[string]any{
+			"ts":          deps.clock().UTC().Format(time.RFC3339),
 			"type":        "conflict.resolved",
 			"path":        path,
 			"resolution":  result.Resolution,

@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 )
 
 // mockRemoteFS is a thread-safe in-memory RemoteFS for testing.
@@ -241,12 +243,18 @@ type mockStore struct {
 	pageToken    string
 	rewriteCalls [][2]string
 	rewriteCount int
+
+	// matcher controls NextOldN's suffix parsing/formatting. Defaults to
+	// the default ".old.%d" format when nil (see newMockStore).
+	matcher *oldsuffix.Matcher
 }
 
 func newMockStore() *mockStore {
+	m, _ := oldsuffix.New("") // never errors for the empty/default format
 	return &mockStore{
 		entries:      make(map[string]JournalEntry),
 		rewriteCount: 42,
+		matcher:      m,
 	}
 }
 
@@ -284,17 +292,15 @@ func (s *mockStore) Delete(_ context.Context, path string) error {
 	return nil
 }
 
-func (s *mockStore) NextOldN(_ context.Context, path string) (int, error) {
+func (s *mockStore) NextOldN(_ context.Context, path string) (string, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	n := 1
-	for {
-		candidate := fmt.Sprintf("%s.old.%d", path, n)
-		if _, ok := s.entries[candidate]; !ok {
-			return n, nil
-		}
-		n++
+	exists := func(p string) bool {
+		_, ok := s.entries[p]
+		return ok
 	}
+	base, n := oldsuffix.NextOldN(s.matcher, path, exists)
+	return base, n, nil
 }
 
 func (s *mockStore) RewritePrefix(_ context.Context, oldPrefix, newPrefix string) (int, error) {
