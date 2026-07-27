@@ -114,3 +114,11 @@ func (a *bisyncJournalAdapter) ListByPrefix(prefix string) ([]syncer.JournalEntr
 func (a *bisyncJournalAdapter) ForEach(fn func(syncer.JournalEntry) error) error {
 	return a.j.ForEach(fn)
 }
+
+func (a *bisyncJournalAdapter) GetMeta(key []byte) (string, error) {
+	return a.j.GetMeta(key)
+}
+
+func (a *bisyncJournalAdapter) SetMeta(key []byte, val string) error {
+	return a.j.SetMeta(key, val)
+}

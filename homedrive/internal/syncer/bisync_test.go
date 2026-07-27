@@ -516,6 +516,127 @@ func TestBisync_ShouldSweep_GatesOnInterval(t *testing.T) {
 	}
 }
 
+// TestBisync_ChainRepair_RunsOnceThenSkips verifies the automatic chain
+// repair pass runs on the first execute() after upgrade, renumbers a
+// pre-existing nested chain, and is skipped on every subsequent pass
+// (guarded by the journal meta key, not re-scanning every tick).
+func TestBisync_ChainRepair_RunsOnceThenSkips(t *testing.T) {
+	root := t.TempDir()
+	createLocalFile(t, root, "notes.md", time.Now())
+	createLocalFile(t, root, "notes.md.old.1.old.1", time.Now())
+
+	remote := newMockRemoteFS()
+	journal := newMockJournal()
+	clk := newMockClock(time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC))
+
+	bisync, _ := NewBisync(BisyncOpts{
+		Config: BisyncConfig{
+			Interval:     time.Hour,
+			LocalRoot:    root,
+			RepairChains: true,
+		},
+		Remote:  remote,
+		Journal: journal,
+		Clock:   clk,
+		Mu:      &sync.RWMutex{},
+	})
+
+	bisync.execute(context.Background())
+
+	if _, err := os.Stat(filepath.Join(root, "notes.md.old.1")); err != nil {
+		t.Errorf("expected nested chain link to be renumbered to notes.md.old.1: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "notes.md.old.1.old.1")); !os.IsNotExist(err) {
+		t.Errorf("expected nested chain link to be gone, stat err = %v", err)
+	}
+	done, err := journal.GetMeta(keyChainRepair)
+	if err != nil || done != "done" {
+		t.Errorf("expected chain repair completion marker to be set, got %q, err=%v", done, err)
+	}
+
+	// Second pass: repair must not run again (nothing left to repair,
+	// and re-scanning every tick would be wasted work).
+	createLocalFile(t, root, "notes.md.old.5.old.1", time.Now())
+	bisync.execute(context.Background())
+	if _, err := os.Stat(filepath.Join(root, "notes.md.old.5.old.1")); err != nil {
+		t.Error("expected the second pass to leave a new nested-looking file untouched (repair already marked done)")
+	}
+}
+
+// TestBisync_ChainRepair_DisabledDoesNotRun verifies RepairChains: false
+// (the config opt-out) prevents the automatic pass from ever running.
+func TestBisync_ChainRepair_DisabledDoesNotRun(t *testing.T) {
+	root := t.TempDir()
+	createLocalFile(t, root, "notes.md", time.Now())
+	createLocalFile(t, root, "notes.md.old.1.old.1", time.Now())
+
+	remote := newMockRemoteFS()
+	journal := newMockJournal()
+	clk := newMockClock(time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC))
+
+	bisync, _ := NewBisync(BisyncOpts{
+		Config: BisyncConfig{
+			Interval:     time.Hour,
+			LocalRoot:    root,
+			RepairChains: false,
+		},
+		Remote:  remote,
+		Journal: journal,
+		Clock:   clk,
+		Mu:      &sync.RWMutex{},
+	})
+
+	bisync.execute(context.Background())
+
+	if _, err := os.Stat(filepath.Join(root, "notes.md.old.1.old.1")); err != nil {
+		t.Error("expected nested chain to survive untouched when repair_chains is disabled")
+	}
+	if done, _ := journal.GetMeta(keyChainRepair); done == "done" {
+		t.Error("expected completion marker to stay unset when repair_chains is disabled")
+	}
+}
+
+// TestBisync_RunChainRepair_OnDemand verifies the on-demand entry point
+// (POST /conflict/repair, `ctl conflict repair`) works even when the
+// automatic pass is disabled, and that a non-dry-run marks completion so
+// the automatic pass (if later enabled) does not repeat the work.
+func TestBisync_RunChainRepair_OnDemand(t *testing.T) {
+	root := t.TempDir()
+	createLocalFile(t, root, "notes.md", time.Now())
+	createLocalFile(t, root, "notes.md.old.1.old.1", time.Now())
+
+	remote := newMockRemoteFS()
+	journal := newMockJournal()
+	clk := newMockClock(time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC))
+
+	bisync, _ := NewBisync(BisyncOpts{
+		Config: BisyncConfig{
+			Interval:     time.Hour,
+			LocalRoot:    root,
+			RepairChains: false, // on-demand must work regardless
+		},
+		Remote:  remote,
+		Journal: journal,
+		Clock:   clk,
+		Mu:      &sync.RWMutex{},
+	})
+
+	report, err := bisync.RunChainRepair(context.Background(), false)
+	if err != nil {
+		t.Fatalf("RunChainRepair: %v", err)
+	}
+	if len(report.Links) != 1 {
+		t.Fatalf("len(Links) = %d, want 1", len(report.Links))
+	}
+	if _, err := os.Stat(filepath.Join(root, "notes.md.old.1")); err != nil {
+		t.Errorf("expected on-demand repair to renumber the chain: %v", err)
+	}
+	done, _ := journal.GetMeta(keyChainRepair)
+	if done != "done" {
+		t.Error("expected a non-dry-run on-demand repair to mark completion")
+	}
+}
+
 func TestBisync_ForceRunReturnsErrorWhenRunning(t *testing.T) {
 	root := t.TempDir()
 	bisync, _, _, _, _, _ := newTestBisync(t, root, false)

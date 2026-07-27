@@ -53,6 +53,17 @@ func (m *mockHealthChecker) Healthz(_ context.Context) (HealthResult, error) {
 	return m.result, m.err
 }
 
+type mockChainRepairer struct {
+	dryRunReceived bool
+	report         RepairReport
+	err            error
+}
+
+func (m *mockChainRepairer) RunChainRepair(_ context.Context, dryRun bool) (RepairReport, error) {
+	m.dryRunReceived = dryRun
+	return m.report, m.err
+}
+
 // --- helpers ---
 
 func newTestServer(t *testing.T, deps Deps) (*Server, *Metrics) {
@@ -98,6 +109,15 @@ func defaultDeps() (Deps, *mockPausable, *mockResyncable, *mockReloadable, *mock
 		HealthChecker:  hc,
 	}
 	return deps, p, rs, rl, sp, hc
+}
+
+// withChainRepairer sets deps.ChainRepairer, kept out of defaultDeps to
+// avoid rippling its return signature through every existing call site --
+// only the /conflict/repair tests need this dependency.
+func withChainRepairer(deps Deps) (Deps, *mockChainRepairer) {
+	cr := &mockChainRepairer{}
+	deps.ChainRepairer = cr
+	return deps, cr
 }
 
 func doRequest(t *testing.T, handler http.Handler, method, path string) *http.Response {

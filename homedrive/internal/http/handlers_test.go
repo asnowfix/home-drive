@@ -204,6 +204,65 @@ func TestHandleReload_Error(t *testing.T) {
 	}
 }
 
+func TestHandleConflictRepair_ReturnsReportAndForwardsDryRun(t *testing.T) {
+	deps, _, _, _, _, _ := defaultDeps()
+	deps, cr := withChainRepairer(deps)
+	cr.report = RepairReport{
+		Scanned:  3,
+		Repaired: 2,
+		Links: []RepairedLink{
+			{OldPath: "notes.md.old.1.old.1", NewPath: "notes.md.old.2", Side: "local"},
+		},
+	}
+	srv, _ := newTestServer(t, deps)
+	handler := srv.Handler()
+
+	resp := doRequest(t, handler, http.MethodPost, "/conflict/repair?dry_run=1")
+	body := readBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if !cr.dryRunReceived {
+		t.Error("expected dry_run=1 query param to be forwarded as dryRun=true")
+	}
+
+	var report RepairReport
+	if err := json.Unmarshal([]byte(body), &report); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if report.Scanned != 3 || report.Repaired != 2 || len(report.Links) != 1 {
+		t.Errorf("unexpected report: %+v", report)
+	}
+}
+
+func TestHandleConflictRepair_NoDryRunParam(t *testing.T) {
+	deps, _, _, _, _, _ := defaultDeps()
+	deps, cr := withChainRepairer(deps)
+	srv, _ := newTestServer(t, deps)
+	handler := srv.Handler()
+
+	doRequest(t, handler, http.MethodPost, "/conflict/repair")
+
+	if cr.dryRunReceived {
+		t.Error("expected dryRun=false when dry_run query param is absent")
+	}
+}
+
+func TestHandleConflictRepair_Error(t *testing.T) {
+	deps, _, _, _, _, _ := defaultDeps()
+	deps, cr := withChainRepairer(deps)
+	cr.err = errors.New("repair failed")
+	srv, _ := newTestServer(t, deps)
+	handler := srv.Handler()
+
+	resp := doRequest(t, handler, http.MethodPost, "/conflict/repair")
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", resp.StatusCode)
+	}
+}
+
 func TestHandleHealthz_Healthy(t *testing.T) {
 	deps, _, _, _, _, hc := defaultDeps()
 	hc.result = HealthResult{

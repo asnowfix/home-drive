@@ -48,6 +48,12 @@ type Journal interface {
 	// ForEach calls fn for every journal entry, used by the periodic
 	// retention sweep piggybacked on the bisync tick.
 	ForEach(fn func(JournalEntry) error) error
+
+	// GetMeta/SetMeta read and write the journal's meta bucket. Used by
+	// the one-time chain-repair pass (PLAN.md §11.5) to record that it
+	// has already run.
+	GetMeta(key []byte) (string, error)
+	SetMeta(key []byte, val string) error
 }
 
 // AuditWriter abstracts the JSONL audit log writer used by bisync.
@@ -101,6 +107,11 @@ type BisyncConfig struct {
 	// retention sweep runs, piggybacked on the bisync tick. Zero
 	// disables the periodic sweep (inline eviction still runs).
 	SweepInterval time.Duration
+
+	// RepairChains enables the one-time repair pass (PLAN.md §11.5) that
+	// collapses any pre-existing nested .old.<N> chains, on the first
+	// bisync pass after upgrade. See keyChainRepair in bisync.go.
+	RepairChains bool
 }
 
 // ---------------------------------------------------------------------------

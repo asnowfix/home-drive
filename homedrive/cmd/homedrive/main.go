@@ -127,6 +127,7 @@ func newCtlCmd() *cobra.Command {
 	ctl.AddCommand(newCtlPauseCmd())
 	ctl.AddCommand(newCtlResumeCmd())
 	ctl.AddCommand(newCtlResyncCmd())
+	ctl.AddCommand(newCtlConflictCmd())
 
 	return ctl
 }
@@ -169,4 +170,26 @@ func newCtlResyncCmd() *cobra.Command {
 			return ctlRunAction(cmd, "resync")
 		},
 	}
+}
+
+func newCtlConflictCmd() *cobra.Command {
+	conflict := &cobra.Command{
+		Use:   "conflict",
+		Short: "Manage conflict-loser (.old.<N>) state",
+	}
+	conflict.AddCommand(newCtlConflictRepairCmd())
+	return conflict
+}
+
+func newCtlConflictRepairCmd() *cobra.Command {
+	var dryRun bool
+	cmd := &cobra.Command{
+		Use:   "repair",
+		Short: "Collapse pre-existing nested .old.<N> chains onto their base file",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return ctlRunConflictRepair(cmd, dryRun)
+		},
+	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview what would be renumbered without renaming anything")
+	return cmd
 }
