@@ -149,6 +149,8 @@ func (p *Puller) handleConflict(
 		policy:    p.cfg.ConflictPolicy,
 		dryRun:    p.cfg.DryRun,
 		clock:     p.clock,
+		retention: p.cfg.Retention,
+		auditor:   p.cfg.Auditor,
 	}, ch, journal, localMtime)
 	if err != nil {
 		p.emitPullFailure(ch.Path, err)

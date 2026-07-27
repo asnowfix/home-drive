@@ -93,6 +93,14 @@ type Quota = rcloneclient.Quota
 // referring to the short name "Store".
 type Store = store.Store
 
+// RetentionPolicy bounds .old.<N> conflict-loser retention (PLAN.md
+// §11.5). Alias of store.RetentionPolicy.
+type RetentionPolicy = store.RetentionPolicy
+
+// Auditor is the JSONL audit-log writer used by the retention GC to
+// record "conflict_gc" entries. Alias of store.Auditor.
+type Auditor = store.Auditor
+
 // AuditLogger appends structured audit entries to the JSONL log.
 type AuditLogger interface {
 	Log(entry AuditEntry) error

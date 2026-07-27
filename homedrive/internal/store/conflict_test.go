@@ -191,7 +191,7 @@ func TestConflictResolver_PolicyLocalWins(t *testing.T) {
 	input := ConflictInput{
 		Path:        "file.txt",
 		LocalMtime:  now.Add(-10 * time.Second), // local is older
-		RemoteMtime: now,                         // remote is newer
+		RemoteMtime: now,                        // remote is newer
 	}
 
 	result, err := resolver.Resolve(input)
@@ -211,8 +211,8 @@ func TestConflictResolver_PolicyRemoteWins(t *testing.T) {
 	now := time.Date(2026, 4, 28, 14, 0, 0, 0, time.UTC)
 	input := ConflictInput{
 		Path:        "file.txt",
-		LocalMtime:  now,                          // local is newer
-		RemoteMtime: now.Add(-10 * time.Second),   // remote is older
+		LocalMtime:  now,                        // local is newer
+		RemoteMtime: now.Add(-10 * time.Second), // remote is older
 	}
 
 	result, err := resolver.Resolve(input)

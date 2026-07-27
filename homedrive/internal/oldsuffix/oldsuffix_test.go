@@ -162,6 +162,16 @@ func TestMatcher_IsOld(t *testing.T) {
 	}
 }
 
+func TestMatcher_Pre(t *testing.T) {
+	m, err := New(".old.%d")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := m.Pre(); got != ".old." {
+		t.Errorf("Pre() = %q, want %q", got, ".old.")
+	}
+}
+
 func TestMatcher_Format(t *testing.T) {
 	m, err := New(".old.%d")
 	if err != nil {

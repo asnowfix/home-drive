@@ -45,6 +45,15 @@ type Store interface {
 	// RewritePrefix renames all journal paths under oldPrefix to
 	// newPrefix, used by the push syncer when a directory is renamed.
 	RewritePrefix(ctx context.Context, oldPrefix, newPrefix string) (int, error)
+
+	// ListOldSiblings returns every journal entry whose path starts with
+	// prefix. Used by the retention GC (PLAN.md §11.5) to bound its work
+	// to one prefix scan per base file instead of a full-journal walk.
+	ListOldSiblings(ctx context.Context, prefix string) ([]JournalEntry, error)
+
+	// ForEach calls fn for every journal entry. Used by the periodic
+	// retention sweep (PLAN.md §11.5).
+	ForEach(ctx context.Context, fn func(JournalEntry) error) error
 }
 
 // JournalStore adapts *Journal to the context-aware Store interface.
@@ -110,4 +119,14 @@ func (s *JournalStore) NextOldN(_ context.Context, path string) (string, int, er
 // threaded through here (matching the pre-existing adapter behavior).
 func (s *JournalStore) RewritePrefix(_ context.Context, oldPrefix, newPrefix string) (int, error) {
 	return RewritePrefix(s.J, oldPrefix, newPrefix, nil, s.Log)
+}
+
+// ListOldSiblings implements Store.
+func (s *JournalStore) ListOldSiblings(_ context.Context, prefix string) ([]JournalEntry, error) {
+	return s.J.ListByPrefix(prefix)
+}
+
+// ForEach implements Store.
+func (s *JournalStore) ForEach(_ context.Context, fn func(JournalEntry) error) error {
+	return s.J.ForEach(fn)
 }

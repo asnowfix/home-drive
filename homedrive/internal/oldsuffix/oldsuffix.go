@@ -52,12 +52,10 @@ func New(format string) (*Matcher, error) {
 	if strings.Count(format, "%") != 1 {
 		return nil, fmt.Errorf("%w: %q: must contain exactly one %%-verb", ErrBadFormat, format)
 	}
-	idx := strings.Index(format, "%d")
-	if idx < 0 {
+	pre, post, ok := strings.Cut(format, "%d")
+	if !ok {
 		return nil, fmt.Errorf("%w: %q: the one %%-verb must be %%d", ErrBadFormat, format)
 	}
-	pre := format[:idx]
-	post := format[idx+2:]
 	if pre == "" {
 		return nil, fmt.Errorf("%w: %q: must have a non-empty literal before %%d", ErrBadFormat, format)
 	}
@@ -130,6 +128,13 @@ func (m *Matcher) Base(path string) (base string, depth int) {
 func (m *Matcher) IsOld(path string) bool {
 	_, _, ok := m.TrimOne(path)
 	return ok
+}
+
+// Pre returns the literal text before the %d verb (e.g. ".old."). Used
+// by the retention GC (internal/store/prune.go) to bound a journal scan
+// to base+Pre() instead of walking the full journal.
+func (m *Matcher) Pre() string {
+	return m.pre
 }
 
 // NextOldN returns the base path that a new conflict loser should hang

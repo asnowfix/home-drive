@@ -28,9 +28,9 @@ const (
 
 // Sentinel errors for conflict resolution.
 var (
-	ErrConflict       = errors.New("store: conflict detected")
-	ErrRenameFailed   = errors.New("store: loser rename failed")
-	ErrUnknownPolicy  = errors.New("store: unknown conflict policy")
+	ErrConflict      = errors.New("store: conflict detected")
+	ErrRenameFailed  = errors.New("store: loser rename failed")
+	ErrUnknownPolicy = errors.New("store: unknown conflict policy")
 )
 
 // ConflictResult describes the outcome of a conflict resolution.

@@ -302,13 +302,18 @@ func (b *Bisync) resolveLocalWins(ctx context.Context, d FileDiff) error {
 		return fmt.Errorf("journal put %s: %w", d.Path, err)
 	}
 
-	return b.journal.Put(JournalEntry{
+	if err := b.journal.Put(JournalEntry{
 		Path:         oldPath,
 		RemoteMtime:  d.RemoteInfo.ModTime,
 		RemoteMD5:    d.RemoteInfo.MD5,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "remote",
-	})
+	}); err != nil {
+		return fmt.Errorf("journal put %s: %w", oldPath, err)
+	}
+
+	b.markForPrune(base)
+	return nil
 }
 
 // resolveRemoteWins downloads remote version, renames local to .old.<N>.
@@ -351,10 +356,15 @@ func (b *Bisync) resolveRemoteWins(ctx context.Context, d FileDiff) error {
 		return fmt.Errorf("journal put %s: %w", d.Path, err)
 	}
 
-	return b.journal.Put(JournalEntry{
+	if err := b.journal.Put(JournalEntry{
 		Path:         oldPath,
 		LocalMtime:   d.LocalInfo.ModTime,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "local",
-	})
+	}); err != nil {
+		return fmt.Errorf("journal put %s: %w", oldPath, err)
+	}
+
+	b.markForPrune(base)
+	return nil
 }

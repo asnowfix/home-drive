@@ -117,6 +117,40 @@ func (j *mockJournal) Seed(entry JournalEntry) {
 	j.entries[entry.Path] = entry
 }
 
+func (j *mockJournal) Delete(path string) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	delete(j.entries, path)
+	return nil
+}
+
+func (j *mockJournal) ListByPrefix(prefix string) ([]JournalEntry, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var out []JournalEntry
+	for p, e := range j.entries {
+		if strings.HasPrefix(p, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+func (j *mockJournal) ForEach(fn func(JournalEntry) error) error {
+	j.mu.Lock()
+	entries := make([]JournalEntry, 0, len(j.entries))
+	for _, e := range j.entries {
+		entries = append(entries, e)
+	}
+	j.mu.Unlock()
+	for _, e := range entries {
+		if err := fn(e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // mockMQTT records bisync MQTT events for assertion.
 // ---------------------------------------------------------------------------

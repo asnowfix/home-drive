@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -175,11 +176,11 @@ func (m *mockRemoteFS) Seed(path string, modTime time.Time, md5 string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.files[path] = RemoteObject{
-		Path:    path,
-		Size:    100,
-		MD5:     md5,
-		ModTime: modTime,
-		RemoteID:      "id-" + path,
+		Path:     path,
+		Size:     100,
+		MD5:      md5,
+		ModTime:  modTime,
+		RemoteID: "id-" + path,
 	}
 }
 
@@ -301,6 +302,33 @@ func (s *mockStore) NextOldN(_ context.Context, path string) (string, int, error
 	}
 	base, n := oldsuffix.NextOldN(s.matcher, path, exists)
 	return base, n, nil
+}
+
+func (s *mockStore) ListOldSiblings(_ context.Context, prefix string) ([]JournalEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []JournalEntry
+	for p, e := range s.entries {
+		if strings.HasPrefix(p, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+func (s *mockStore) ForEach(_ context.Context, fn func(JournalEntry) error) error {
+	s.mu.Lock()
+	entries := make([]JournalEntry, 0, len(s.entries))
+	for _, e := range s.entries {
+		entries = append(entries, e)
+	}
+	s.mu.Unlock()
+	for _, e := range entries {
+		if err := fn(e); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *mockStore) RewritePrefix(_ context.Context, oldPrefix, newPrefix string) (int, error) {

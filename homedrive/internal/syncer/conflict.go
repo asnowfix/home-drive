@@ -2,12 +2,14 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"time"
 
 	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
+	"github.com/asnowfix/home-drive/homedrive/internal/store"
 )
 
 // ConflictPolicy defines how conflicts are resolved.
@@ -41,6 +43,60 @@ type conflictDeps struct {
 	policy    ConflictPolicy
 	dryRun    bool
 	clock     func() time.Time
+
+	// retention and auditor configure the inline retention GC that runs
+	// right after a new conflict loser is recorded (PLAN.md §11.5).
+	// auditor may be nil to disable "conflict_gc" audit lines.
+	retention RetentionPolicy
+	auditor   *Auditor
+}
+
+// pruneDeps builds the store.PruneDeps closures for the retention GC,
+// wiring them to this conflictDeps' store/remote/localRoot so the
+// eviction ordering (file first, then journal entry) is enforced by
+// store.PruneOldSiblings/evict, not duplicated here.
+func (deps conflictDeps) pruneDeps(ctx context.Context) store.PruneDeps {
+	return store.PruneDeps{
+		Matcher: deps.matcher,
+		ListByPrefix: func(prefix string) ([]JournalEntry, error) {
+			return deps.store.ListOldSiblings(ctx, prefix)
+		},
+		ForEach: func(fn func(JournalEntry) error) error {
+			return deps.store.ForEach(ctx, fn)
+		},
+		DeleteEntry: func(p string) error {
+			return deps.store.Delete(ctx, p)
+		},
+		RemoveLocal: func(relPath string) error {
+			err := os.Remove(fmt.Sprintf("%s/%s", deps.localRoot, relPath))
+			if err != nil && os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		},
+		RemoveRemote: func(ctx context.Context, p string) error {
+			err := deps.remote.DeleteFile(ctx, p)
+			if err != nil && errors.Is(err, ErrRemoteNotFound) {
+				return nil
+			}
+			return err
+		},
+		Auditor:   deps.auditor,
+		Publisher: deps.pub,
+		Clock:     deps.clock,
+		DryRun:    deps.dryRun,
+		Log:       deps.log,
+	}
+}
+
+// pruneAfterConflict runs the retention GC (PLAN.md §11.5) for base
+// right after a new conflict loser was recorded. Errors are logged,
+// never propagated -- a GC failure must not fail the conflict
+// resolution that triggered it.
+func pruneAfterConflict(ctx context.Context, deps conflictDeps, base string) {
+	if _, err := store.PruneOldSiblings(ctx, deps.pruneDeps(ctx), deps.retention, base); err != nil {
+		deps.log.Error("conflict retention prune failed", "op", "conflict_gc", "base", base, "error", err)
+	}
 }
 
 // resolveConflict handles a conflict between local and remote versions
@@ -132,6 +188,7 @@ func resolveConflict(
 		}); err != nil {
 			return ConflictResult{}, fmt.Errorf("recording old entry %s: %w", oldPath, err)
 		}
+		pruneAfterConflict(ctx, deps, base)
 		// Download the remote winner.
 		if err := deps.remote.DownloadFile(ctx, path, localFile); err != nil {
 			return ConflictResult{}, fmt.Errorf("downloading remote winner %s: %w", path, err)
@@ -157,6 +214,7 @@ func resolveConflict(
 		}); err != nil {
 			return ConflictResult{}, fmt.Errorf("recording old entry %s: %w", oldPath, err)
 		}
+		pruneAfterConflict(ctx, deps, base)
 		// Upload the local winner.
 		localFile := fmt.Sprintf("%s/%s", deps.localRoot, path)
 		if _, err := deps.remote.CopyFile(ctx, localFile, path); err != nil {

@@ -17,6 +17,12 @@ var (
 	// must match it directly, with no adapter in between.
 	ErrGone = rcloneclient.ErrGone
 
+	// ErrRemoteNotFound is the same sentinel as rcloneclient.ErrNotFound
+	// (see ErrGone above for why no adapter is used), used by the
+	// retention GC to treat "already deleted" as a successful, idempotent
+	// eviction (PLAN.md §11.5).
+	ErrRemoteNotFound = rcloneclient.ErrNotFound
+
 	// ErrConflict signals a sync conflict where local and remote state
 	// diverged from what the journal expected.
 	ErrConflict = errors.New("syncer: conflict detected")

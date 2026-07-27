@@ -27,6 +27,17 @@ type PullerConfig struct {
 	// during wiring (cmd/homedrive/agent.go).
 	Matcher *oldsuffix.Matcher
 
+	// Retention bounds .old.<N> conflict-loser retention (PLAN.md
+	// §11.5), applied inline right after a new loser is recorded.
+	Retention RetentionPolicy
+
+	// Auditor, if non-nil, receives "conflict_gc" JSONL lines from the
+	// retention GC. Distinct from the AuditLogger passed to NewPuller
+	// (which only forwards a subset of AuditEntry fields): this is the
+	// same *store.Auditor instance used directly so the Reason field
+	// reaches the log.
+	Auditor *Auditor
+
 	// DryRun when true logs intended actions without writing.
 	DryRun bool
 }

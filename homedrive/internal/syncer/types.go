@@ -33,6 +33,21 @@ type Journal interface {
 	Get(path string) (*JournalEntry, error)
 	Put(entry JournalEntry) error
 	Exists(path string) bool
+
+	// Delete removes a journal entry. Used by the retention GC (PLAN.md
+	// §11.5), always after the corresponding file has already been
+	// deleted -- see store.PruneDeps.DeleteEntry for why that ordering
+	// is normative.
+	Delete(path string) error
+
+	// ListByPrefix returns every entry whose path starts with prefix, a
+	// bounded scan used by the inline retention GC right after a new
+	// conflict loser is recorded.
+	ListByPrefix(prefix string) ([]JournalEntry, error)
+
+	// ForEach calls fn for every journal entry, used by the periodic
+	// retention sweep piggybacked on the bisync tick.
+	ForEach(fn func(JournalEntry) error) error
 }
 
 // AuditWriter abstracts the JSONL audit log writer used by bisync.
@@ -76,6 +91,16 @@ type BisyncConfig struct {
 	// (see oldsuffix.New). Set from config.ConflictCfg.OldSuffixFormat
 	// during wiring (cmd/homedrive/agent.go).
 	Matcher *oldsuffix.Matcher
+
+	// Retention bounds .old.<N> conflict-loser retention (PLAN.md
+	// §11.5), applied both inline (right after resolveLocalWins/
+	// resolveRemoteWins record a new loser) and by the periodic sweep.
+	Retention RetentionPolicy
+
+	// SweepInterval controls how often the periodic full-journal
+	// retention sweep runs, piggybacked on the bisync tick. Zero
+	// disables the periodic sweep (inline eviction still runs).
+	SweepInterval time.Duration
 }
 
 // ---------------------------------------------------------------------------

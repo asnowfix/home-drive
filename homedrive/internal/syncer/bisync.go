@@ -8,13 +8,17 @@ package syncer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
+	"github.com/asnowfix/home-drive/homedrive/internal/store"
 )
 
 // Bisync is the periodic safety-net syncer that performs a full directory
@@ -23,8 +27,8 @@ type Bisync struct {
 	cfg     BisyncConfig
 	remote  RemoteFS
 	journal Journal
-	mqtt    Publisher // may be nil if MQTT is disabled
-	audit   AuditWriter    // may be nil if audit is disabled
+	mqtt    Publisher   // may be nil if MQTT is disabled
+	audit   AuditWriter // may be nil if audit is disabled
 	clock   Clock
 	log     *slog.Logger
 
@@ -39,6 +43,36 @@ type Bisync struct {
 	// by runMu.
 	runMu   sync.Mutex
 	running bool
+
+	// auditor receives "conflict_gc" JSONL lines from the retention GC
+	// (PLAN.md §11.5). May be nil to disable.
+	auditor *Auditor
+
+	// lastSweep is when the periodic retention sweep last ran. Only
+	// read/written from execute(), which already holds b.mu exclusively,
+	// so it needs no separate lock.
+	lastSweep time.Time
+
+	// pendingPrune collects the base paths of conflicts resolved during
+	// the current execute() pass. Pruning runs once, after syncDiffs has
+	// fully drained the diffs computed at the top of this pass -- not
+	// inline from resolveLocalWins/resolveRemoteWins -- because diffs is
+	// a single snapshot taken before any conflict resolution: an inline
+	// eviction can delete a sibling that a later, already-queued
+	// DiffRemoteOnly entry in that same snapshot then resurrects by
+	// pulling it back down. Only touched within execute(), which holds
+	// b.mu exclusively, so it needs no separate lock.
+	pendingPrune map[string]struct{}
+}
+
+// markForPrune records base as needing a retention-GC pass once the
+// current execute() call's syncDiffs loop has fully drained. See
+// pendingPrune's doc comment for why this can't run inline.
+func (b *Bisync) markForPrune(base string) {
+	if b.pendingPrune == nil {
+		b.pendingPrune = make(map[string]struct{})
+	}
+	b.pendingPrune[base] = struct{}{}
 }
 
 // BisyncOpts are constructor options for Bisync.
@@ -46,11 +80,18 @@ type BisyncOpts struct {
 	Config  BisyncConfig
 	Remote  RemoteFS
 	Journal Journal
-	MQTT    Publisher // optional
-	Audit   AuditWriter    // optional
-	Clock   Clock          // defaults to realClock
-	Logger  *slog.Logger   // defaults to slog.Default()
-	Mu      *sync.RWMutex  // shared push/bisync mutex
+	MQTT    Publisher     // optional
+	Audit   AuditWriter   // optional
+	Clock   Clock         // defaults to realClock
+	Logger  *slog.Logger  // defaults to slog.Default()
+	Mu      *sync.RWMutex // shared push/bisync mutex
+
+	// Auditor, if non-nil, receives "conflict_gc" JSONL lines from the
+	// retention GC (PLAN.md §11.5). Distinct from Audit (the
+	// BisyncAuditEntry writer for bisync-pass summaries): this is the
+	// same *store.Auditor instance the push/pull paths use for
+	// per-file AuditEntry lines.
+	Auditor *Auditor
 }
 
 // NewBisync creates a new bisync runner. The returned ForceCh can be
@@ -85,6 +126,7 @@ func NewBisync(opts BisyncOpts) (*Bisync, chan<- struct{}) {
 		log:     logger,
 		mu:      mu,
 		forceCh: forceCh,
+		auditor: opts.Auditor,
 	}
 	return b, forceCh
 }
@@ -186,6 +228,21 @@ func (b *Bisync) execute(ctx context.Context) {
 	}
 
 	pushed, pulled, conflicts := b.syncDiffs(ctx, diffs)
+
+	for base := range b.pendingPrune {
+		b.pruneAfterConflict(ctx, base)
+	}
+	b.pendingPrune = nil
+
+	if b.shouldSweep() {
+		removed := b.sweepOldFiles(ctx)
+		b.lastSweep = b.clock.Now()
+		if len(removed) > 0 {
+			b.log.Info("retention sweep pruned conflict losers",
+				"op", "conflict_gc", "count", len(removed))
+		}
+	}
+
 	elapsed := b.clock.Now().Sub(start)
 
 	b.log.Info("bisync completed",
@@ -297,4 +354,78 @@ func (b *Bisync) publishEvent(event BisyncEvent) {
 			"error", err,
 		)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Retention GC (PLAN.md §11.5)
+// ---------------------------------------------------------------------------
+
+// shouldSweep reports whether the periodic full-journal retention sweep is
+// due. A zero SweepInterval disables the periodic sweep entirely (inline
+// eviction in resolveLocalWins/resolveRemoteWins still runs).
+func (b *Bisync) shouldSweep() bool {
+	if b.cfg.SweepInterval <= 0 {
+		return false
+	}
+	return b.clock.Now().Sub(b.lastSweep) >= b.cfg.SweepInterval
+}
+
+// pruneDeps builds the store.PruneDeps closures for the retention GC,
+// wiring them to this Bisync's journal/remote/LocalRoot. Shared by the
+// inline eviction in resolveLocalWins/resolveRemoteWins and the periodic
+// sweep, so the deletion ordering (file first, then journal entry -- see
+// store.PruneDeps.DeleteEntry) is enforced once, in store.PruneOldSiblings/
+// evict, not duplicated here.
+func (b *Bisync) pruneDeps() store.PruneDeps {
+	return store.PruneDeps{
+		Matcher: b.cfg.Matcher,
+		ListByPrefix: func(prefix string) ([]JournalEntry, error) {
+			return b.journal.ListByPrefix(prefix)
+		},
+		ForEach: func(fn func(JournalEntry) error) error {
+			return b.journal.ForEach(fn)
+		},
+		DeleteEntry: func(p string) error {
+			return b.journal.Delete(p)
+		},
+		RemoveLocal: func(relPath string) error {
+			err := os.Remove(filepath.Join(b.cfg.LocalRoot, filepath.FromSlash(relPath)))
+			if err != nil && os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		},
+		RemoveRemote: func(ctx context.Context, p string) error {
+			err := b.remote.DeleteFile(ctx, p)
+			if err != nil && errors.Is(err, ErrRemoteNotFound) {
+				return nil
+			}
+			return err
+		},
+		Auditor:   b.auditor,
+		Publisher: b.mqtt,
+		Clock:     b.clock.Now,
+		DryRun:    b.cfg.DryRun,
+		Log:       b.log,
+	}
+}
+
+// pruneAfterConflict runs the inline retention GC for base right after a
+// new conflict loser was recorded by resolveLocalWins/resolveRemoteWins.
+// Errors are logged, never propagated -- a GC failure must not fail the
+// conflict resolution that triggered it.
+func (b *Bisync) pruneAfterConflict(ctx context.Context, base string) {
+	if _, err := store.PruneOldSiblings(ctx, b.pruneDeps(), b.cfg.Retention, base); err != nil {
+		b.log.Error("conflict retention prune failed", "op", "conflict_gc", "base", base, "error", err)
+	}
+}
+
+// sweepOldFiles runs the periodic full-journal retention sweep. Errors are
+// logged, never propagated -- see pruneAfterConflict.
+func (b *Bisync) sweepOldFiles(ctx context.Context) []string {
+	removed, err := store.SweepOldFiles(ctx, b.pruneDeps(), b.cfg.Retention)
+	if err != nil {
+		b.log.Error("retention sweep failed", "op", "conflict_gc", "error", err)
+	}
+	return removed
 }
