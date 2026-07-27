@@ -195,6 +195,11 @@ pull:
 conflict:
   policy: newer_wins         # newer_wins | local_wins | remote_wins | manual
   old_suffix_format: ".old.%d"
+  retention:                 # see §11.5; omit the whole block for the defaults below
+    max_per_file: 3          # keep N newest .old.<N> siblings per base file; 0 = unlimited
+    max_age: 0s               # expire siblings older than this; 0s = never (default)
+    sweep_interval: 24h        # periodic full-journal sweep; 0s = disabled
+  repair_chains: true        # one-time collapse of pre-existing nested chains (see §11.5)
 
 state:
   path: /var/lib/homedrive/state.db
@@ -584,9 +589,18 @@ file `{local_mtime, remote_mtime, remote_md5, remote_id, last_synced_at, last_or
         the loser is preserved as ".old.<N>" on its own side
 ```
 
-`<N>` is computed by listing existing `.old.*` siblings (in the journal,
-not by listing the FS) and incrementing the max. The `.old.<N>` is created
-**on the same side as the loser**, never both.
+`<N>` is the smallest `N >= 1` for which `<path>.old.<N>` does not already
+exist in the journal (not the incrementing-the-max behavior earlier drafts
+of this doc described — every implementation has always used smallest-free-N,
+so this corrects the doc to match). The `.old.<N>` is created **on the same
+side as the loser**, never both.
+
+If `<path>` already carries one or more `.old.<N>` suffixes itself (e.g. a
+repeat conflict on `f.md.old.1`), the suffixes collapse onto the fully
+stripped base instead of nesting a new one on top — `f.md.old.1` becomes
+`f.md.old.2`, never `f.md.old.1.old.1`. This is the fix for issue #65
+(`internal/oldsuffix.NextOldN`); see §11.5 for the one-time repair pass that
+collapses chains that had already nested before this fix shipped.
 
 Every conflict emits MQTT `conflict.detected` then `conflict.resolved`.
 
@@ -602,6 +616,62 @@ If `policy: manual`, conflicts are not auto-resolved; the file is locked in
 the journal as `conflict_pending` and exposed via `/status` and a dedicated
 MQTT event. CLI command `homedrive ctl conflict resolve <path>
 [--keep-local|--keep-remote]` to be added in a later phase.
+
+### 11.5 `.old.<N>` retention, GC, and chain repair (issue #65)
+
+Without a bound, `.old.<N>` siblings accumulate forever on a file that
+conflicts repeatedly. `conflict.retention` (see §4) caps this two ways:
+
+- **Inline eviction**, right after a new loser's journal entry is written
+  (both the pull path and bisync): `store.PruneOldSiblings` lists the base's
+  `.old.*` siblings with one bounded prefix scan, keeps the `max_per_file`
+  newest (by `last_synced_at`), and evicts the rest.
+- **Periodic sweep**, piggybacked on the bisync tick (`sweep_interval`,
+  default `24h`): `store.SweepOldFiles` walks the full journal once, groups
+  direct siblings by base, and applies the same policy. This is what
+  reclaims siblings that accumulated on a file that never conflicts again.
+
+`max_per_file` defaults to `3`; `max_age` defaults to `0` (off), since
+age-based eviction can delete a user's only surviving copy of a genuine edit
+purely because time passed, with no compensating signal. There is no setting
+that evicts the newest sibling.
+
+**Deletion ordering is normative**: the file (or remote object) is removed
+*before* its journal entry, never the reverse. This is what makes N-reuse
+("smallest free N", §11.2) crash-safe — a crash between the two steps only
+leaves an orphan journal entry (reserving an N a little longer than
+necessary), never a file on disk with no journal record that a later
+conflict's N-reuse could silently overwrite. Every eviction emits MQTT
+`events/conflict.pruned` and, if audit logging is enabled, a `conflict_gc`
+JSONL line.
+
+**Chain repair.** Before the collapsing fix in §11.2, a repeat conflict on
+an already-suffixed path nested a new suffix on top instead of collapsing
+onto the base, producing unbounded chains like `f.md.old.1.old.1.old.1...`
+(issue #65). Collapsing stops new chains from *growing*, but does nothing
+for chains that had already nested before upgrading. `syncer.RepairChains`
+(`internal/syncer/repair.go`) fixes existing corruption: driven by a fresh
+local walk + remote listing (not the journal, since some pre-existing chain
+links may never have gotten a journal entry), it renumbers every nested link
+(depth ≥ 2 under the suffix matcher) onto its base's flat namespace,
+deepest-first so shallower links never collide with a target the same pass
+just created. A plain single-suffix path (depth 1) is left alone — it is
+already correct output, not corruption — and a candidate whose fully
+stripped base is not a real file on that side is skipped (a user's own file
+that merely looks like a chain, e.g. `budget.old.2`, is never touched).
+Content is never deleted, only renamed.
+
+The repair pass runs once, automatically, on the first bisync pass after
+upgrade (`conflict.repair_chains: true`, the default), gated by a journal
+meta key (`old_chain_repair_v1`) so it does not re-scan every tick. It runs
+*before* that pass's `diff()`, not by reusing `diff()`'s already-computed
+state — renaming files mid-way through processing a diff snapshot computed
+before the rename would let a stale, already-queued diff entry resurrect a
+file the repair pass just moved (the same hazard the inline retention GC
+above avoids by deferring eviction until after `syncDiffs` drains). It is
+also exposed on demand, independent of the automatic gate, via
+`POST /conflict/repair` (`?dry_run=1` to preview) and
+`homedrive ctl conflict repair [--dry-run]`.
 
 ---
 
@@ -629,6 +699,7 @@ no-token setups (today's default) are unaffected.
 | `/resume` | POST | resume |
 | `/resync` | POST | force immediate bisync |
 | `/reload` | POST | reload config (equivalent to `SIGHUP`) |
+| `/conflict/repair` | POST | collapse pre-existing nested `.old.<N>` chains; `?dry_run=1` to preview (§11.5) |
 | `/healthz` | GET | 200/503 based on OAuth + MQTT + disk |
 | `/metrics` | GET | Prometheus exposition (reuse `myhome` stack) |
 

@@ -153,6 +153,11 @@ pull:
 
 conflict:
   policy: newer_wins
+  retention:
+    max_per_file: 3    # keep N newest .old.<N> siblings per base file; 0 = unlimited
+    max_age: 0s         # expire siblings older than this; 0s = never (default)
+    sweep_interval: 24h  # periodic full-journal sweep; 0s = disabled
+  repair_chains: true  # one-time collapse of pre-existing nested chains, see PLAN.md §11.5
 
 state:
   path: /var/lib/homedrive/state.db
@@ -186,7 +191,7 @@ LAN poll `/status` directly -- you **must** also set `http.auth_token`.
 The server fails closed: it refuses to start if it would otherwise bind
 off loopback without a token. When `http.auth_token` is set, every
 request to every route (`/status`, `/pause`, `/resume`, `/resync`,
-`/reload`, `/healthz`, `/metrics`) must carry a matching
+`/reload`, `/conflict/repair`, `/healthz`, `/metrics`) must carry a matching
 `Authorization: Bearer <auth_token>` header, regardless of bind address.
 `homedrive ctl <cmd>` reads `http.auth_token` from the same `--config`
 file and sends it automatically.
@@ -202,6 +207,10 @@ Commands:
   ctl pause         Pause sync operations
   ctl resume        Resume sync operations
   ctl resync        Force an immediate bisync
+  ctl conflict repair [--dry-run]
+                    Collapse pre-existing nested .old.<N> chains onto
+                    their base file (PLAN.md §11.5); runs automatically
+                    once on upgrade, this triggers it on demand
 
 Global flags:
   --dry-run         Log intended actions without making remote changes
@@ -223,6 +232,10 @@ homedrive ctl resume
 
 # Force a full bisync (useful after restoring from backup)
 homedrive ctl resync
+
+# Preview what a nested .old.<N> chain repair would do, then run it
+homedrive ctl conflict repair --dry-run
+homedrive ctl conflict repair
 ```
 
 ## Home Assistant integration
