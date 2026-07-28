@@ -59,12 +59,36 @@ Reject PRs that:
 
 ## Releases
 
-Tags: `homedrive/v0.1.0`, `homedrive/v0.2.0`, etc.
+Any tag matching `homedrive/v*` pushed to GitHub is a **real release**: it
+triggers the `homedrive-release` GitHub Actions workflow, which runs
+GoReleaser and publishes a GitHub Release with `linux/amd64`/`linux/arm64`
+binaries plus nfpm `.deb`/`.rpm` packages (systemd unit, sysctl, and
+logrotate config included). Don't push one of these tags casually.
 
-Each release ships:
-- A goreleaser-built binary for `linux/amd64` and `linux/arm64`.
-- nfpm `.deb` and `.rpm` packages with the systemd unit, sysctl, and
-  logrotate config installed.
+Two kinds of tag, both under the `homedrive/v*` pattern:
+
+- **Formal releases** — `homedrive/v0.1.0`, `homedrive/v0.2.0`, etc. — mark a
+  milestone or a completed set of `PLAN.md` phases, and get a
+  `RELEASE_NOTES.md` entry.
+- **Interim fix releases** — `homedrive/v0.1.2-issue65`-style tags, suffixed
+  with the GitHub issue number the change closes — are used for smaller
+  fixes that need an actual deployable build (e.g. to verify on real
+  hardware) without a full version bump. Not every merged PR gets one; only
+  tag when a real build is needed. No `RELEASE_NOTES.md` entry expected.
+
+Either way: merge the PR first (squash), then tag the resulting commit on
+`main` (not the feature branch), as an annotated tag:
+
+```bash
+git fetch origin main --tags
+git tag -a homedrive/vX.Y.Z[-issueNN] <merge-commit-sha> -m "<summary>"
+git push origin homedrive/vX.Y.Z[-issueNN]
+```
+
+The resulting GitHub Release shows up as a "draft" with an
+`untagged-<hash>` URL — that's how the shadow-tag release pipeline always
+looks (see `.github/workflows/homedrive-release.yml`'s comments), not a
+sign anything went wrong.
 
 ## Questions
 
