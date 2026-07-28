@@ -51,9 +51,9 @@ func TestJournalStore_DelegatesToJournal(t *testing.T) {
 		t.Fatalf("Get after Put = %+v, found=%v, err=%v", got2, found, err)
 	}
 
-	n, err := s.NextOldN(ctx, "dir/old.txt")
-	if err != nil || n != 1 {
-		t.Fatalf("NextOldN = %d, %v", n, err)
+	base, n, err := s.NextOldN(ctx, "dir/old.txt")
+	if err != nil || base != "dir/old.txt" || n != 1 {
+		t.Fatalf("NextOldN = (%q, %d), %v", base, n, err)
 	}
 
 	if err := s.Put(ctx, JournalEntry{Path: "dir/child.txt"}); err != nil {

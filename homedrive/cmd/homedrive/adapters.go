@@ -102,3 +102,23 @@ func (a *bisyncJournalAdapter) Put(entry syncer.JournalEntry) error {
 func (a *bisyncJournalAdapter) Exists(path string) bool {
 	return a.j.Exists(path)
 }
+
+func (a *bisyncJournalAdapter) Delete(path string) error {
+	return a.j.Delete(path)
+}
+
+func (a *bisyncJournalAdapter) ListByPrefix(prefix string) ([]syncer.JournalEntry, error) {
+	return a.j.ListByPrefix(prefix)
+}
+
+func (a *bisyncJournalAdapter) ForEach(fn func(syncer.JournalEntry) error) error {
+	return a.j.ForEach(fn)
+}
+
+func (a *bisyncJournalAdapter) GetMeta(key []byte) (string, error) {
+	return a.j.GetMeta(key)
+}
+
+func (a *bisyncJournalAdapter) SetMeta(key []byte, val string) error {
+	return a.j.SetMeta(key, val)
+}

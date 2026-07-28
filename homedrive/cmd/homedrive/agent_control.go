@@ -40,6 +40,28 @@ func (a *Agent) ForceResync(ctx context.Context) error {
 	return a.bisync.ForceRun(ctx)
 }
 
+// RunChainRepair runs the one-time nested .old.<N> chain repair pass
+// (PLAN.md §11.5, issue #65 §3) on demand, independent of the automatic
+// first-pass-after-upgrade run. Backs POST /conflict/repair and
+// `homedrive ctl conflict repair`.
+func (a *Agent) RunChainRepair(ctx context.Context, dryRun bool) (httpctl.RepairReport, error) {
+	report, err := a.bisync.RunChainRepair(ctx, dryRun)
+	if err != nil {
+		return httpctl.RepairReport{}, err
+	}
+
+	links := make([]httpctl.RepairedLink, 0, len(report.Links))
+	for _, l := range report.Links {
+		links = append(links, httpctl.RepairedLink{OldPath: l.OldPath, NewPath: l.NewPath, Side: l.Side})
+	}
+	return httpctl.RepairReport{
+		Scanned:  report.Scanned,
+		Repaired: len(report.Links),
+		Links:    links,
+		DryRun:   dryRun,
+	}, nil
+}
+
 // Reload re-reads the configuration file. Only the log level and the
 // dry_run flag reported by /status are applied live; local_root, remote,
 // watcher.exclude, push.workers, retry settings, and other structural

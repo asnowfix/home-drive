@@ -40,6 +40,7 @@ type Deps struct {
 	Reloadable     Reloadable
 	StatusProvider StatusProvider
 	HealthChecker  HealthChecker
+	ChainRepairer  ChainRepairer
 }
 
 // Server is the HTTP control endpoint for the homedrive agent.
@@ -151,6 +152,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/resume", s.methodOnly(http.MethodPost, s.handleResume))
 	mux.HandleFunc("/resync", s.methodOnly(http.MethodPost, s.handleResync))
 	mux.HandleFunc("/reload", s.methodOnly(http.MethodPost, s.handleReload))
+	mux.HandleFunc("/conflict/repair", s.methodOnly(http.MethodPost, s.handleConflictRepair))
 	mux.HandleFunc("/healthz", s.methodOnly(http.MethodGet, s.handleHealthz))
 	if s.cfg.EnableMetrics {
 		mux.HandleFunc("/metrics", s.methodOnly(http.MethodGet, s.handleMetrics))

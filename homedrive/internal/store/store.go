@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 )
 
 // Store is the canonical interface for sync-state persistence consumed by
@@ -34,19 +36,39 @@ type Store interface {
 	// Delete removes the journal entry for path.
 	Delete(ctx context.Context, path string) error
 
-	// NextOldN returns the smallest positive N such that "<path>.old.<N>"
-	// has no journal entry, used when computing conflict loser filenames.
-	NextOldN(ctx context.Context, path string) (int, error)
+	// NextOldN returns the base path a new conflict loser should hang off,
+	// and the smallest positive N such that "<base><suffix(N)>" has no
+	// journal entry. See oldsuffix.NextOldN for the collapsing algorithm
+	// that fixes issue #65.
+	NextOldN(ctx context.Context, path string) (base string, n int, err error)
 
 	// RewritePrefix renames all journal paths under oldPrefix to
 	// newPrefix, used by the push syncer when a directory is renamed.
 	RewritePrefix(ctx context.Context, oldPrefix, newPrefix string) (int, error)
+
+	// ListOldSiblings returns every journal entry whose path starts with
+	// prefix. Used by the retention GC (PLAN.md §11.5) to bound its work
+	// to one prefix scan per base file instead of a full-journal walk.
+	ListOldSiblings(ctx context.Context, prefix string) ([]JournalEntry, error)
+
+	// ForEach calls fn for every journal entry. Used by the periodic
+	// retention sweep (PLAN.md §11.5).
+	ForEach(ctx context.Context, fn func(JournalEntry) error) error
 }
 
 // JournalStore adapts *Journal to the context-aware Store interface.
 type JournalStore struct {
 	J   *Journal
 	Log *slog.Logger
+
+	// Matcher controls the .old.<N> suffix format used by NextOldN. Nil
+	// falls back to the default ".old.%d" format (see Journal.NextOldN).
+	// Set this from the compiled config.ConflictCfg.OldSuffixFormat
+	// matcher during wiring (cmd/homedrive/agent.go) -- keep it the same
+	// *oldsuffix.Matcher instance used to build any other Matcher-typed
+	// field (e.g. syncer.PullerConfig.Matcher, syncer.BisyncConfig.Matcher)
+	// derived from the same config value, so collapsing decisions agree.
+	Matcher *oldsuffix.Matcher
 }
 
 // NewJournalStore creates a JournalStore wrapping j.
@@ -87,8 +109,9 @@ func (s *JournalStore) Delete(_ context.Context, path string) error {
 }
 
 // NextOldN implements Store.
-func (s *JournalStore) NextOldN(_ context.Context, path string) (int, error) {
-	return s.J.NextOldN(path), nil
+func (s *JournalStore) NextOldN(_ context.Context, path string) (string, int, error) {
+	base, n := s.J.NextOldN(s.Matcher, path)
+	return base, n, nil
 }
 
 // RewritePrefix implements Store. The audit trail for directory renames
@@ -96,4 +119,14 @@ func (s *JournalStore) NextOldN(_ context.Context, path string) (int, error) {
 // threaded through here (matching the pre-existing adapter behavior).
 func (s *JournalStore) RewritePrefix(_ context.Context, oldPrefix, newPrefix string) (int, error) {
 	return RewritePrefix(s.J, oldPrefix, newPrefix, nil, s.Log)
+}
+
+// ListOldSiblings implements Store.
+func (s *JournalStore) ListOldSiblings(_ context.Context, prefix string) ([]JournalEntry, error) {
+	return s.J.ListByPrefix(prefix)
+}
+
+// ForEach implements Store.
+func (s *JournalStore) ForEach(_ context.Context, fn func(JournalEntry) error) error {
+	return s.J.ForEach(fn)
 }

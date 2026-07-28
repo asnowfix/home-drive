@@ -191,7 +191,7 @@ func TestConflictResolver_PolicyLocalWins(t *testing.T) {
 	input := ConflictInput{
 		Path:        "file.txt",
 		LocalMtime:  now.Add(-10 * time.Second), // local is older
-		RemoteMtime: now,                         // remote is newer
+		RemoteMtime: now,                        // remote is newer
 	}
 
 	result, err := resolver.Resolve(input)
@@ -211,8 +211,8 @@ func TestConflictResolver_PolicyRemoteWins(t *testing.T) {
 	now := time.Date(2026, 4, 28, 14, 0, 0, 0, time.UTC)
 	input := ConflictInput{
 		Path:        "file.txt",
-		LocalMtime:  now,                          // local is newer
-		RemoteMtime: now.Add(-10 * time.Second),   // remote is older
+		LocalMtime:  now,                        // local is newer
+		RemoteMtime: now.Add(-10 * time.Second), // remote is older
 	}
 
 	result, err := resolver.Resolve(input)
@@ -302,6 +302,39 @@ func TestConflictResolver_SequentialConflicts(t *testing.T) {
 		if result.OldPath != expected {
 			t.Errorf("conflict #%d: OldPath = %q, want %q", i, result.OldPath, expected)
 		}
+	}
+}
+
+func TestConflictResolver_NextOldPath_CollapsesSuffix(t *testing.T) {
+	resolver, j, _ := newTestResolver(t, PolicyNewerWins)
+
+	// Regression for issue #65: a repeat conflict on an already-suffixed
+	// path must collapse onto the tracked base file.md, not nest as
+	// file.md.old.1.old.1.
+	for _, p := range []string{"file.md", "file.md.old.1"} {
+		if err := j.Put(JournalEntry{Path: p, LastOrigin: "local"}); err != nil {
+			t.Fatalf("seed %q: %v", p, err)
+		}
+	}
+
+	got := resolver.NextOldPath("file.md.old.1")
+	if got != "file.md.old.2" {
+		t.Errorf("NextOldPath(file.md.old.1) = %q, want %q", got, "file.md.old.2")
+	}
+}
+
+func TestConflictResolver_NextOldPath_DoesNotCollapseUnknownBase(t *testing.T) {
+	resolver, j, _ := newTestResolver(t, PolicyNewerWins)
+
+	// "budget" was never tracked; "budget.old.2" is a user file that
+	// merely looks like a conflict artifact.
+	if err := j.Put(JournalEntry{Path: "budget.old.2", LastOrigin: "local"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got := resolver.NextOldPath("budget.old.2")
+	if got != "budget.old.2.old.1" {
+		t.Errorf("NextOldPath(budget.old.2) = %q, want %q", got, "budget.old.2.old.1")
 	}
 }
 

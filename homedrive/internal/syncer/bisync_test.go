@@ -405,6 +405,238 @@ func TestBisync_OldNCollision(t *testing.T) {
 	}
 }
 
+// TestBisync_ConflictPrunesOldSiblingsBeyondMaxPerFile is a regression test
+// for the inline retention GC wiring (PLAN.md §11.5): a new conflict loser
+// collapses onto the next free N (per PLAN.md §11.2/#65), and the retention
+// GC then evicts older siblings beyond Retention.MaxPerFile right in the
+// same bisync pass, on whichever side they live.
+func TestBisync_ConflictPrunesOldSiblingsBeyondMaxPerFile(t *testing.T) {
+	root := t.TempDir()
+	localTime := time.Date(2026, 4, 28, 14, 0, 0, 0, time.UTC)
+	remoteTime := time.Date(2026, 4, 28, 13, 0, 0, 0, time.UTC)
+
+	createLocalFile(t, root, "conflict.txt", localTime)
+
+	remote := newMockRemoteFS()
+	journal := newMockJournal()
+	mqtt := newMockMQTT()
+	audit := &threadSafeBuffer{}
+	clk := newMockClock(time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC))
+
+	bisync, _ := NewBisync(BisyncOpts{
+		Config: BisyncConfig{
+			Interval:  time.Hour,
+			LocalRoot: root,
+			Retention: RetentionPolicy{MaxPerFile: 1},
+		},
+		Remote:  remote,
+		Journal: journal,
+		MQTT:    mqtt,
+		Audit:   audit,
+		Clock:   clk,
+		Mu:      &sync.RWMutex{},
+	})
+
+	remote.Seed("conflict.txt", remoteTime, "remote-md5")
+	remote.Seed("conflict.txt.old.1", remoteTime, "old1-md5")
+	remote.Seed("conflict.txt.old.2", remoteTime, "old2-md5")
+	journal.Seed(JournalEntry{
+		Path:        "conflict.txt",
+		LocalMtime:  time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC),
+		RemoteMtime: time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC),
+		RemoteMD5:   "old-md5",
+		LastOrigin:  "local",
+	})
+	journal.Seed(JournalEntry{
+		Path:         "conflict.txt.old.1",
+		LastSyncedAt: time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC),
+		LastOrigin:   "remote",
+	})
+	journal.Seed(JournalEntry{
+		Path:         "conflict.txt.old.2",
+		LastSyncedAt: time.Date(2026, 4, 27, 0, 0, 0, 0, time.UTC),
+		LastOrigin:   "remote",
+	})
+
+	bisync.execute(context.Background())
+
+	if !remote.HasFile("conflict.txt.old.3") {
+		t.Error("expected new loser conflict.txt.old.3 to exist")
+	}
+	if remote.HasFile("conflict.txt.old.1") {
+		t.Error("expected conflict.txt.old.1 to be pruned (beyond max_per_file: 1)")
+	}
+	if remote.HasFile("conflict.txt.old.2") {
+		t.Error("expected conflict.txt.old.2 to be pruned (beyond max_per_file: 1)")
+	}
+	if journal.Exists("conflict.txt.old.1") {
+		t.Error("expected journal entry for conflict.txt.old.1 to be deleted")
+	}
+	if journal.Exists("conflict.txt.old.2") {
+		t.Error("expected journal entry for conflict.txt.old.2 to be deleted")
+	}
+	if !journal.Exists("conflict.txt.old.3") {
+		t.Error("expected journal entry for conflict.txt.old.3 to survive (newest)")
+	}
+}
+
+// TestBisync_ShouldSweep_GatesOnInterval verifies the periodic sweep only
+// fires once SweepInterval has elapsed since lastSweep, and never when
+// SweepInterval is zero (disabled).
+func TestBisync_ShouldSweep_GatesOnInterval(t *testing.T) {
+	clk := newMockClock(time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC))
+	bisync, _ := NewBisync(BisyncOpts{
+		Config: BisyncConfig{
+			Interval:      time.Hour,
+			SweepInterval: 24 * time.Hour,
+		},
+		Remote:  newMockRemoteFS(),
+		Journal: newMockJournal(),
+		Clock:   clk,
+		Mu:      &sync.RWMutex{},
+	})
+
+	if !bisync.shouldSweep() {
+		t.Error("expected first-ever call to be due (lastSweep is zero)")
+	}
+
+	bisync.lastSweep = clk.Now()
+	if bisync.shouldSweep() {
+		t.Error("expected sweep not due immediately after running")
+	}
+
+	clk.Advance(24 * time.Hour)
+	if !bisync.shouldSweep() {
+		t.Error("expected sweep due after sweep_interval elapsed")
+	}
+
+	bisync.cfg.SweepInterval = 0
+	if bisync.shouldSweep() {
+		t.Error("expected sweep disabled when sweep_interval is 0")
+	}
+}
+
+// TestBisync_ChainRepair_RunsOnceThenSkips verifies the automatic chain
+// repair pass runs on the first execute() after upgrade, renumbers a
+// pre-existing nested chain, and is skipped on every subsequent pass
+// (guarded by the journal meta key, not re-scanning every tick).
+func TestBisync_ChainRepair_RunsOnceThenSkips(t *testing.T) {
+	root := t.TempDir()
+	createLocalFile(t, root, "notes.md", time.Now())
+	createLocalFile(t, root, "notes.md.old.1.old.1", time.Now())
+
+	remote := newMockRemoteFS()
+	journal := newMockJournal()
+	clk := newMockClock(time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC))
+
+	bisync, _ := NewBisync(BisyncOpts{
+		Config: BisyncConfig{
+			Interval:     time.Hour,
+			LocalRoot:    root,
+			RepairChains: true,
+		},
+		Remote:  remote,
+		Journal: journal,
+		Clock:   clk,
+		Mu:      &sync.RWMutex{},
+	})
+
+	bisync.execute(context.Background())
+
+	if _, err := os.Stat(filepath.Join(root, "notes.md.old.1")); err != nil {
+		t.Errorf("expected nested chain link to be renumbered to notes.md.old.1: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "notes.md.old.1.old.1")); !os.IsNotExist(err) {
+		t.Errorf("expected nested chain link to be gone, stat err = %v", err)
+	}
+	done, err := journal.GetMeta(keyChainRepair)
+	if err != nil || done != "done" {
+		t.Errorf("expected chain repair completion marker to be set, got %q, err=%v", done, err)
+	}
+
+	// Second pass: repair must not run again (nothing left to repair,
+	// and re-scanning every tick would be wasted work).
+	createLocalFile(t, root, "notes.md.old.5.old.1", time.Now())
+	bisync.execute(context.Background())
+	if _, err := os.Stat(filepath.Join(root, "notes.md.old.5.old.1")); err != nil {
+		t.Error("expected the second pass to leave a new nested-looking file untouched (repair already marked done)")
+	}
+}
+
+// TestBisync_ChainRepair_DisabledDoesNotRun verifies RepairChains: false
+// (the config opt-out) prevents the automatic pass from ever running.
+func TestBisync_ChainRepair_DisabledDoesNotRun(t *testing.T) {
+	root := t.TempDir()
+	createLocalFile(t, root, "notes.md", time.Now())
+	createLocalFile(t, root, "notes.md.old.1.old.1", time.Now())
+
+	remote := newMockRemoteFS()
+	journal := newMockJournal()
+	clk := newMockClock(time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC))
+
+	bisync, _ := NewBisync(BisyncOpts{
+		Config: BisyncConfig{
+			Interval:     time.Hour,
+			LocalRoot:    root,
+			RepairChains: false,
+		},
+		Remote:  remote,
+		Journal: journal,
+		Clock:   clk,
+		Mu:      &sync.RWMutex{},
+	})
+
+	bisync.execute(context.Background())
+
+	if _, err := os.Stat(filepath.Join(root, "notes.md.old.1.old.1")); err != nil {
+		t.Error("expected nested chain to survive untouched when repair_chains is disabled")
+	}
+	if done, _ := journal.GetMeta(keyChainRepair); done == "done" {
+		t.Error("expected completion marker to stay unset when repair_chains is disabled")
+	}
+}
+
+// TestBisync_RunChainRepair_OnDemand verifies the on-demand entry point
+// (POST /conflict/repair, `ctl conflict repair`) works even when the
+// automatic pass is disabled, and that a non-dry-run marks completion so
+// the automatic pass (if later enabled) does not repeat the work.
+func TestBisync_RunChainRepair_OnDemand(t *testing.T) {
+	root := t.TempDir()
+	createLocalFile(t, root, "notes.md", time.Now())
+	createLocalFile(t, root, "notes.md.old.1.old.1", time.Now())
+
+	remote := newMockRemoteFS()
+	journal := newMockJournal()
+	clk := newMockClock(time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC))
+
+	bisync, _ := NewBisync(BisyncOpts{
+		Config: BisyncConfig{
+			Interval:     time.Hour,
+			LocalRoot:    root,
+			RepairChains: false, // on-demand must work regardless
+		},
+		Remote:  remote,
+		Journal: journal,
+		Clock:   clk,
+		Mu:      &sync.RWMutex{},
+	})
+
+	report, err := bisync.RunChainRepair(context.Background(), false)
+	if err != nil {
+		t.Fatalf("RunChainRepair: %v", err)
+	}
+	if len(report.Links) != 1 {
+		t.Fatalf("len(Links) = %d, want 1", len(report.Links))
+	}
+	if _, err := os.Stat(filepath.Join(root, "notes.md.old.1")); err != nil {
+		t.Errorf("expected on-demand repair to renumber the chain: %v", err)
+	}
+	done, _ := journal.GetMeta(keyChainRepair)
+	if done != "done" {
+		t.Error("expected a non-dry-run on-demand repair to mark completion")
+	}
+}
+
 func TestBisync_ForceRunReturnsErrorWhenRunning(t *testing.T) {
 	root := t.TempDir()
 	bisync, _, _, _, _, _ := newTestBisync(t, root, false)

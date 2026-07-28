@@ -18,8 +18,11 @@ type AuditEntry struct {
 	OldPath    string    `json:"old_path,omitempty"`
 	NewPath    string    `json:"new_path,omitempty"`
 	FilesCount int       `json:"files_count,omitempty"`
-	DryRun     bool      `json:"dry_run,omitempty"`
-	Error      string    `json:"error,omitempty"`
+	// Reason explains a "conflict_gc" entry: "max_per_file" or "max_age"
+	// (see PLAN.md §11.5).
+	Reason string `json:"reason,omitempty"`
+	DryRun bool   `json:"dry_run,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 // Auditor appends JSONL lines to a writer (typically a file).

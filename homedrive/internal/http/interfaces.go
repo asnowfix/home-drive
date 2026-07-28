@@ -6,18 +6,18 @@ import "context"
 
 // StatusInfo holds the current agent state returned by GET /status.
 type StatusInfo struct {
-	State          string `json:"state"`
-	Version        string `json:"version"`
-	PendingUp      int    `json:"pending_up"`
-	PendingDown    int    `json:"pending_down"`
-	LastPush       string `json:"last_push,omitempty"`
-	LastPull       string `json:"last_pull,omitempty"`
-	QuotaUsedPct   int    `json:"quota_used_pct"`
-	Conflicts24h   int    `json:"conflicts_24h"`
-	BytesUp24h     int64  `json:"bytes_up_24h"`
-	BytesDown24h   int64  `json:"bytes_down_24h"`
-	DryRun         bool   `json:"dry_run"`
-	UptimeSeconds  int64  `json:"uptime_seconds"`
+	State         string `json:"state"`
+	Version       string `json:"version"`
+	PendingUp     int    `json:"pending_up"`
+	PendingDown   int    `json:"pending_down"`
+	LastPush      string `json:"last_push,omitempty"`
+	LastPull      string `json:"last_pull,omitempty"`
+	QuotaUsedPct  int    `json:"quota_used_pct"`
+	Conflicts24h  int    `json:"conflicts_24h"`
+	BytesUp24h    int64  `json:"bytes_up_24h"`
+	BytesDown24h  int64  `json:"bytes_down_24h"`
+	DryRun        bool   `json:"dry_run"`
+	UptimeSeconds int64  `json:"uptime_seconds"`
 }
 
 // ComponentHealth reports the health of a single subsystem.
@@ -48,6 +48,30 @@ type Resyncable interface {
 // Reloadable is implemented by the config loader to hot-reload configuration.
 type Reloadable interface {
 	Reload(ctx context.Context) error
+}
+
+// ChainRepairer is implemented by the syncer to run the one-time nested
+// .old.<N> chain repair pass (PLAN.md §11.5) on demand, independent of the
+// automatic first-pass-after-upgrade run.
+type ChainRepairer interface {
+	RunChainRepair(ctx context.Context, dryRun bool) (RepairReport, error)
+}
+
+// RepairedLink describes one nested .old.<N> chain link renumbered onto
+// its base's flat namespace by a chain repair pass.
+type RepairedLink struct {
+	OldPath string `json:"old_path"`
+	NewPath string `json:"new_path"`
+	Side    string `json:"side"`
+}
+
+// RepairReport summarizes one chain repair pass, returned by
+// POST /conflict/repair.
+type RepairReport struct {
+	Scanned  int            `json:"scanned"`
+	Repaired int            `json:"repaired"`
+	Links    []RepairedLink `json:"links,omitempty"`
+	DryRun   bool           `json:"dry_run"`
 }
 
 // StatusProvider returns the current agent status.

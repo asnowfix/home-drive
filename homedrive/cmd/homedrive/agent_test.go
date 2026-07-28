@@ -72,8 +72,8 @@ func newIntegrationTestAgent(t *testing.T) (*Agent, *fakeRemoteFS) {
 		t.Fatalf("build watcher: %v", err)
 	}
 	a.buildPushSyncer(noopPublisher{}, nil)
-	a.buildPuller(noopPublisher{}, nil)
-	a.buildBisync(noopPublisher{}, nil)
+	a.buildPuller(noopPublisher{}, nil, nil)
+	a.buildBisync(noopPublisher{}, nil, nil)
 	if err := a.buildHTTPServer(); err != nil {
 		t.Fatalf("build http server: %v", err)
 	}
@@ -208,12 +208,12 @@ func runAgentInBackgroundNoAutoCancel(t *testing.T, a *Agent) (context.Context, 
 func TestBuildAuditLog_Disabled_ReturnsNils(t *testing.T) {
 	cfg := &config.Config{} // State.AuditLog is empty
 
-	adapter, raw, f, err := buildAuditLog(cfg, slog.Default())
+	adapter, auditor, raw, f, err := buildAuditLog(cfg, slog.Default())
 	if err != nil {
 		t.Fatalf("buildAuditLog: %v", err)
 	}
-	if adapter != nil || raw != nil || f != nil {
-		t.Errorf("expected all nils when audit_log is unset, got adapter=%v raw=%v f=%v", adapter, raw, f)
+	if adapter != nil || auditor != nil || raw != nil || f != nil {
+		t.Errorf("expected all nils when audit_log is unset, got adapter=%v auditor=%v raw=%v f=%v", adapter, auditor, raw, f)
 	}
 }
 
@@ -222,14 +222,14 @@ func TestBuildAuditLog_Enabled_OpensFile(t *testing.T) {
 		State: config.StateConfig{AuditLog: filepath.Join(t.TempDir(), "nested", "audit.jsonl")},
 	}
 
-	adapter, raw, f, err := buildAuditLog(cfg, slog.Default())
+	adapter, auditor, raw, f, err := buildAuditLog(cfg, slog.Default())
 	if err != nil {
 		t.Fatalf("buildAuditLog: %v", err)
 	}
 	t.Cleanup(func() { _ = f.Close() })
 
-	if adapter == nil || raw == nil || f == nil {
-		t.Fatal("expected non-nil adapter, raw writer, and file")
+	if adapter == nil || auditor == nil || raw == nil || f == nil {
+		t.Fatal("expected non-nil adapter, auditor, raw writer, and file")
 	}
 	if err := adapter.Log(syncer.AuditEntry{Op: "push"}); err != nil {
 		t.Fatalf("adapter.Log: %v", err)

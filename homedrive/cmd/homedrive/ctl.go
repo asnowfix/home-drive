@@ -80,6 +80,36 @@ func ctlRunAction(cmd *cobra.Command, action string) error {
 	return nil
 }
 
+// ctlRunConflictRepair calls POST /conflict/repair (optionally with
+// ?dry_run=1) and logs the result.
+func ctlRunConflictRepair(cmd *cobra.Command, dryRun bool) error {
+	addr, token := ctlTarget(ctlConfigPath(cmd))
+
+	path := "/conflict/repair"
+	if dryRun {
+		path += "?dry_run=1"
+	}
+
+	var report httpctl.RepairReport
+	if err := ctlDo(cmd.Context(), http.MethodPost, addr, token, path, &report); err != nil {
+		return err
+	}
+
+	slog.Info("chain repair complete",
+		"scanned", report.Scanned,
+		"repaired", report.Repaired,
+		"dry_run", report.DryRun,
+	)
+	for _, link := range report.Links {
+		slog.Info("chain repair link",
+			"old_path", link.OldPath,
+			"new_path", link.NewPath,
+			"side", link.Side,
+		)
+	}
+	return nil
+}
+
 // ctlConfigPath reads the --config flag, which is registered as a
 // persistent flag on the `ctl` parent command and inherited by every
 // subcommand.

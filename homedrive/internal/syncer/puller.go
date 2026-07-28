@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 )
 
 // PullerConfig configures the pull loop.
@@ -18,6 +20,23 @@ type PullerConfig struct {
 
 	// ConflictPolicy determines how conflicts are resolved.
 	ConflictPolicy ConflictPolicy
+
+	// Matcher controls the .old.<N> suffix format used when naming
+	// conflict losers. Defaults to the default ".old.%d" format if nil
+	// (see oldsuffix.New). Set from config.ConflictCfg.OldSuffixFormat
+	// during wiring (cmd/homedrive/agent.go).
+	Matcher *oldsuffix.Matcher
+
+	// Retention bounds .old.<N> conflict-loser retention (PLAN.md
+	// §11.5), applied inline right after a new loser is recorded.
+	Retention RetentionPolicy
+
+	// Auditor, if non-nil, receives "conflict_gc" JSONL lines from the
+	// retention GC. Distinct from the AuditLogger passed to NewPuller
+	// (which only forwards a subset of AuditEntry fields): this is the
+	// same *store.Auditor instance used directly so the Reason field
+	// reaches the log.
+	Auditor *Auditor
 
 	// DryRun when true logs intended actions without writing.
 	DryRun bool
@@ -49,6 +68,9 @@ func NewPuller(
 	}
 	if cfg.ConflictPolicy == "" {
 		cfg.ConflictPolicy = PolicyNewerWins
+	}
+	if cfg.Matcher == nil {
+		cfg.Matcher, _ = oldsuffix.New("") // never errors for the empty/default format
 	}
 	if clockFn == nil {
 		clockFn = time.Now

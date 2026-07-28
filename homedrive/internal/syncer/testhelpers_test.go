@@ -79,11 +79,13 @@ func (c *mockClock) After(_ time.Duration) <-chan time.Time {
 type mockJournal struct {
 	mu      sync.Mutex
 	entries map[string]JournalEntry
+	meta    map[string]string
 }
 
 func newMockJournal() *mockJournal {
 	return &mockJournal{
 		entries: make(map[string]JournalEntry),
+		meta:    make(map[string]string),
 	}
 }
 
@@ -115,6 +117,53 @@ func (j *mockJournal) Seed(entry JournalEntry) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.entries[entry.Path] = entry
+}
+
+func (j *mockJournal) Delete(path string) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	delete(j.entries, path)
+	return nil
+}
+
+func (j *mockJournal) ListByPrefix(prefix string) ([]JournalEntry, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var out []JournalEntry
+	for p, e := range j.entries {
+		if strings.HasPrefix(p, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+func (j *mockJournal) ForEach(fn func(JournalEntry) error) error {
+	j.mu.Lock()
+	entries := make([]JournalEntry, 0, len(j.entries))
+	for _, e := range j.entries {
+		entries = append(entries, e)
+	}
+	j.mu.Unlock()
+	for _, e := range entries {
+		if err := fn(e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (j *mockJournal) GetMeta(key []byte) (string, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.meta[string(key)], nil
+}
+
+func (j *mockJournal) SetMeta(key []byte, val string) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.meta[string(key)] = val
+	return nil
 }
 
 // ---------------------------------------------------------------------------

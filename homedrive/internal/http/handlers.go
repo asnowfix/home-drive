@@ -71,6 +71,23 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
 
+// handleConflictRepair serves POST /conflict/repair to run the nested
+// .old.<N> chain repair pass on demand. A "dry_run=1" query parameter
+// previews what would be renumbered without renaming anything.
+func (s *Server) handleConflictRepair(w http.ResponseWriter, r *http.Request) {
+	s.metrics.IncCounter("homedrive_http_requests_total_conflict_repair")
+
+	dryRun := r.URL.Query().Get("dry_run") == "1"
+	report, err := s.deps.ChainRepairer.RunChainRepair(r.Context(), dryRun)
+	if err != nil {
+		s.log.Error("chain repair failed", "error", err)
+		s.writeError(w, http.StatusInternalServerError, "chain repair failed")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, report)
+}
+
 // handleHealthz serves GET /healthz, returning 200 when all components are
 // healthy and 503 when any component is unhealthy.
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {

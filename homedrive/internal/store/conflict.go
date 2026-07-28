@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 )
 
 // ConflictPolicy defines how conflicts are resolved.
@@ -26,9 +28,9 @@ const (
 
 // Sentinel errors for conflict resolution.
 var (
-	ErrConflict       = errors.New("store: conflict detected")
-	ErrRenameFailed   = errors.New("store: loser rename failed")
-	ErrUnknownPolicy  = errors.New("store: unknown conflict policy")
+	ErrConflict      = errors.New("store: conflict detected")
+	ErrRenameFailed  = errors.New("store: loser rename failed")
+	ErrUnknownPolicy = errors.New("store: unknown conflict policy")
 )
 
 // ConflictResult describes the outcome of a conflict resolution.
@@ -85,8 +87,7 @@ func (r *ConflictResolver) Resolve(input ConflictInput) (ConflictResult, error) 
 		loser = SideLocal
 	}
 
-	oldN := r.nextOldN(input.Path)
-	oldPath := fmt.Sprintf("%s"+r.OldSuffixFormat, input.Path, oldN)
+	_, oldPath := r.nextOldPath(input.Path)
 
 	// Record the .old.<N> path in the journal so future conflicts
 	// see it when computing the next N.
@@ -184,22 +185,33 @@ func (r *ConflictResolver) newerWins(input ConflictInput) (ConflictSide, string,
 	}
 }
 
-// nextOldN finds the smallest positive integer N such that
-// "<path>.old.<N>" does not exist in the journal.
-func (r *ConflictResolver) nextOldN(path string) int {
-	n := 1
-	for {
-		candidate := fmt.Sprintf("%s"+r.OldSuffixFormat, path, n)
-		if !r.journal.Exists(candidate) {
-			return n
-		}
-		n++
+// matcher compiles r.OldSuffixFormat into an oldsuffix.Matcher, falling
+// back to the default ".old.%d" format if OldSuffixFormat is empty or
+// invalid. OldSuffixFormat is normally validated once at config-load
+// time (internal/config.Load); this fallback only matters for a caller
+// that mutates the exported field directly after construction.
+func (r *ConflictResolver) matcher() *oldsuffix.Matcher {
+	m, err := oldsuffix.New(r.OldSuffixFormat)
+	if err != nil {
+		m, _ = oldsuffix.New("")
 	}
+	return m
+}
+
+// nextOldPath computes the base path a new conflict loser should hang
+// off, and the .old.<N> path to actually use, delegating to
+// oldsuffix.NextOldN so an already-suffixed path collapses onto its
+// tracked base instead of nesting a new suffix on top (issue #65; see
+// the homedrive-conflict-resolution skill and PLAN.md §11.2/§11.5).
+func (r *ConflictResolver) nextOldPath(path string) (base, oldPath string) {
+	m := r.matcher()
+	base, n := oldsuffix.NextOldN(m, path, r.journal.Exists)
+	return base, m.Format(base, n)
 }
 
 // NextOldPath computes the next .old.<N> path for a given base path
 // without recording it. Useful for callers that need to preview.
 func (r *ConflictResolver) NextOldPath(path string) string {
-	n := r.nextOldN(path)
-	return fmt.Sprintf("%s"+r.OldSuffixFormat, path, n)
+	_, oldPath := r.nextOldPath(path)
+	return oldPath
 }

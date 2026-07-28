@@ -49,6 +49,11 @@ pull:
 conflict:
   policy: newer_wins
   old_suffix_format: ".old.%d"
+  retention:
+    max_per_file: 3    # keep N newest .old.<N> siblings per base file; 0 = unlimited
+    max_age: 0s         # expire siblings older than this; 0s = never (default)
+    sweep_interval: 24h  # periodic full-journal sweep; 0s = disabled
+  repair_chains: true  # one-time collapse of pre-existing nested chains, see PLAN.md §11.5
 
 state:
   # systemd StateDirectory=homedrive/%i creates /var/lib/homedrive/<user>/

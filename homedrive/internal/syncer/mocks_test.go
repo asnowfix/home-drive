@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 )
 
 // mockRemoteFS is a thread-safe in-memory RemoteFS for testing.
@@ -173,11 +176,11 @@ func (m *mockRemoteFS) Seed(path string, modTime time.Time, md5 string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.files[path] = RemoteObject{
-		Path:    path,
-		Size:    100,
-		MD5:     md5,
-		ModTime: modTime,
-		RemoteID:      "id-" + path,
+		Path:     path,
+		Size:     100,
+		MD5:      md5,
+		ModTime:  modTime,
+		RemoteID: "id-" + path,
 	}
 }
 
@@ -241,12 +244,18 @@ type mockStore struct {
 	pageToken    string
 	rewriteCalls [][2]string
 	rewriteCount int
+
+	// matcher controls NextOldN's suffix parsing/formatting. Defaults to
+	// the default ".old.%d" format when nil (see newMockStore).
+	matcher *oldsuffix.Matcher
 }
 
 func newMockStore() *mockStore {
+	m, _ := oldsuffix.New("") // never errors for the empty/default format
 	return &mockStore{
 		entries:      make(map[string]JournalEntry),
 		rewriteCount: 42,
+		matcher:      m,
 	}
 }
 
@@ -284,17 +293,42 @@ func (s *mockStore) Delete(_ context.Context, path string) error {
 	return nil
 }
 
-func (s *mockStore) NextOldN(_ context.Context, path string) (int, error) {
+func (s *mockStore) NextOldN(_ context.Context, path string) (string, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	n := 1
-	for {
-		candidate := fmt.Sprintf("%s.old.%d", path, n)
-		if _, ok := s.entries[candidate]; !ok {
-			return n, nil
-		}
-		n++
+	exists := func(p string) bool {
+		_, ok := s.entries[p]
+		return ok
 	}
+	base, n := oldsuffix.NextOldN(s.matcher, path, exists)
+	return base, n, nil
+}
+
+func (s *mockStore) ListOldSiblings(_ context.Context, prefix string) ([]JournalEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []JournalEntry
+	for p, e := range s.entries {
+		if strings.HasPrefix(p, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+func (s *mockStore) ForEach(_ context.Context, fn func(JournalEntry) error) error {
+	s.mu.Lock()
+	entries := make([]JournalEntry, 0, len(s.entries))
+	for _, e := range s.entries {
+		entries = append(entries, e)
+	}
+	s.mu.Unlock()
+	for _, e := range entries {
+		if err := fn(e); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *mockStore) RewritePrefix(_ context.Context, oldPrefix, newPrefix string) (int, error) {

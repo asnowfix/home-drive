@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 )
 
 // ---------------------------------------------------------------------------
@@ -265,8 +267,8 @@ func (b *Bisync) resolveConflict(ctx context.Context, d FileDiff) error {
 
 // resolveLocalWins uploads local version, renames remote to .old.<N>.
 func (b *Bisync) resolveLocalWins(ctx context.Context, d FileDiff) error {
-	oldN := b.nextOldN(d.Path)
-	oldPath := fmt.Sprintf("%s.old.%d", d.Path, oldN)
+	base, oldN := oldsuffix.NextOldN(b.cfg.Matcher, d.Path, b.journal.Exists)
+	oldPath := b.cfg.Matcher.Format(base, oldN)
 
 	b.log.Info("bisync conflict resolved: local wins",
 		"path", d.Path,
@@ -300,19 +302,24 @@ func (b *Bisync) resolveLocalWins(ctx context.Context, d FileDiff) error {
 		return fmt.Errorf("journal put %s: %w", d.Path, err)
 	}
 
-	return b.journal.Put(JournalEntry{
+	if err := b.journal.Put(JournalEntry{
 		Path:         oldPath,
 		RemoteMtime:  d.RemoteInfo.ModTime,
 		RemoteMD5:    d.RemoteInfo.MD5,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "remote",
-	})
+	}); err != nil {
+		return fmt.Errorf("journal put %s: %w", oldPath, err)
+	}
+
+	b.markForPrune(base)
+	return nil
 }
 
 // resolveRemoteWins downloads remote version, renames local to .old.<N>.
 func (b *Bisync) resolveRemoteWins(ctx context.Context, d FileDiff) error {
-	oldN := b.nextOldN(d.Path)
-	oldPath := fmt.Sprintf("%s.old.%d", d.Path, oldN)
+	base, oldN := oldsuffix.NextOldN(b.cfg.Matcher, d.Path, b.journal.Exists)
+	oldPath := b.cfg.Matcher.Format(base, oldN)
 
 	b.log.Info("bisync conflict resolved: remote wins",
 		"path", d.Path,
@@ -349,23 +356,15 @@ func (b *Bisync) resolveRemoteWins(ctx context.Context, d FileDiff) error {
 		return fmt.Errorf("journal put %s: %w", d.Path, err)
 	}
 
-	return b.journal.Put(JournalEntry{
+	if err := b.journal.Put(JournalEntry{
 		Path:         oldPath,
 		LocalMtime:   d.LocalInfo.ModTime,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "local",
-	})
-}
-
-// nextOldN computes the smallest positive integer N such that
-// <path>.old.<N> does not exist in the journal.
-func (b *Bisync) nextOldN(path string) int {
-	n := 1
-	for {
-		candidate := fmt.Sprintf("%s.old.%d", path, n)
-		if !b.journal.Exists(candidate) {
-			return n
-		}
-		n++
+	}); err != nil {
+		return fmt.Errorf("journal put %s: %w", oldPath, err)
 	}
+
+	b.markForPrune(base)
+	return nil
 }

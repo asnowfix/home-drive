@@ -20,6 +20,7 @@ import (
 
 	"github.com/asnowfix/home-drive/homedrive/internal/config"
 	"github.com/asnowfix/home-drive/homedrive/internal/mqtt"
+	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 	"github.com/asnowfix/home-drive/homedrive/internal/store"
 	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
@@ -38,6 +39,12 @@ type Agent struct {
 
 	journal   *store.Journal
 	auditFile *os.File // nil if audit logging is disabled
+
+	// oldSuffixMatcher is compiled once from cfg.Conflict.OldSuffixFormat
+	// and shared (same pointer) across every component that names or
+	// parses conflict-loser paths, so their collapsing decisions
+	// (oldsuffix.NextOldN) always agree. See PLAN.md §11.2/§11.5.
+	oldSuffixMatcher *oldsuffix.Matcher
 
 	rfs rcloneclient.RemoteFS
 
@@ -108,7 +115,7 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 		return nil, fmt.Errorf("open journal: %w", err)
 	}
 
-	auditAdapter, rawAudit, auditFile, err := buildAuditLog(cfg, log)
+	auditAdapter, auditor, rawAudit, auditFile, err := buildAuditLog(cfg, log)
 	if err != nil {
 		_ = journal.Close()
 		return nil, err
@@ -133,19 +140,30 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 		return nil, err
 	}
 
+	// config.Load already validated cfg.Conflict.OldSuffixFormat, so this
+	// cannot actually fail here; treat a failure as an internal
+	// invariant violation rather than silently falling back.
+	matcher, err := oldsuffix.New(cfg.Conflict.OldSuffixFormat)
+	if err != nil {
+		_ = journal.Close()
+		closeAuditFile(auditFile, log)
+		return nil, fmt.Errorf("compile old-suffix matcher: %w", err)
+	}
+
 	a := &Agent{
-		cfg:         cfg,
-		configPath:  opts.ConfigPath,
-		version:     opts.Version,
-		log:         log,
-		logLevel:    opts.LogLevel,
-		journal:     journal,
-		auditFile:   auditFile,
-		rfs:         rfs,
-		mqttReal:    mqttReal,
-		bisyncMu:    &sync.RWMutex{},
-		pushEvents:  make(chan syncer.Event, cfg.Push.Workers*4+4),
-		pushRenames: make(chan syncer.DirRename, cfg.Push.Workers*4+4),
+		cfg:              cfg,
+		configPath:       opts.ConfigPath,
+		version:          opts.Version,
+		log:              log,
+		logLevel:         opts.LogLevel,
+		journal:          journal,
+		auditFile:        auditFile,
+		oldSuffixMatcher: matcher,
+		rfs:              rfs,
+		mqttReal:         mqttReal,
+		bisyncMu:         &sync.RWMutex{},
+		pushEvents:       make(chan syncer.Event, cfg.Push.Workers*4+4),
+		pushRenames:      make(chan syncer.DirRename, cfg.Push.Workers*4+4),
 	}
 	a.reloadedDryRun.Store(cfg.DryRun)
 
@@ -154,8 +172,8 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 		return nil, err
 	}
 	a.buildPushSyncer(pub, auditAdapter)
-	a.buildPuller(pub, auditAdapter)
-	a.buildBisync(pub, rawAudit)
+	a.buildPuller(pub, auditAdapter, auditor)
+	a.buildBisync(pub, rawAudit, auditor)
 	if err := a.buildHTTPServer(); err != nil {
 		a.closeResources()
 		return nil, err
@@ -167,19 +185,20 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 // buildAuditLog opens the JSONL audit log file (if configured) and returns
 // the syncer.AuditLogger adapter, the raw io.Writer for bisync, and the
 // underlying *os.File so it can be closed on shutdown.
-func buildAuditLog(cfg *config.Config, log *slog.Logger) (syncer.AuditLogger, io.Writer, *os.File, error) {
+func buildAuditLog(cfg *config.Config, log *slog.Logger) (syncer.AuditLogger, *store.Auditor, io.Writer, *os.File, error) {
 	if cfg.State.AuditLog == "" {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(cfg.State.AuditLog), 0o755); err != nil {
-		return nil, nil, nil, fmt.Errorf("create audit log dir: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("create audit log dir: %w", err)
 	}
 	f, err := os.OpenFile(cfg.State.AuditLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("open audit log: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("open audit log: %w", err)
 	}
-	adapter := &auditLoggerAdapter{a: store.NewAuditor(f, log)}
-	return adapter, f, f, nil
+	auditor := store.NewAuditor(f, log)
+	adapter := &auditLoggerAdapter{a: auditor}
+	return adapter, auditor, f, f, nil
 }
 
 func closeAuditFile(f *os.File, log *slog.Logger) {
@@ -255,10 +274,12 @@ func (a *Agent) buildPushSyncer(pub syncer.Publisher, audit syncer.AuditLogger) 
 		DryRun:    a.cfg.DryRun,
 		LocalRoot: a.cfg.LocalRoot,
 	}
+	js := store.NewJournalStore(a.journal, a.log)
+	js.Matcher = a.oldSuffixMatcher
 	a.pushSyncer = syncer.New(
 		pushCfg,
 		a.rfs,
-		store.NewJournalStore(a.journal, a.log),
+		js,
 		audit,
 		pub,
 		a.log,
@@ -267,20 +288,25 @@ func (a *Agent) buildPushSyncer(pub syncer.Publisher, audit syncer.AuditLogger) 
 }
 
 // buildPuller constructs the Drive Changes API poller per cfg.Pull.
-func (a *Agent) buildPuller(pub syncer.Publisher, audit syncer.AuditLogger) {
+func (a *Agent) buildPuller(pub syncer.Publisher, audit syncer.AuditLogger, auditor *store.Auditor) {
 	interval := a.cfg.Pull.ChangesAPIInterval.Duration
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
+	js := store.NewJournalStore(a.journal, a.log)
+	js.Matcher = a.oldSuffixMatcher
 	a.puller = syncer.NewPuller(
 		syncer.PullerConfig{
 			Interval:       interval,
 			LocalRoot:      a.cfg.LocalRoot,
 			ConflictPolicy: syncer.ConflictPolicy(a.cfg.Conflict.Policy),
+			Matcher:        a.oldSuffixMatcher,
+			Retention:      retentionPolicy(a.cfg.Conflict.Retention),
+			Auditor:        auditor,
 			DryRun:         a.cfg.DryRun,
 		},
 		a.rfs,
-		store.NewJournalStore(a.journal, a.log),
+		js,
 		audit,
 		pub,
 		a.log,
@@ -290,16 +316,20 @@ func (a *Agent) buildPuller(pub syncer.Publisher, audit syncer.AuditLogger) {
 
 // buildBisync constructs the hourly bisync safety net per cfg.Pull.BisyncInterval,
 // sharing bisyncMu with the push syncer and the pull loop.
-func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer) {
+func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer, auditor *store.Auditor) {
 	interval := a.cfg.Pull.BisyncInterval.Duration
 	if interval <= 0 {
 		interval = time.Hour
 	}
 	b, _ := syncer.NewBisync(syncer.BisyncOpts{
 		Config: syncer.BisyncConfig{
-			Interval:  interval,
-			LocalRoot: a.cfg.LocalRoot,
-			DryRun:    a.cfg.DryRun,
+			Interval:      interval,
+			LocalRoot:     a.cfg.LocalRoot,
+			DryRun:        a.cfg.DryRun,
+			Matcher:       a.oldSuffixMatcher,
+			Retention:     retentionPolicy(a.cfg.Conflict.Retention),
+			SweepInterval: a.cfg.Conflict.Retention.SweepInterval.Duration,
+			RepairChains:  a.cfg.Conflict.RepairChains == nil || *a.cfg.Conflict.RepairChains,
 		},
 		Remote:  a.rfs,
 		Journal: &bisyncJournalAdapter{j: a.journal},
@@ -307,8 +337,18 @@ func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer) {
 		Audit:   rawAudit,
 		Logger:  a.log,
 		Mu:      a.bisyncMu,
+		Auditor: auditor,
 	})
 	a.bisync = b
+}
+
+// retentionPolicy converts config.RetentionCfg (YAML-facing) to
+// syncer.RetentionPolicy (the type PruneOldSiblings/SweepOldFiles consume).
+func retentionPolicy(cfg config.RetentionCfg) syncer.RetentionPolicy {
+	return syncer.RetentionPolicy{
+		MaxPerFile: cfg.MaxPerFile,
+		MaxAge:     cfg.MaxAge.Duration,
+	}
 }
 
 // buildHTTPServer constructs the HTTP control endpoint per cfg.HTTP. It
@@ -327,6 +367,7 @@ func (a *Agent) buildHTTPServer() error {
 			Reloadable:     a,
 			StatusProvider: a,
 			HealthChecker:  a,
+			ChainRepairer:  a,
 		},
 		nil,
 		a.log,
