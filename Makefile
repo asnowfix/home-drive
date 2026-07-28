@@ -44,9 +44,13 @@ test-linux: dev-setup
 test-pi:
 	ssh fix@nas.local 'cd /tmp/homedrive-test && go test ./...'
 
+# Installs to /usr/bin, matching install-package and the systemd unit's
+# ExecStart=/usr/bin/homedrive run -- NOT /usr/local/bin. Diverging from
+# that path would leave a stale binary shadowing the real one on PATH
+# for anyone running `homedrive` interactively (see issue #68).
 deploy-pi: build-arm64
 	scp $(DIST)/$(BINARY)-arm64 fix@nas.local:/tmp/$(BINARY)
-	ssh fix@nas.local 'sudo install /tmp/$(BINARY) /usr/local/bin/'
+	ssh fix@nas.local 'sudo install /tmp/$(BINARY) /usr/bin/'
 	ssh fix@nas.local 'sudo systemctl restart homedrive@fix.service'
 
 # Provision the OrbStack `dev` machine if it does not exist.
