@@ -22,32 +22,53 @@ import (
 // unset in config.
 const defaultCtlAddr = "127.0.0.1:6090"
 
-// ctlHTTPTimeout bounds every ctl HTTP call.
-const ctlHTTPTimeout = 10 * time.Second
+// defaultCtlHTTPTimeout bounds every ctl HTTP call when neither the
+// --timeout flag nor http.ctl_timeout in the config file is set. See
+// ctlEffectiveTimeout.
+const defaultCtlHTTPTimeout = 10 * time.Second
 
-// ctlTarget resolves the control endpoint address and auth token from the
-// config file at configPath, falling back to the default loopback address
-// and no token if the config cannot be loaded or does not set http.listen.
-func ctlTarget(configPath string) (addr, token string) {
+// ctlTarget resolves the control endpoint address, auth token, and
+// configured default HTTP timeout from the config file at configPath,
+// falling back to the default loopback address, no token, and a zero
+// timeout (meaning "fall through to defaultCtlHTTPTimeout") if the config
+// cannot be loaded or does not set the corresponding fields.
+func ctlTarget(configPath string) (addr, token string, cfgTimeout time.Duration) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		slog.Warn("ctl: failed to load config, using default control address",
 			"config", configPath, "default_addr", defaultCtlAddr, "error", err)
-		return defaultCtlAddr, ""
+		return defaultCtlAddr, "", 0
 	}
 	addr = cfg.HTTP.Listen
 	if addr == "" {
 		addr = defaultCtlAddr
 	}
-	return addr, cfg.HTTP.AuthToken
+	return addr, cfg.HTTP.AuthToken, cfg.HTTP.CtlTimeout.Duration
+}
+
+// ctlEffectiveTimeout resolves the HTTP timeout for a single ctl call: an
+// explicit --timeout flag takes precedence, then http.ctl_timeout from the
+// config file (cfgTimeout, as returned by ctlTarget), then
+// defaultCtlHTTPTimeout.
+func ctlEffectiveTimeout(cmd *cobra.Command, cfgTimeout time.Duration) time.Duration {
+	if cmd.Flags().Changed("timeout") {
+		if t, err := cmd.Flags().GetDuration("timeout"); err == nil {
+			return t
+		}
+	}
+	if cfgTimeout > 0 {
+		return cfgTimeout
+	}
+	return defaultCtlHTTPTimeout
 }
 
 // ctlRunStatus calls GET /status and logs the agent's real state.
 func ctlRunStatus(cmd *cobra.Command) error {
-	addr, token := ctlTarget(ctlConfigPath(cmd))
+	addr, token, cfgTimeout := ctlTarget(ctlConfigPath(cmd))
+	timeout := ctlEffectiveTimeout(cmd, cfgTimeout)
 
 	var info httpctl.StatusInfo
-	if err := ctlDo(cmd.Context(), http.MethodGet, addr, token, "/status", &info); err != nil {
+	if err := ctlDo(cmd.Context(), http.MethodGet, addr, token, timeout, "/status", &info); err != nil {
 		return err
 	}
 
@@ -69,10 +90,11 @@ func ctlRunStatus(cmd *cobra.Command) error {
 // ctlRunAction calls POST /<action> (pause, resume, or resync) and logs
 // the agent's real response.
 func ctlRunAction(cmd *cobra.Command, action string) error {
-	addr, token := ctlTarget(ctlConfigPath(cmd))
+	addr, token, cfgTimeout := ctlTarget(ctlConfigPath(cmd))
+	timeout := ctlEffectiveTimeout(cmd, cfgTimeout)
 
 	var result map[string]string
-	if err := ctlDo(cmd.Context(), http.MethodPost, addr, token, "/"+action, &result); err != nil {
+	if err := ctlDo(cmd.Context(), http.MethodPost, addr, token, timeout, "/"+action, &result); err != nil {
 		return err
 	}
 
@@ -83,7 +105,8 @@ func ctlRunAction(cmd *cobra.Command, action string) error {
 // ctlRunConflictRepair calls POST /conflict/repair (optionally with
 // ?dry_run=1) and logs the result.
 func ctlRunConflictRepair(cmd *cobra.Command, dryRun bool) error {
-	addr, token := ctlTarget(ctlConfigPath(cmd))
+	addr, token, cfgTimeout := ctlTarget(ctlConfigPath(cmd))
+	timeout := ctlEffectiveTimeout(cmd, cfgTimeout)
 
 	path := "/conflict/repair"
 	if dryRun {
@@ -91,7 +114,7 @@ func ctlRunConflictRepair(cmd *cobra.Command, dryRun bool) error {
 	}
 
 	var report httpctl.RepairReport
-	if err := ctlDo(cmd.Context(), http.MethodPost, addr, token, path, &report); err != nil {
+	if err := ctlDo(cmd.Context(), http.MethodPost, addr, token, timeout, path, &report); err != nil {
 		return err
 	}
 
@@ -122,10 +145,11 @@ func ctlConfigPath(cmd *cobra.Command) string {
 // endpoint and decodes the JSON response into out (skipped if out is nil).
 // If token is non-empty, it is sent as an "Authorization: Bearer <token>"
 // header, matching the auth the server enforces when http.auth_token is
-// configured (see PLAN.md §12).
-func ctlDo(ctx context.Context, method, addr, token, path string, out any) error {
+// configured (see PLAN.md §12). timeout bounds the whole request; see
+// ctlEffectiveTimeout for how it is resolved.
+func ctlDo(ctx context.Context, method, addr, token string, timeout time.Duration, path string, out any) error {
 	url := "http://" + addr + path
-	reqCtx, cancel := context.WithTimeout(ctx, ctlHTTPTimeout)
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, method, url, nil)

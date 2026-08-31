@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -115,6 +116,7 @@ func runAgent(cmd *cobra.Command, configPath string, logLevel *slog.LevelVar) er
 
 func newCtlCmd() *cobra.Command {
 	var configPath string
+	var timeout time.Duration
 
 	ctl := &cobra.Command{
 		Use:   "ctl",
@@ -122,6 +124,9 @@ func newCtlCmd() *cobra.Command {
 	}
 	ctl.PersistentFlags().StringVar(&configPath, "config", defaultConfigPath(),
 		"path to config file (used to find the control endpoint address)")
+	ctl.PersistentFlags().DurationVar(&timeout, "timeout", 0,
+		"HTTP timeout for control endpoint calls (default: http.ctl_timeout from "+
+			"config, or 10s if that is also unset)")
 
 	ctl.AddCommand(newCtlStatusCmd())
 	ctl.AddCommand(newCtlPauseCmd())
