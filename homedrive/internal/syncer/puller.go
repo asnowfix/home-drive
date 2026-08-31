@@ -217,8 +217,19 @@ func (p *Puller) fetchChanges(ctx context.Context, token string) (Changes, error
 		return Changes{}, fmt.Errorf("listing changes: %w", err)
 	}
 
-	// 410 GONE: token is stale, reset.
-	p.log.Warn("page token expired (410 GONE), resetting",
+	// Token is unusable, reset it. errors.Is(err, ErrGone) covers two
+	// distinguishable causes (issue #64): the classic HTTP 410 GONE (Drive
+	// once recognized this token and it has since expired), and a wrapped
+	// ErrTokenRejected (currently HTTP 400: Drive never recognized this
+	// token at all, e.g. a corrupted/stale-shape token surviving an
+	// upgrade). Both take the identical reset-and-full-walk path below;
+	// only the log line and MQTT event text differ, so operators/logs can
+	// tell the two apart.
+	resetReason := "page token expired (410 GONE), resetting"
+	if errors.Is(err, ErrTokenRejected) {
+		resetReason = "page token rejected by Drive (not 410 GONE), resetting"
+	}
+	p.log.Warn(resetReason,
 		"op", "pull",
 		"stale_token", token,
 	)
@@ -226,7 +237,7 @@ func (p *Puller) fetchChanges(ctx context.Context, token string) (Changes, error
 		_ = p.pub.PublishJSON(p.pub.Topic("events", "pull.failure"), map[string]any{
 			"ts":    p.clock().UTC().Format(time.RFC3339),
 			"type":  "pull.failure",
-			"error": "page token expired (410 GONE), resetting",
+			"error": resetReason,
 		})
 	}
 

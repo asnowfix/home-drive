@@ -22,8 +22,13 @@ type mockRemoteFS struct {
 	// the Changes at that token and moves to the next.
 	changes     map[string]Changes
 	startToken  string
-	goneTokens  map[string]bool // tokens that trigger ErrGone
-	downloadErr map[string]error
+	goneTokens  map[string]bool // tokens that trigger ErrGone (410-style)
+	// rejectedTokens simulates the non-410 "Drive never recognized this
+	// token" case (issue #64), e.g. HTTP 400 for a corrupted/stale-shape
+	// token. Also triggers the reset path, but errors.Is(err,
+	// ErrTokenRejected) is true in addition to errors.Is(err, ErrGone).
+	rejectedTokens map[string]bool
+	downloadErr    map[string]error
 	quota       Quota
 
 	// error hooks for push tests
@@ -54,10 +59,11 @@ type moveCall struct {
 
 func newMockRemoteFS() *mockRemoteFS {
 	return &mockRemoteFS{
-		files:       make(map[string]RemoteObject),
-		changes:     make(map[string]Changes),
-		goneTokens:  make(map[string]bool),
-		downloadErr: make(map[string]error),
+		files:          make(map[string]RemoteObject),
+		changes:        make(map[string]Changes),
+		goneTokens:     make(map[string]bool),
+		rejectedTokens: make(map[string]bool),
+		downloadErr:    make(map[string]error),
 	}
 }
 
@@ -125,6 +131,9 @@ func (m *mockRemoteFS) ListChanges(_ context.Context, pageToken string) (Changes
 	defer m.mu.Unlock()
 	if m.goneTokens[pageToken] {
 		return Changes{}, ErrGone
+	}
+	if m.rejectedTokens[pageToken] {
+		return Changes{}, fmt.Errorf("mock changes.list: %w: %w", ErrGone, ErrTokenRejected)
 	}
 	ch, ok := m.changes[pageToken]
 	if !ok {

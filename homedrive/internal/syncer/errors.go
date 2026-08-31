@@ -17,6 +17,14 @@ var (
 	// must match it directly, with no adapter in between.
 	ErrGone = rcloneclient.ErrGone
 
+	// ErrTokenRejected is the same sentinel as rcloneclient.ErrTokenRejected
+	// (see ErrGone above for why no adapter is used): it always accompanies
+	// ErrGone, distinguishing a non-410 "Drive never recognized this
+	// token" rejection (currently HTTP 400) from the classic 410 GONE case
+	// for logging/MQTT purposes only -- fetchChanges's reset path fires the
+	// same way either way (issue #64).
+	ErrTokenRejected = rcloneclient.ErrTokenRejected
+
 	// ErrRemoteNotFound is the same sentinel as rcloneclient.ErrNotFound
 	// (see ErrGone above for why no adapter is used), used by the
 	// retention GC to treat "already deleted" as a successful, idempotent

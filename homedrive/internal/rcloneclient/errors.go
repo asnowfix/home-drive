@@ -26,8 +26,20 @@ var (
 	// ErrAlreadyExists indicates a destination path already exists.
 	ErrAlreadyExists = errors.New("remote object already exists")
 
-	// ErrGone indicates the Drive Changes API page token has expired or is
-	// otherwise invalid (HTTP 410). Callers must obtain a fresh start page
-	// token via GetStartPageToken and retry (PLAN.md §7.1).
+	// ErrGone indicates the Drive Changes API page token cannot be used and
+	// the caller must obtain a fresh start page token via GetStartPageToken
+	// and retry (PLAN.md §7.1). Originally only HTTP 410 GONE; broadened by
+	// issue #64 to also cover HTTP 400 responses that specifically reject
+	// the pageToken parameter (see isBadPageTokenErr in driveapi.go) --
+	// any error wrapping ErrGone triggers the same reset-and-full-walk
+	// recovery path regardless of which underlying HTTP status caused it.
 	ErrGone = errors.New("rcloneclient: page token expired (410 GONE)")
+
+	// ErrTokenRejected additionally wraps ErrGone (never appears alone) on
+	// the non-410 branch of that broadened set -- currently the HTTP 400
+	// "bad pageToken" case. It exists solely so callers that want a
+	// distinguishable log line or MQTT event for that case can check
+	// errors.Is(err, ErrTokenRejected) in addition to the ErrGone check
+	// they already do; the recovery behavior itself does not depend on it.
+	ErrTokenRejected = errors.New("rcloneclient: page token rejected (non-410)")
 )

@@ -326,3 +326,89 @@ func TestIsGoneErr_Cases(t *testing.T) {
 		t.Errorf("isGoneErr(nil) = true, want false")
 	}
 }
+
+func TestPollChanges_400BadPageToken_ReturnsErrGone(t *testing.T) {
+	// A page token Drive never recognized (e.g. a corrupted/stale-shape
+	// token surviving an upgrade -- issue #64's original trigger) comes
+	// back as a plain 400, not 410. pollChanges must still recognize it as
+	// "reset the token" via the same ErrGone sentinel, plus the additional
+	// ErrTokenRejected marker so callers can log/emit it distinguishably.
+	svc := newTestDriveService(t, func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"error":{"code":400,"message":"Invalid Value: pageToken"}}`)
+	})
+
+	r := newTestRcloneFS(svc)
+	r.rootID = "root-id"
+	r.pathCache.put("root-id", "")
+
+	_, err := r.pollChanges(context.Background(), "garbage-token")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !errors.Is(err, ErrGone) {
+		t.Errorf("expected error wrapping ErrGone, got: %v", err)
+	}
+	if !errors.Is(err, ErrTokenRejected) {
+		t.Errorf("expected error wrapping ErrTokenRejected, got: %v", err)
+	}
+}
+
+func TestIsBadPageTokenErr_Cases(t *testing.T) {
+	cases := []struct {
+		name       string
+		statusCode int
+		body       string
+		want       bool
+	}{
+		{
+			name:       "400 naming pageToken parameter",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":400,"message":"Invalid Value: pageToken"}}`,
+			want:       true,
+		},
+		{
+			name:       "400 naming page token with a space",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":400,"message":"The page token is invalid or expired"}}`,
+			want:       true,
+		},
+		{
+			name:       "400 unrelated to pageToken is not matched",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":400,"message":"Invalid Value: fields"}}`,
+			want:       false,
+		},
+		{
+			name:       "410 gone is not matched (handled by isGoneErr instead)",
+			statusCode: http.StatusGone,
+			body:       `{"error":{"code":410,"message":"Invalid page token"}}`,
+			want:       false,
+		},
+		{
+			name:       "200 ok has no error at all",
+			statusCode: http.StatusOK,
+			body:       `{"changes":[]}`,
+			want:       false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newTestDriveService(t, func(w http.ResponseWriter, req *http.Request) {
+				w.WriteHeader(tc.statusCode)
+				_, _ = fmt.Fprint(w, tc.body)
+			})
+			_, err := svc.Changes.List("tok").Do()
+
+			got := isBadPageTokenErr(err)
+			if got != tc.want {
+				t.Errorf("isBadPageTokenErr(%v) = %v, want %v", err, got, tc.want)
+			}
+		})
+	}
+
+	if isBadPageTokenErr(nil) {
+		t.Errorf("isBadPageTokenErr(nil) = true, want false")
+	}
+}

@@ -122,6 +122,37 @@ func isGoneErr(err error) bool {
 	return errors.As(err, &gerr) && gerr.Code == http.StatusGone
 }
 
+// isBadPageTokenErr reports whether err is a Drive API HTTP 400 (Bad
+// Request) response whose message specifically names the pageToken
+// parameter. Google's documented response for an invalidated page token is
+// 410 GONE, but in practice a token that is syntactically garbage, from an
+// incompatible/old token-shape (the original trigger for issue #64: a
+// pre-migration binary's stub token, `"initial_sync"` with no colon,
+// surviving an upgrade), or otherwise never issued by our own
+// GetStartPageToken comes back from changes.list as a plain 400 instead --
+// 410 is reserved for tokens Drive once recognized and has since expired,
+// while 400 is what Drive returns for a token it never recognized as a
+// token at all.
+//
+// Matching on the message text (rather than treating every 400 as
+// recoverable) keeps this narrow by design, per issue #64 task 1: an
+// unrelated 400 -- e.g. a bug in some other field of a request we built --
+// must not be silently swallowed by an automatic token reset that would
+// only mask it. This is a deliberate exception to the "never string
+// matching" rule in the errors convention: googleapi.Error does not carry
+// a machine-readable field that distinguishes "bad pageToken" from other
+// 400s (unlike the machine-readable Code used for the 410 case above), and
+// Drive's message text for this case is stable enough in practice to rely
+// on ("Invalid Value" style responses naming the "pageToken" parameter).
+func isBadPageTokenErr(err error) bool {
+	var gerr *googleapi.Error
+	if !errors.As(err, &gerr) || gerr.Code != http.StatusBadRequest {
+		return false
+	}
+	msg := strings.ToLower(gerr.Message)
+	return strings.Contains(msg, "pagetoken") || strings.Contains(msg, "page token")
+}
+
 // pollChanges calls changes.list starting from pageToken, paginating until
 // Drive reports either a NewStartPageToken (caught up) or no further pages.
 func (r *RcloneFS) pollChanges(ctx context.Context, pageToken string) (Changes, error) {
@@ -144,6 +175,18 @@ func (r *RcloneFS) pollChanges(ctx context.Context, pageToken string) (Changes, 
 		if err != nil {
 			if isGoneErr(err) {
 				return Changes{}, fmt.Errorf("rcloneclient: changes.list: %w: %w", ErrGone, err)
+			}
+			if isBadPageTokenErr(err) {
+				// Distinguishable from the 410 case above: same recovery
+				// path (both wrap ErrGone, see errors.go), but a separate
+				// log line and (via syncer.Puller.fetchChanges) a
+				// separate MQTT event so operators/logs can tell "Drive
+				// once knew this token and it expired" apart from "Drive
+				// never recognized this token" (issue #64 task 3).
+				r.log.Warn("changes.list: page token rejected (400, not 410), resetting",
+					"op", "ListChanges",
+				)
+				return Changes{}, fmt.Errorf("rcloneclient: changes.list: %w: %w: %w", ErrGone, ErrTokenRejected, err)
 			}
 			return Changes{}, fmt.Errorf("rcloneclient: changes.list: %w", err)
 		}

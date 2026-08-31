@@ -456,6 +456,67 @@ func TestPuller_410Gone_TokenReset(t *testing.T) {
 	}
 }
 
+func TestPuller_TokenRejectedNon410_TokenReset(t *testing.T) {
+	// A page token Drive never recognized at all (issue #64: e.g. a
+	// corrupted/stale-shape token from an old binary surviving an
+	// upgrade) surfaces as an error wrapping both ErrGone and
+	// ErrTokenRejected, not the classic bare ErrGone from a 410. The
+	// puller must still reset the token and emit a warning event, using a
+	// distinguishable message from the 410 case.
+	localRoot := t.TempDir()
+	now := time.Date(2026, 4, 28, 14, 0, 0, 0, time.UTC)
+
+	remote := newMockRemoteFS()
+	remote.startToken = "fresh-start"
+	remote.rejectedTokens["garbage-token"] = true
+	remote.changes["fresh-start"] = Changes{
+		Items:         []Change{},
+		NextPageToken: "fresh-start-next",
+	}
+
+	store := newMockStore()
+	// Pre-set a token Drive will reject as unrecognized (not "410 gone").
+	_ = store.SetPageToken(context.Background(), "garbage-token")
+
+	pub := newMockPublisher()
+
+	p := NewPuller(
+		PullerConfig{Interval: 30 * time.Second, LocalRoot: localRoot},
+		remote, store, newMockAuditLogger(), pub,
+		slog.Default(), fixedClock(now),
+	)
+
+	err := p.PollOnce(context.Background())
+	if err != nil {
+		t.Fatalf("PollOnce: %v", err)
+	}
+
+	// Token should be reset to the fresh one, same recovery path as 410.
+	token, _ := store.GetPageToken(context.Background())
+	if token != "fresh-start-next" {
+		t.Errorf("token = %s, want fresh-start-next", token)
+	}
+
+	// Should have emitted a pull.failure event, distinguishable from the
+	// 410 case's message.
+	failEvents := pub.getMessagesByTopic(pub.Topic("events", "pull.failure"))
+	if len(failEvents) != 1 {
+		t.Fatalf("expected 1 pull.failure event for token rejection, got %d", len(failEvents))
+	}
+	payload, ok := failEvents[0].Payload.(map[string]any)
+	if !ok {
+		t.Fatal("expected map payload")
+	}
+	errMsg, _ := payload["error"].(string)
+	if errMsg == "" {
+		t.Error("expected non-empty error in pull.failure payload")
+	}
+	const classic410Message = "page token expired (410 GONE), resetting"
+	if errMsg == classic410Message {
+		t.Errorf("expected a message distinguishable from the classic 410 case, got: %q", errMsg)
+	}
+}
+
 func TestPuller_DryRun(t *testing.T) {
 	// In dry-run mode, changes are detected but not downloaded. Store is
 	// not modified (no journal entry for the file).

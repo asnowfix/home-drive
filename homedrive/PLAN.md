@@ -352,7 +352,18 @@ delete-or-create handling per file. This is the slow path but correct.
   `nextPageToken` after successful processing of all changes.
 - Each `Change` is dispatched to the syncer like a local event would be,
   but flagged as `origin=remote` to avoid loop-back.
-- 410 GONE on token → reset via `getStartPageToken` + emit MQTT warning.
+- Token rejected by Drive → reset via `getStartPageToken` + emit MQTT
+  warning. Two underlying causes both trigger this, wrapped in the same
+  `rcloneclient.ErrGone` sentinel so callers only need one `errors.Is`
+  check: the classic HTTP 410 GONE (Drive once recognized the token and it
+  has since expired), and HTTP 400 responses whose message specifically
+  names the `pageToken` parameter (Drive never recognized the token at
+  all -- e.g. a corrupted value or one from an incompatible/old
+  token-shape convention, such as a pre-migration binary's stub token
+  surviving an upgrade). The 400 case additionally wraps
+  `rcloneclient.ErrTokenRejected` so the log line and MQTT event text can
+  distinguish it from the 410 case (issue #64). An unrelated 400 (not
+  naming `pageToken`) is *not* treated as recoverable and is not reset.
 
 ### 7.2 Bisync (safety net, 1h)
 
