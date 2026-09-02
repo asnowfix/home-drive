@@ -4,7 +4,10 @@
 // RemoteFS interface so tests can use MemFS or FlakyFS.
 package rcloneclient
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Sentinel errors for the rcloneclient package.
 var (
@@ -26,8 +29,42 @@ var (
 	// ErrAlreadyExists indicates a destination path already exists.
 	ErrAlreadyExists = errors.New("remote object already exists")
 
-	// ErrGone indicates the Drive Changes API page token has expired or is
-	// otherwise invalid (HTTP 410). Callers must obtain a fresh start page
-	// token via GetStartPageToken and retry (PLAN.md §7.1).
+	// ErrGone indicates the Drive Changes API page token cannot be used and
+	// the caller must obtain a fresh start page token via GetStartPageToken
+	// and retry (PLAN.md §7.1). Originally only HTTP 410 GONE; broadened by
+	// issue #64 to also cover HTTP 400 responses from changes.list (see
+	// isBadPageTokenErr in driveapi.go for why a 400 there is always
+	// treated as token-related) -- any error wrapping ErrGone triggers the
+	// same reset-and-full-walk recovery path regardless of which
+	// underlying HTTP status caused it.
 	ErrGone = errors.New("rcloneclient: page token expired (410 GONE)")
+
+	// ErrTokenRejected marks the non-410 branch of ErrGone's broadened set
+	// -- currently the HTTP 400 case. Build it only via NewTokenRejectedErr
+	// below, never by hand: that keeps it always co-occurring with ErrGone
+	// (see NewTokenRejectedErr's doc comment for why that matters).
+	ErrTokenRejected = errors.New("rcloneclient: page token rejected (non-410)")
 )
+
+// NewTokenRejectedErr builds the error pollChanges returns when Drive
+// rejects a page token for a reason other than the classic HTTP 410 GONE
+// (currently: any HTTP 400 from changes.list, see isBadPageTokenErr). It
+// always wraps both ErrGone -- so every existing errors.Is(err, ErrGone)
+// reset-path check (in particular syncer.Puller.fetchChanges) fires
+// unchanged -- and ErrTokenRejected, so that same caller can additionally
+// distinguish this case for logging/MQTT purposes via errors.Is(err,
+// ErrTokenRejected).
+//
+// Composing the two sentinels by hand at each call site, instead of
+// through this single constructor, is exactly the kind of place a future
+// change could accidentally return ErrTokenRejected without ErrGone --
+// silently disabling the reset instead of just producing a garbled log
+// line, since fetchChanges's recovery branch is gated on ErrGone. Both the
+// production call site (driveapi.go's pollChanges) and the syncer test
+// mocks build this error only through this constructor for that reason.
+// fetchChanges also defensively treats errors.Is(err, ErrTokenRejected)
+// alone as reset-worthy, as a second line of defense against the same
+// mistake (issue #64 PR review item 2).
+func NewTokenRejectedErr(cause error) error {
+	return fmt.Errorf("%w: %w: %w", ErrGone, ErrTokenRejected, cause)
+}

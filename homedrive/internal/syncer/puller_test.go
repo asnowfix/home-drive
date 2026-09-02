@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -441,7 +442,10 @@ func TestPuller_410Gone_TokenReset(t *testing.T) {
 		t.Errorf("token = %s, want fresh-start-next", token)
 	}
 
-	// Should have emitted a pull.failure event about 410.
+	// Should have emitted a pull.failure event about 410, with the exact
+	// expected text -- not just "non-empty" -- so a branch mix-up that
+	// produces a wrong-but-different message would be caught (issue #64
+	// PR review item 4).
 	failEvents := pub.getMessagesByTopic(pub.Topic("events", "pull.failure"))
 	if len(failEvents) != 1 {
 		t.Fatalf("expected 1 pull.failure event for 410, got %d", len(failEvents))
@@ -450,9 +454,125 @@ func TestPuller_410Gone_TokenReset(t *testing.T) {
 	if !ok {
 		t.Fatal("expected map payload")
 	}
+	const wantMsg = "page token expired (410 GONE), resetting"
+	if errMsg, _ := payload["error"].(string); errMsg != wantMsg {
+		t.Errorf("pull.failure error = %q, want %q", errMsg, wantMsg)
+	}
+}
+
+func TestPuller_TokenRejectedNon410_TokenReset(t *testing.T) {
+	// A page token Drive never recognized at all (issue #64: e.g. a
+	// corrupted/stale-shape token from an old binary surviving an
+	// upgrade) surfaces as an error wrapping both ErrGone and
+	// ErrTokenRejected, not the classic bare ErrGone from a 410. The
+	// puller must still reset the token and emit a warning event, using a
+	// distinguishable message from the 410 case.
+	localRoot := t.TempDir()
+	now := time.Date(2026, 4, 28, 14, 0, 0, 0, time.UTC)
+
+	remote := newMockRemoteFS()
+	remote.startToken = "fresh-start"
+	remote.rejectedTokens["garbage-token"] = true
+	remote.changes["fresh-start"] = Changes{
+		Items:         []Change{},
+		NextPageToken: "fresh-start-next",
+	}
+
+	store := newMockStore()
+	// Pre-set a token Drive will reject as unrecognized (not "410 gone").
+	_ = store.SetPageToken(context.Background(), "garbage-token")
+
+	pub := newMockPublisher()
+
+	p := NewPuller(
+		PullerConfig{Interval: 30 * time.Second, LocalRoot: localRoot},
+		remote, store, newMockAuditLogger(), pub,
+		slog.Default(), fixedClock(now),
+	)
+
+	err := p.PollOnce(context.Background())
+	if err != nil {
+		t.Fatalf("PollOnce: %v", err)
+	}
+
+	// Token should be reset to the fresh one, same recovery path as 410.
+	token, _ := store.GetPageToken(context.Background())
+	if token != "fresh-start-next" {
+		t.Errorf("token = %s, want fresh-start-next", token)
+	}
+
+	// Should have emitted a pull.failure event with the exact expected
+	// text, distinguishable from the 410 case's message (issue #64 PR
+	// review item 4: exact text, not just inequality with the 410 case,
+	// so a branch mix-up producing some other wrong message would be
+	// caught too).
+	failEvents := pub.getMessagesByTopic(pub.Topic("events", "pull.failure"))
+	if len(failEvents) != 1 {
+		t.Fatalf("expected 1 pull.failure event for token rejection, got %d", len(failEvents))
+	}
+	payload, ok := failEvents[0].Payload.(map[string]any)
+	if !ok {
+		t.Fatal("expected map payload")
+	}
+	const wantMsg = "page token rejected by Drive (not 410 GONE), resetting"
+	if errMsg, _ := payload["error"].(string); errMsg != wantMsg {
+		t.Errorf("pull.failure error = %q, want %q", errMsg, wantMsg)
+	}
+}
+
+func TestPuller_UnrelatedListChangesError_LeavesTokenUntouched(t *testing.T) {
+	// A ListChanges failure that is not token-related at all (e.g. a 403
+	// rateLimitExceeded, or any other error not wrapping ErrGone) must NOT
+	// trigger the reset path: the stored token must survive unchanged, and
+	// the emitted pull.failure event must carry the real underlying error,
+	// not one of the "resetting" messages (issue #64 PR review item 4 --
+	// this is the negative-coverage case proving the classifier doesn't
+	// over-fire).
+	localRoot := t.TempDir()
+	now := time.Date(2026, 4, 28, 14, 0, 0, 0, time.UTC)
+
+	remote := newMockRemoteFS()
+	unrelatedErr := errors.New("googleapi: Error 403: User Rate Limit Exceeded, rateLimitExceeded")
+	remote.genericErrTokens["rate-limited-token"] = unrelatedErr
+
+	store := newMockStore()
+	_ = store.SetPageToken(context.Background(), "rate-limited-token")
+
+	pub := newMockPublisher()
+
+	p := NewPuller(
+		PullerConfig{Interval: 30 * time.Second, LocalRoot: localRoot},
+		remote, store, newMockAuditLogger(), pub,
+		slog.Default(), fixedClock(now),
+	)
+
+	err := p.PollOnce(context.Background())
+	if err == nil {
+		t.Fatal("expected PollOnce to return the unrelated error, got nil")
+	}
+	if !errors.Is(err, unrelatedErr) {
+		t.Errorf("PollOnce error = %v, want it to wrap %v", err, unrelatedErr)
+	}
+
+	// Token must be left exactly as it was -- no reset attempted.
+	token, _ := store.GetPageToken(context.Background())
+	if token != "rate-limited-token" {
+		t.Errorf("token = %q, want unchanged %q", token, "rate-limited-token")
+	}
+
+	// The emitted pull.failure event must carry the real error, not a
+	// "resetting" message.
+	failEvents := pub.getMessagesByTopic(pub.Topic("events", "pull.failure"))
+	if len(failEvents) != 1 {
+		t.Fatalf("expected 1 pull.failure event, got %d", len(failEvents))
+	}
+	payload, ok := failEvents[0].Payload.(map[string]any)
+	if !ok {
+		t.Fatal("expected map payload")
+	}
 	errMsg, _ := payload["error"].(string)
-	if errMsg == "" {
-		t.Error("expected non-empty error in pull.failure payload")
+	if errMsg != unrelatedErr.Error() {
+		t.Errorf("pull.failure error = %q, want %q", errMsg, unrelatedErr.Error())
 	}
 }
 

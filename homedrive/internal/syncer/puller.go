@@ -207,7 +207,13 @@ func (p *Puller) fetchChanges(ctx context.Context, token string) (Changes, error
 		return changes, nil
 	}
 
-	if !errors.Is(err, ErrGone) {
+	// Reset-worthy if it wraps ErrGone (the normal case) OR ErrTokenRejected
+	// alone (defensive: ErrTokenRejected is only ever supposed to be
+	// produced together with ErrGone via rcloneclient.NewTokenRejectedErr,
+	// but checking it here too means a future call site that gets that
+	// composition wrong loses only the distinguishable log line, not the
+	// reset itself -- issue #64 PR review item 2).
+	if !errors.Is(err, ErrGone) && !errors.Is(err, ErrTokenRejected) {
 		p.log.Error("ListChanges failed",
 			"op", "pull",
 			"error", err,
@@ -217,8 +223,21 @@ func (p *Puller) fetchChanges(ctx context.Context, token string) (Changes, error
 		return Changes{}, fmt.Errorf("listing changes: %w", err)
 	}
 
-	// 410 GONE: token is stale, reset.
-	p.log.Warn("page token expired (410 GONE), resetting",
+	// Token is unusable, reset it. This covers two distinguishable causes
+	// (issue #64): the classic HTTP 410 GONE (Drive once recognized this
+	// token and it has since expired), and a wrapped ErrTokenRejected
+	// (currently: any HTTP 400 from changes.list -- Drive never recognized
+	// this token at all, e.g. a corrupted/stale-shape token surviving an
+	// upgrade; see rcloneclient.isBadPageTokenErr for why Drive's actual
+	// 400 responses don't distinguish this from any other 400 in a
+	// machine-readable or message-text way). Both take the identical
+	// reset-and-full-walk path below; only the log line and MQTT event
+	// text differ, so operators/logs can tell the two apart.
+	resetReason := "page token expired (410 GONE), resetting"
+	if errors.Is(err, ErrTokenRejected) {
+		resetReason = "page token rejected by Drive (not 410 GONE), resetting"
+	}
+	p.log.Warn(resetReason,
 		"op", "pull",
 		"stale_token", token,
 	)
@@ -226,7 +245,7 @@ func (p *Puller) fetchChanges(ctx context.Context, token string) (Changes, error
 		_ = p.pub.PublishJSON(p.pub.Topic("events", "pull.failure"), map[string]any{
 			"ts":    p.clock().UTC().Format(time.RFC3339),
 			"type":  "pull.failure",
-			"error": "page token expired (410 GONE), resetting",
+			"error": resetReason,
 		})
 	}
 
