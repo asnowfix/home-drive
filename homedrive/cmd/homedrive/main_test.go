@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -262,12 +263,15 @@ func TestCtl_NoServerRunning_ReturnsError(t *testing.T) {
 
 func TestCtlTarget_Cases(t *testing.T) {
 	t.Run("missing config falls back to default", func(t *testing.T) {
-		addr, token := ctlTarget("/nonexistent/config.yaml")
+		addr, token, timeout := ctlTarget("/nonexistent/config.yaml")
 		if addr != defaultCtlAddr {
 			t.Errorf("addr = %q, want %q", addr, defaultCtlAddr)
 		}
 		if token != "" {
 			t.Errorf("token = %q, want empty", token)
+		}
+		if timeout != 0 {
+			t.Errorf("timeout = %v, want 0", timeout)
 		}
 	})
 
@@ -277,12 +281,15 @@ func TestCtlTarget_Cases(t *testing.T) {
 		if err := os.WriteFile(configPath, []byte("local_root: /tmp\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		addr, token := ctlTarget(configPath)
+		addr, token, timeout := ctlTarget(configPath)
 		if addr != defaultCtlAddr {
 			t.Errorf("addr = %q, want %q", addr, defaultCtlAddr)
 		}
 		if token != "" {
 			t.Errorf("token = %q, want empty", token)
+		}
+		if timeout != 0 {
+			t.Errorf("timeout = %v, want 0", timeout)
 		}
 	})
 
@@ -292,7 +299,7 @@ func TestCtlTarget_Cases(t *testing.T) {
 		if err := os.WriteFile(configPath, []byte("http:\n  listen: \"10.0.0.1:9999\"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		addr, token := ctlTarget(configPath)
+		addr, token, _ := ctlTarget(configPath)
 		if addr != "10.0.0.1:9999" {
 			t.Errorf("addr = %q, want 10.0.0.1:9999", addr)
 		}
@@ -308,12 +315,25 @@ func TestCtlTarget_Cases(t *testing.T) {
 		if err := os.WriteFile(configPath, []byte(yaml), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		addr, token := ctlTarget(configPath)
+		addr, token, _ := ctlTarget(configPath)
 		if addr != "127.0.0.1:6090" {
 			t.Errorf("addr = %q, want 127.0.0.1:6090", addr)
 		}
 		if token != "s3cr3t" {
 			t.Errorf("token = %q, want s3cr3t", token)
+		}
+	})
+
+	t.Run("ctl_timeout is read from config", func(t *testing.T) {
+		dir := t.TempDir()
+		configPath := filepath.Join(dir, "config.yaml")
+		yaml := "http:\n  listen: \"127.0.0.1:6090\"\n  ctl_timeout: 45s\n"
+		if err := os.WriteFile(configPath, []byte(yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, _, timeout := ctlTarget(configPath)
+		if timeout != 45*time.Second {
+			t.Errorf("timeout = %v, want 45s", timeout)
 		}
 	})
 }

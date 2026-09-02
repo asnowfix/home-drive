@@ -166,6 +166,7 @@ state:
 http:
   listen: 127.0.0.1:6090
   # auth_token: ""   # required if listen is ever bound off loopback
+  # ctl_timeout: 10s # default `homedrive ctl` HTTP timeout; overridden by --timeout
 
 mqtt:
   enabled: true
@@ -196,6 +197,27 @@ request to every route (`/status`, `/pause`, `/resume`, `/resync`,
 `homedrive ctl <cmd>` reads `http.auth_token` from the same `--config`
 file and sends it automatically.
 
+### `ctl` HTTP timeout
+
+Every `homedrive ctl` subcommand bounds its HTTP call to the control
+endpoint with a timeout, 10s by default. Most subcommands (`status`,
+`pause`, `resume`, `resync`) are fast, in-memory operations well under
+that budget, but `ctl conflict repair` without `--dry-run` does a live
+remote `RemoteFS.List` call that can legitimately take longer under Drive
+API slowness or rate-limiting. Two ways to raise it, in precedence order:
+
+1. `homedrive ctl --timeout 60s conflict repair` -- a one-off override.
+2. `http.ctl_timeout: 60s` in `config.yaml` -- the default for every
+   `ctl` call when `--timeout` isn't passed, useful on a NAS with known
+   slow/rate-limited Drive access.
+
+If neither is set, the 10s default is unchanged. A zero or negative value
+from either `--timeout` or `http.ctl_timeout` is treated as **unset**, not
+as "no timeout" -- it falls through to the next level of precedence (and
+ultimately to the 10s default) instead of disabling the timeout, since an
+unbounded wait against an unresponsive agent is a worse outcome for an
+interactive CLI than a bounded one.
+
 ## CLI usage
 
 ```
@@ -216,6 +238,10 @@ Global flags:
   --dry-run         Log intended actions without making remote changes
   --config string   Path to config.yaml
   --version         Print version and exit
+
+ctl flags:
+  --timeout duration  HTTP timeout for control endpoint calls
+                       (default: http.ctl_timeout from config, or 10s)
 ```
 
 ### Examples

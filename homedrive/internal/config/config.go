@@ -107,6 +107,15 @@ type HTTPConfig struct {
 	// Listen address without AuthToken causes the server to refuse to
 	// start (fail closed).
 	AuthToken string `yaml:"auth_token"`
+	// CtlTimeout bounds every `homedrive ctl` HTTP call as the default
+	// used when the `--timeout` flag isn't passed. Zero or negative (the
+	// default, meaning the field is omitted, or an explicit non-positive
+	// value) leaves cmd/homedrive's own 10s default in place -- it is
+	// treated as "unset", not as "no timeout". Useful on a NAS with known
+	// slow/rate-limited Drive access, where `ctl conflict repair`
+	// (without --dry-run) can legitimately take longer than 10s -- see
+	// cmd/homedrive/ctl.go.
+	CtlTimeout Duration `yaml:"ctl_timeout"`
 }
 
 // MQTTConfig configures the MQTT publisher.

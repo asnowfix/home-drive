@@ -209,6 +209,7 @@ http:
   listen: 127.0.0.1:6090
   metrics: true
   auth_token: ""            # required (fail-closed) if listen is non-loopback
+  ctl_timeout: 10s          # default `homedrive ctl` HTTP timeout; overridden by --timeout
 
 mqtt:
   enabled: true
@@ -707,6 +708,20 @@ CLI sub-commands (`homedrive ctl status`, `homedrive ctl pause`, etc.) call
 this endpoint over HTTP, reading `http.listen` and `http.auth_token` from
 the same config file (`--config`) and sending
 `Authorization: Bearer <token>` automatically when a token is configured.
+
+Each call is bounded by an HTTP timeout, 10s by default
+(`cmd/homedrive/ctl.go` `defaultCtlHTTPTimeout`). `--timeout` on the `ctl`
+parent command overrides it for one call; `http.ctl_timeout`
+(`HTTPConfig.CtlTimeout`) overrides the default for every `ctl` call when
+`--timeout` isn't passed (precedence: flag, then config, then the 10s
+default). This exists mainly for `ctl conflict repair` without
+`--dry-run`, which does a live remote `RemoteFS.List` call that can
+legitimately exceed 10s under Drive API slowness or rate-limiting
+(issue #67, #69). A zero or negative value from either knob is treated as
+*unset*, not as "no timeout" -- it falls through to the next precedence
+level instead of leaving the request unbounded, since an interactive CLI
+hanging forever against an unresponsive agent is a worse failure mode
+than falling back to the 10s default.
 
 Port 6090 is free per the documented port allocation in the repo README.
 
