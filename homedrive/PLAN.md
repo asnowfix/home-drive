@@ -717,7 +717,11 @@ parent command overrides it for one call; `http.ctl_timeout`
 default). This exists mainly for `ctl conflict repair` without
 `--dry-run`, which does a live remote `RemoteFS.List` call that can
 legitimately exceed 10s under Drive API slowness or rate-limiting
-(issue #67, #69).
+(issue #67, #69). A zero or negative value from either knob is treated as
+*unset*, not as "no timeout" -- it falls through to the next precedence
+level instead of leaving the request unbounded, since an interactive CLI
+hanging forever against an unresponsive agent is a worse failure mode
+than falling back to the 10s default.
 
 Port 6090 is free per the documented port allocation in the repo README.
 

@@ -50,9 +50,15 @@ func ctlTarget(configPath string) (addr, token string, cfgTimeout time.Duration)
 // explicit --timeout flag takes precedence, then http.ctl_timeout from the
 // config file (cfgTimeout, as returned by ctlTarget), then
 // defaultCtlHTTPTimeout.
+//
+// A zero or negative value is treated as "unset" at every level, not as
+// "no timeout" -- for a CLI a human is sitting in front of, an unbounded
+// wait against an unresponsive agent is worse than falling back to a
+// bounded default. This keeps a zero value's meaning identical whether it
+// arrives via --timeout or via http.ctl_timeout in YAML.
 func ctlEffectiveTimeout(cmd *cobra.Command, cfgTimeout time.Duration) time.Duration {
 	if cmd.Flags().Changed("timeout") {
-		if t, err := cmd.Flags().GetDuration("timeout"); err == nil {
+		if t, err := cmd.Flags().GetDuration("timeout"); err == nil && t > 0 {
 			return t
 		}
 	}

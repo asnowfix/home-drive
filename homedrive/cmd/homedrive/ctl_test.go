@@ -59,6 +59,44 @@ func TestCtlEffectiveTimeout_Cases(t *testing.T) {
 			cfgTimeout: 0,
 			want:       2 * time.Second,
 		},
+		{
+			// Zero is a widespread CLI convention for "no timeout" (e.g.
+			// curl --max-time 0), but for this interactive control-plane
+			// tool an unbounded wait against an unresponsive agent is a
+			// worse failure mode than falling back to config/default, so
+			// it is treated as "unset" instead -- same as the config path.
+			name:       "explicit zero flag falls through to config",
+			flagArgs:   []string{"--timeout=0s"},
+			cfgTimeout: 45 * time.Second,
+			want:       45 * time.Second,
+		},
+		{
+			name:       "explicit zero flag falls through to default when config is unset",
+			flagArgs:   []string{"--timeout=0s"},
+			cfgTimeout: 0,
+			want:       defaultCtlHTTPTimeout,
+		},
+		{
+			name:       "negative flag falls through to config",
+			flagArgs:   []string{"--timeout=-5s"},
+			cfgTimeout: 45 * time.Second,
+			want:       45 * time.Second,
+		},
+		{
+			name:       "negative flag falls through to default when config is unset",
+			flagArgs:   []string{"--timeout=-5s"},
+			cfgTimeout: 0,
+			want:       defaultCtlHTTPTimeout,
+		},
+		{
+			// http.ctl_timeout has always treated a non-positive value as
+			// "unset" (see the cfgTimeout > 0 guard); a negative config
+			// value must behave the same as zero, not skip the guard.
+			name:       "negative config falls through to default",
+			flagArgs:   nil,
+			cfgTimeout: -5 * time.Second,
+			want:       defaultCtlHTTPTimeout,
+		},
 	}
 
 	for _, tt := range tests {
@@ -114,6 +152,27 @@ func TestCtl_TimeoutFlag_AppliesEndToEnd(t *testing.T) {
 	root.SetArgs([]string{"ctl", "--config", configPath, "--timeout", "1s", "status"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Errorf("unexpected error with a generous --timeout: %v", err)
+	}
+}
+
+// TestCtl_TimeoutFlagZero_FallsThroughToDefault covers the bug reported in
+// review of #69: --timeout=0 must NOT mean "no timeout" (unlike curl
+// --max-time 0) -- it must fall through to the 10s default, the same as
+// leaving --timeout unset, so a call against a healthy, fast agent still
+// succeeds instead of always failing with context.DeadlineExceeded.
+func TestCtl_TimeoutFlagZero_FallsThroughToDefault(t *testing.T) {
+	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"state":"running"}`))
+	}))
+	defer fast.Close()
+
+	configPath := writeCtlConfig(t, fast.Listener.Addr().String())
+
+	root := newRootCmd(nil)
+	root.SetArgs([]string{"ctl", "--config", configPath, "--timeout", "0s", "status"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Errorf("--timeout=0 unexpectedly failed against a fast, healthy agent: %v", err)
 	}
 }
 

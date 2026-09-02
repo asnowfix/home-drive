@@ -126,7 +126,7 @@ func newCtlCmd() *cobra.Command {
 		"path to config file (used to find the control endpoint address)")
 	ctl.PersistentFlags().DurationVar(&timeout, "timeout", 0,
 		"HTTP timeout for control endpoint calls (default: http.ctl_timeout from "+
-			"config, or 10s if that is also unset)")
+			"config, or 10s if that is also unset; zero or negative is treated as unset, not as no timeout)")
 
 	ctl.AddCommand(newCtlStatusCmd())
 	ctl.AddCommand(newCtlPauseCmd())

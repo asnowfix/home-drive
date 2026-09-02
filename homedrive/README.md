@@ -211,7 +211,12 @@ API slowness or rate-limiting. Two ways to raise it, in precedence order:
    `ctl` call when `--timeout` isn't passed, useful on a NAS with known
    slow/rate-limited Drive access.
 
-If neither is set, the 10s default is unchanged.
+If neither is set, the 10s default is unchanged. A zero or negative value
+from either `--timeout` or `http.ctl_timeout` is treated as **unset**, not
+as "no timeout" -- it falls through to the next level of precedence (and
+ultimately to the 10s default) instead of disabling the timeout, since an
+unbounded wait against an unresponsive agent is a worse outcome for an
+interactive CLI than a bounded one.
 
 ## CLI usage
 
