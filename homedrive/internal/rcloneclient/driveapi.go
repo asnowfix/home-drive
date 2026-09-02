@@ -122,35 +122,66 @@ func isGoneErr(err error) bool {
 	return errors.As(err, &gerr) && gerr.Code == http.StatusGone
 }
 
-// isBadPageTokenErr reports whether err is a Drive API HTTP 400 (Bad
-// Request) response whose message specifically names the pageToken
-// parameter. Google's documented response for an invalidated page token is
-// 410 GONE, but in practice a token that is syntactically garbage, from an
-// incompatible/old token-shape (the original trigger for issue #64: a
-// pre-migration binary's stub token, `"initial_sync"` with no colon,
-// surviving an upgrade), or otherwise never issued by our own
-// GetStartPageToken comes back from changes.list as a plain 400 instead --
-// 410 is reserved for tokens Drive once recognized and has since expired,
-// while 400 is what Drive returns for a token it never recognized as a
-// token at all.
+// isBadPageTokenErr reports whether err is an HTTP 400 (Bad Request)
+// response from Drive's changes.list -- the one call site this classifier
+// is scoped to, from pollChanges below. Google's documented response for
+// an invalidated page token is 410 GONE, but in practice a token Drive
+// never recognized as a token at all -- garbage, wrong shape, wrong
+// account, or (issue #64's real production trigger, confirmed against a
+// live journal capture on the NAS after this PR was already in review) a
+// pre-migration binary's bare stub token surviving an upgrade -- comes
+// back as a plain 400 instead.
 //
-// Matching on the message text (rather than treating every 400 as
-// recoverable) keeps this narrow by design, per issue #64 task 1: an
-// unrelated 400 -- e.g. a bug in some other field of a request we built --
-// must not be silently swallowed by an automatic token reset that would
-// only mask it. This is a deliberate exception to the "never string
-// matching" rule in the errors convention: googleapi.Error does not carry
-// a machine-readable field that distinguishes "bad pageToken" from other
-// 400s (unlike the machine-readable Code used for the 410 case above), and
-// Drive's message text for this case is stable enough in practice to rely
-// on ("Invalid Value" style responses naming the "pageToken" parameter).
+// This function went through two narrower designs before landing here,
+// both empirically ruled out rather than assumed away (issue #64 PR #79
+// review):
+//
+//  1. A machine-readable check via errors.As on the *apierror.APIError
+//     that google.golang.org/api's generated client code
+//     (gensupport.WrapError, called from every *Do() method including
+//     Changes.List) attaches to every googleapi.Error -- specifically
+//     Details().BadRequest.GetFieldViolations() naming "pageToken". This
+//     never fires: Drive API v3 is a classic Discovery-document API, and
+//     its actual error bodies use the legacy
+//     `{"error":{"errors":[{"domain","reason","message"}]}}` shape, not
+//     the newer google.rpc.Status `{"error":{"details":[{"@type":
+//     "...BadRequest","fieldViolations":[...]}]}}` shape this mechanism
+//     parses -- confirmed directly against gax-go/v2's apierror package
+//     with a body shaped like the real production sample.
+//  2. A message-substring match for "pageToken" in gerr.Message. This was
+//     the original version of this function. It was disproved by a live
+//     journal capture on the production NAS reproducing this exact bug: a
+//     stub token literally equal to "synced" (from an older binary,
+//     predating even the initialSyncPrefix convention -- see that
+//     constant's doc comment) fed into changes.list came back as
+//     `googleapi: Error 400: Invalid Value, invalid`. That is
+//     Message == "Invalid Value", Errors[0].Reason == "invalid" -- no
+//     field name anywhere in the text. A pure message-substring check
+//     would silently fail to reset on the exact case issue #64 exists to
+//     fix.
+//
+// So neither a machine-readable field nor the message text distinguishes
+// "bad pageToken" from any other 400 on this response. Given that, this
+// treats *any* HTTP 400 from changes.list as page-token-related, which is
+// safe specifically because of what's constant about *this* call: pageToken
+// is the only caller-supplied, runtime-varying parameter passed to it --
+// SupportsAllDrives(true) and Fields(changesFields) are hardcoded constants
+// that do not vary between calls, so a 400 here has no other plausible
+// runtime-dependent cause to misattribute the reset to. This is the
+// documented "blanket 400-or-410" fallback issue #64 task 1 explicitly
+// allowed for when the parameter isn't distinguishable in the response.
+//
+// If a 400 somehow isn't actually caused by the token (e.g. some future
+// change adds another runtime-supplied parameter to this call, like
+// driveId or spaces), the reset is still self-limiting rather than
+// silently wrong: fetchChanges's post-reset retry uses a token freshly
+// minted by GetStartPageToken, so if the 400 recurs against a
+// provably-valid token, that retry fails loudly (a real, visible pull
+// error) instead of being swallowed -- which also positively confirms the
+// 400 was not about the token after all.
 func isBadPageTokenErr(err error) bool {
 	var gerr *googleapi.Error
-	if !errors.As(err, &gerr) || gerr.Code != http.StatusBadRequest {
-		return false
-	}
-	msg := strings.ToLower(gerr.Message)
-	return strings.Contains(msg, "pagetoken") || strings.Contains(msg, "page token")
+	return errors.As(err, &gerr) && gerr.Code == http.StatusBadRequest
 }
 
 // pollChanges calls changes.list starting from pageToken, paginating until
@@ -177,16 +208,16 @@ func (r *RcloneFS) pollChanges(ctx context.Context, pageToken string) (Changes, 
 				return Changes{}, fmt.Errorf("rcloneclient: changes.list: %w: %w", ErrGone, err)
 			}
 			if isBadPageTokenErr(err) {
-				// Distinguishable from the 410 case above: same recovery
-				// path (both wrap ErrGone, see errors.go), but a separate
-				// log line and (via syncer.Puller.fetchChanges) a
-				// separate MQTT event so operators/logs can tell "Drive
-				// once knew this token and it expired" apart from "Drive
-				// never recognized this token" (issue #64 task 3).
-				r.log.Warn("changes.list: page token rejected (400, not 410), resetting",
-					"op", "ListChanges",
-				)
-				return Changes{}, fmt.Errorf("rcloneclient: changes.list: %w: %w: %w", ErrGone, ErrTokenRejected, err)
+				// Same recovery path as the 410 case above (both wrap
+				// ErrGone via NewTokenRejectedErr, see errors.go), so
+				// syncer.Puller.fetchChanges's existing errors.Is(err,
+				// ErrGone) check fires unchanged; ErrTokenRejected lets it
+				// additionally log/emit a message distinguishable from the
+				// 410 case (issue #64 task 3). Logged once, at that single
+				// call site, rather than here too -- fetchChanges already
+				// has the stale token in scope for its log line, so a
+				// second Warn here would just double-count every event.
+				return Changes{}, fmt.Errorf("rcloneclient: changes.list: %w", NewTokenRejectedErr(err))
 			}
 			return Changes{}, fmt.Errorf("rcloneclient: changes.list: %w", err)
 		}

@@ -308,6 +308,35 @@ func TestPollChanges_410Gone_ReturnsErrGone(t *testing.T) {
 	if !errors.Is(err, ErrGone) {
 		t.Errorf("expected error wrapping ErrGone, got: %v", err)
 	}
+	// Pin the 410 and 400 cases as distinguishable (issue #64 PR review
+	// item 4): the classic 410 path must NOT also carry ErrTokenRejected,
+	// which marks the non-410 branch exclusively.
+	if errors.Is(err, ErrTokenRejected) {
+		t.Errorf("410 case must not wrap ErrTokenRejected, got: %v", err)
+	}
+}
+
+func TestPollChanges_403RateLimited_DoesNotResetToken(t *testing.T) {
+	// A 403 rateLimitExceeded (observed on the production NAS alongside
+	// the real page-token bug, issue #64 PR #79 review) must NOT be
+	// treated as a token problem: it is neither 410 nor 400, so it falls
+	// through to the plain-error branch unchanged.
+	svc := newTestDriveService(t, func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = fmt.Fprint(w, `{"error":{"errors":[{"domain":"usageLimits","reason":"rateLimitExceeded","message":"User Rate Limit Exceeded"}],"code":403,"message":"User Rate Limit Exceeded"}}`)
+	})
+
+	r := newTestRcloneFS(svc)
+	r.rootID = "root-id"
+	r.pathCache.put("root-id", "")
+
+	_, err := r.pollChanges(context.Background(), "some-token")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if errors.Is(err, ErrGone) {
+		t.Errorf("403 rateLimitExceeded must not wrap ErrGone, got: %v", err)
+	}
 }
 
 func TestIsGoneErr_Cases(t *testing.T) {
@@ -327,22 +356,26 @@ func TestIsGoneErr_Cases(t *testing.T) {
 	}
 }
 
-func TestPollChanges_400BadPageToken_ReturnsErrGone(t *testing.T) {
-	// A page token Drive never recognized (e.g. a corrupted/stale-shape
-	// token surviving an upgrade -- issue #64's original trigger) comes
-	// back as a plain 400, not 410. pollChanges must still recognize it as
-	// "reset the token" via the same ErrGone sentinel, plus the additional
-	// ErrTokenRejected marker so callers can log/emit it distinguishably.
+func TestPollChanges_400BadRequest_ReturnsErrGone(t *testing.T) {
+	// Body shaped exactly like the real production sample captured on the
+	// NAS (issue #64 PR #79 review): a stub token ("synced", predating
+	// even the initialSyncPrefix convention) fed into changes.list comes
+	// back as a plain 400 whose message names no field at all --
+	// Message == "Invalid Value", Errors[0].Reason == "invalid". Neither a
+	// machine-readable field-violation nor a message-substring check
+	// catches this (see isBadPageTokenErr's doc comment); pollChanges must
+	// still recognize it as "reset the token" via the same ErrGone
+	// sentinel, plus the additional ErrTokenRejected marker.
 	svc := newTestDriveService(t, func(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = fmt.Fprint(w, `{"error":{"code":400,"message":"Invalid Value: pageToken"}}`)
+		_, _ = fmt.Fprint(w, `{"error":{"errors":[{"domain":"global","reason":"invalid","message":"Invalid Value"}],"code":400,"message":"Invalid Value"}}`)
 	})
 
 	r := newTestRcloneFS(svc)
 	r.rootID = "root-id"
 	r.pathCache.put("root-id", "")
 
-	_, err := r.pollChanges(context.Background(), "garbage-token")
+	_, err := r.pollChanges(context.Background(), "synced")
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -362,27 +395,41 @@ func TestIsBadPageTokenErr_Cases(t *testing.T) {
 		want       bool
 	}{
 		{
-			name:       "400 naming pageToken parameter",
+			// The real production sample (issue #64 PR #79 review): no
+			// field name anywhere in the message, yet this genuinely is
+			// the stale-token case and must be matched.
+			name:       "400 with generic message (real production sample) is matched",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"errors":[{"domain":"global","reason":"invalid","message":"Invalid Value"}],"code":400,"message":"Invalid Value"}}`,
+			want:       true,
+		},
+		{
+			name:       "400 naming pageToken parameter is matched",
 			statusCode: http.StatusBadRequest,
 			body:       `{"error":{"code":400,"message":"Invalid Value: pageToken"}}`,
 			want:       true,
 		},
 		{
-			name:       "400 naming page token with a space",
-			statusCode: http.StatusBadRequest,
-			body:       `{"error":{"code":400,"message":"The page token is invalid or expired"}}`,
-			want:       true,
-		},
-		{
-			name:       "400 unrelated to pageToken is not matched",
+			// Any 400 on this call site is matched -- see isBadPageTokenErr's
+			// doc comment for why "unrelated 400" isn't a real category here
+			// (pageToken is the only runtime-variable input to this call).
+			name:       "400 naming an unrelated field is still matched (blanket 400 on this call site)",
 			statusCode: http.StatusBadRequest,
 			body:       `{"error":{"code":400,"message":"Invalid Value: fields"}}`,
-			want:       false,
+			want:       true,
 		},
 		{
 			name:       "410 gone is not matched (handled by isGoneErr instead)",
 			statusCode: http.StatusGone,
 			body:       `{"error":{"code":410,"message":"Invalid page token"}}`,
+			want:       false,
+		},
+		{
+			// Observed on the same production host, interleaved with the
+			// real 400 (issue #64 PR #79 review) -- must not be matched.
+			name:       "403 rateLimitExceeded is not matched",
+			statusCode: http.StatusForbidden,
+			body:       `{"error":{"errors":[{"domain":"usageLimits","reason":"rateLimitExceeded","message":"User Rate Limit Exceeded"}],"code":403,"message":"User Rate Limit Exceeded"}}`,
 			want:       false,
 		},
 		{
@@ -410,5 +457,18 @@ func TestIsBadPageTokenErr_Cases(t *testing.T) {
 
 	if isBadPageTokenErr(nil) {
 		t.Errorf("isBadPageTokenErr(nil) = true, want false")
+	}
+
+	// Non-googleapi errors (transport/OAuth failures never reach the
+	// Drive HTTP layer as a *googleapi.Error) must not be matched either.
+	nonGoogleErrs := []error{
+		context.DeadlineExceeded,
+		errors.New("dial tcp: connection refused"),
+		fmt.Errorf("oauth2: cannot fetch token: %w", errors.New("invalid_client")),
+	}
+	for _, e := range nonGoogleErrs {
+		if isBadPageTokenErr(e) {
+			t.Errorf("isBadPageTokenErr(%v) = true, want false (not a googleapi.Error)", e)
+		}
 	}
 }

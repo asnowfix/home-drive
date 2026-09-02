@@ -356,14 +356,28 @@ delete-or-create handling per file. This is the slow path but correct.
   warning. Two underlying causes both trigger this, wrapped in the same
   `rcloneclient.ErrGone` sentinel so callers only need one `errors.Is`
   check: the classic HTTP 410 GONE (Drive once recognized the token and it
-  has since expired), and HTTP 400 responses whose message specifically
-  names the `pageToken` parameter (Drive never recognized the token at
-  all -- e.g. a corrupted value or one from an incompatible/old
-  token-shape convention, such as a pre-migration binary's stub token
-  surviving an upgrade). The 400 case additionally wraps
-  `rcloneclient.ErrTokenRejected` so the log line and MQTT event text can
-  distinguish it from the 410 case (issue #64). An unrelated 400 (not
-  naming `pageToken`) is *not* treated as recoverable and is not reset.
+  has since expired), and *any* HTTP 400 from `changes.list` (Drive never
+  recognized the token at all -- e.g. a corrupted value or one from an
+  incompatible/old token-shape convention, such as a pre-migration
+  binary's stub token surviving an upgrade). The 400 case additionally
+  wraps `rcloneclient.ErrTokenRejected` so the log line and MQTT event
+  text can distinguish it from the 410 case (issue #64).
+  Every 400 on this call is treated as token-related rather than trying to
+  distinguish "bad pageToken" from other 400 causes: neither a
+  machine-readable field (`apierror.APIError`'s `BadRequest` field
+  violations, which Drive's classic Discovery-document error format never
+  populates) nor the error message text reliably names the parameter in
+  Drive's actual responses -- confirmed against a live production
+  incident where a stale stub token came back as a generic
+  `googleapi: Error 400: Invalid Value, invalid` with no field name at
+  all. This is safe specifically because `pageToken` is the only
+  runtime-varying input to this call (`SupportsAllDrives`/`Fields` are
+  hardcoded); see `isBadPageTokenErr`'s doc comment in
+  `internal/rcloneclient/driveapi.go` for the full investigation trail
+  and the self-limiting behavior if a 400 is ever *not* about the token
+  (the post-reset retry, run against a freshly-minted token, fails loudly
+  instead of masking the real cause). A 403 (e.g. `rateLimitExceeded`) is
+  *not* treated as recoverable and is not reset.
 
 ### 7.2 Bisync (safety net, 1h)
 

@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
+	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 )
 
 // mockRemoteFS is a thread-safe in-memory RemoteFS for testing.
@@ -24,12 +26,17 @@ type mockRemoteFS struct {
 	startToken  string
 	goneTokens  map[string]bool // tokens that trigger ErrGone (410-style)
 	// rejectedTokens simulates the non-410 "Drive never recognized this
-	// token" case (issue #64), e.g. HTTP 400 for a corrupted/stale-shape
-	// token. Also triggers the reset path, but errors.Is(err,
-	// ErrTokenRejected) is true in addition to errors.Is(err, ErrGone).
+	// token" case (issue #64), e.g. HTTP 400 from changes.list. Also
+	// triggers the reset path, but errors.Is(err, ErrTokenRejected) is
+	// true in addition to errors.Is(err, ErrGone).
 	rejectedTokens map[string]bool
-	downloadErr    map[string]error
-	quota       Quota
+	// genericErrTokens simulates a ListChanges failure that is NOT
+	// token-related at all (e.g. a 403 rateLimitExceeded, or a transport
+	// failure) -- must NOT trigger the reset path (issue #64 PR review
+	// item 4: negative coverage for "leaves the token untouched").
+	genericErrTokens map[string]error
+	downloadErr      map[string]error
+	quota            Quota
 
 	// error hooks for push tests
 	copyErr func(path string) error
@@ -59,11 +66,12 @@ type moveCall struct {
 
 func newMockRemoteFS() *mockRemoteFS {
 	return &mockRemoteFS{
-		files:          make(map[string]RemoteObject),
-		changes:        make(map[string]Changes),
-		goneTokens:     make(map[string]bool),
-		rejectedTokens: make(map[string]bool),
-		downloadErr:    make(map[string]error),
+		files:            make(map[string]RemoteObject),
+		changes:          make(map[string]Changes),
+		goneTokens:       make(map[string]bool),
+		rejectedTokens:   make(map[string]bool),
+		genericErrTokens: make(map[string]error),
+		downloadErr:      make(map[string]error),
 	}
 }
 
@@ -133,7 +141,15 @@ func (m *mockRemoteFS) ListChanges(_ context.Context, pageToken string) (Changes
 		return Changes{}, ErrGone
 	}
 	if m.rejectedTokens[pageToken] {
-		return Changes{}, fmt.Errorf("mock changes.list: %w: %w", ErrGone, ErrTokenRejected)
+		// Built only through the shared constructor, same as the
+		// production call site (driveapi.go's pollChanges) -- see
+		// rcloneclient.NewTokenRejectedErr's doc comment for why hand-
+		// composing ErrGone/ErrTokenRejected at each call site is exactly
+		// the mistake this guards against (issue #64 PR review item 2).
+		return Changes{}, fmt.Errorf("mock changes.list: %w", rcloneclient.NewTokenRejectedErr(errors.New("mock: bad request")))
+	}
+	if genericErr, ok := m.genericErrTokens[pageToken]; ok {
+		return Changes{}, genericErr
 	}
 	ch, ok := m.changes[pageToken]
 	if !ok {
