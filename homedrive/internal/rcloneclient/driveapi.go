@@ -173,12 +173,22 @@ func isGoneErr(err error) bool {
 //
 // If a 400 somehow isn't actually caused by the token (e.g. some future
 // change adds another runtime-supplied parameter to this call, like
-// driveId or spaces), the reset is still self-limiting rather than
-// silently wrong: fetchChanges's post-reset retry uses a token freshly
-// minted by GetStartPageToken, so if the 400 recurs against a
-// provably-valid token, that retry fails loudly (a real, visible pull
-// error) instead of being swallowed -- which also positively confirms the
-// 400 was not about the token after all.
+// driveId or spaces), this does not retry changes.list against a freshly
+// minted token and fail loudly if that recurs -- the token
+// fetchChanges/GetStartPageToken persists carries the initialSyncPrefix
+// marker, so the immediate retry (and, if that fails, every subsequent
+// poll cycle, since the prefixed token survives a failed walk) routes
+// through ListChanges to fullWalkThenResume's full recursive
+// r.fsObj.List walk instead (see rclonefs.go) -- it never calls
+// changes.list again and never reaches this function. So a persistent
+// non-token 400 does not surface as a bounded, single loud failure; it
+// surfaces as a full remote walk retried every poll cycle indefinitely,
+// which is still visible (each cycle logs at Error and emits
+// pull.failure) but is a real, continuing API cost on a large Drive, not
+// a one-shot confirmation that the 400 wasn't about the token. That is
+// the cost that would need re-weighing before adding another
+// runtime-variable parameter to this call: it would not just risk a
+// wrong reset, it would risk a silent, recurring, expensive one.
 func isBadPageTokenErr(err error) bool {
 	var gerr *googleapi.Error
 	return errors.As(err, &gerr) && gerr.Code == http.StatusBadRequest
