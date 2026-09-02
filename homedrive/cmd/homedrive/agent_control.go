@@ -13,6 +13,7 @@ import (
 	httpctl "github.com/asnowfix/home-drive/homedrive/internal/http"
 
 	"github.com/asnowfix/home-drive/homedrive/internal/config"
+	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 )
 
 // Pause stops the watcher pump from forwarding events to the push worker
@@ -150,18 +151,50 @@ func (a *Agent) storeHealth() httpctl.ComponentHealth {
 	return httpctl.ComponentHealth{Name: "store", Healthy: true}
 }
 
+// oauthStatusReporter is implemented by rcloneclient.RcloneFS (an
+// optional capability, not part of the RemoteFS interface -- see
+// homedrive-test-mocks: MemFS/FlakyFS need not implement it). Declared
+// here, at the point of use, rather than added to RemoteFS, since
+// rcloneHealth is the only caller.
+type oauthStatusReporter interface {
+	OAuthStatus() rcloneclient.OAuthStatus
+}
+
 // rcloneHealth reports whether the remote filesystem was initialized. It
 // deliberately does not make a live Drive API call on every /healthz poll
 // to avoid burning API quota on a monitoring endpoint.
+//
+// It does surface the last-observed Drive Changes API OAuth
+// client_id/client_secret precondition (issue #67) as Degraded, without
+// flipping Healthy to false: push and the hourly bisync safety net
+// (PLAN.md §7.2) are unaffected by this condition, only incremental pull
+// is, and it clears only via an operator reconfiguring OAuth credentials
+// and restarting -- not via whatever action a monitoring system would
+// take on an unhealthy /healthz (e.g. an automatic restart), which could
+// not fix it and could make the operator-visibility problem worse by
+// masking it behind restart-loop noise instead. See RcloneFS.OAuthStatus
+// for why this reads cached state and costs no extra Drive API quota.
 func (a *Agent) rcloneHealth() httpctl.ComponentHealth {
 	if a.rfs == nil {
 		return httpctl.ComponentHealth{Name: "rclone", Healthy: false, Message: "not initialized"}
 	}
-	return httpctl.ComponentHealth{
+
+	health := httpctl.ComponentHealth{
 		Name:    "rclone",
 		Healthy: true,
 		Message: "initialized; no live probe (avoids Drive API quota use on health checks)",
 	}
+
+	if reporter, ok := a.rfs.(oauthStatusReporter); ok {
+		if status := reporter.OAuthStatus(); status.Checked && !status.ClientConfigured {
+			health.Degraded = true
+			health.Message = "oauth client_id/client_secret not configured for remote; " +
+				"Drive Changes API polling is failing and backing off (push and the " +
+				"hourly bisync safety net are unaffected) -- see homedrive/README.md " +
+				"prerequisites"
+		}
+	}
+	return health
 }
 
 func (a *Agent) mqttHealth() httpctl.ComponentHealth {

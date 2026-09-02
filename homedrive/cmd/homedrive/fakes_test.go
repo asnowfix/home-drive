@@ -166,3 +166,17 @@ func (f *fakeRemoteFSWithChanges) ListChanges(_ context.Context, _ string) (rclo
 		},
 	}, nil
 }
+
+// fakeRemoteFSWithOAuthStatus wraps fakeRemoteFS (by pointer, to avoid
+// copying its embedded sync.Mutex) and adds an OAuthStatus method, letting
+// tests exercise rcloneHealth's optional-capability type assertion
+// (issue #67) without fakeRemoteFS itself needing to implement it -- most
+// tests have no reason to care about OAuth status at all.
+type fakeRemoteFSWithOAuthStatus struct {
+	*fakeRemoteFS
+	status rcloneclient.OAuthStatus
+}
+
+func (f *fakeRemoteFSWithOAuthStatus) OAuthStatus() rcloneclient.OAuthStatus {
+	return f.status
+}

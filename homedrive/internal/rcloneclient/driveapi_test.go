@@ -14,6 +14,8 @@ import (
 
 	drivev3 "google.golang.org/api/drive/v3"
 	"google.golang.org/api/option"
+
+	"golang.org/x/oauth2"
 )
 
 // newTestDriveService builds a *drivev3.Service pointed at a local
@@ -470,5 +472,96 @@ func TestIsBadPageTokenErr_Cases(t *testing.T) {
 		if isBadPageTokenErr(e) {
 			t.Errorf("isBadPageTokenErr(%v) = true, want false (not a googleapi.Error)", e)
 		}
+	}
+}
+
+// newOAuthFailingDriveService builds a *drivev3.Service whose HTTP client
+// is wrapped in a real golang.org/x/oauth2 Transport pointed at a fake
+// token endpoint (never Google's) that always returns the given RFC 6749
+// token-endpoint error. The stored token is already expired, so the very
+// first Drive API call triggers a silent refresh attempt against that
+// fake endpoint and fails there -- the Drive endpoint itself is never
+// reached, matching how the real "Could not determine client ID from
+// request" failure occurs in production (issue #67). No real Google API
+// call is made anywhere (per homedrive-test-mocks).
+func newOAuthFailingDriveService(t *testing.T, tokenErrorCode, tokenErrorDescription string) *drivev3.Service {
+	t.Helper()
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(t, w, map[string]string{
+			"error":             tokenErrorCode,
+			"error_description": tokenErrorDescription,
+		})
+	}))
+	t.Cleanup(tokenSrv.Close)
+
+	oauthCfg := &oauth2.Config{
+		Endpoint: oauth2.Endpoint{TokenURL: tokenSrv.URL},
+		// No ClientID/ClientSecret -- matches the production defect this
+		// issue is about.
+	}
+	expiredTok := &oauth2.Token{
+		AccessToken:  "stale-access-token",
+		RefreshToken: "refresh-1",
+		Expiry:       time.Now().Add(-time.Hour),
+	}
+	httpClient := oauthCfg.Client(context.Background(), expiredTok)
+
+	svc, err := drivev3.NewService(context.Background(), option.WithHTTPClient(httpClient))
+	if err != nil {
+		t.Fatalf("build oauth-failing drive service: %v", err)
+	}
+	return svc
+}
+
+func TestPollChanges_OAuthClientMissing_ReturnsErrOAuthClientMissing(t *testing.T) {
+	svc := newOAuthFailingDriveService(t, "invalid_request", "Could not determine client ID from request.")
+
+	r := newTestRcloneFS(svc)
+	r.rootID = "root-id"
+	r.pathCache.put("root-id", "")
+	// Simulates oauthHTTPClient having already observed the missing
+	// client_id/client_secret precondition (see oauthHTTPClient in
+	// driveapi.go) -- this test builds changesSvc directly and so
+	// bypasses that call.
+	r.oauthChecked = true
+	r.oauthClientConfigured = false
+
+	_, err := r.pollChanges(context.Background(), "tok")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !errors.Is(err, ErrOAuthClientMissing) {
+		t.Errorf("expected error wrapping ErrOAuthClientMissing, got: %v", err)
+	}
+	// An OAuth refresh failure never reaches the Drive API response layer
+	// isGoneErr/isBadPageTokenErr classify, so it must not be conflated
+	// with the token-reset classes.
+	if errors.Is(err, ErrGone) {
+		t.Errorf("OAuth client-missing error must not wrap ErrGone, got: %v", err)
+	}
+}
+
+func TestPollChanges_OAuthRetrieveError_WithClientConfigured_NotClassified(t *testing.T) {
+	// Same failure shape (a *oauth2.RetrieveError reaching pollChanges),
+	// but the client_id/client_secret precondition is NOT missing -- e.g.
+	// a revoked or otherwise invalid refresh token (invalid_grant). Must
+	// not be classified as ErrOAuthClientMissing: that would incorrectly
+	// gate the puller's backoff on an unrelated condition (issue #67 is
+	// explicit that backoff should be narrow, not "any auth failure").
+	svc := newOAuthFailingDriveService(t, "invalid_grant", "Token has been expired or revoked.")
+
+	r := newTestRcloneFS(svc)
+	r.rootID = "root-id"
+	r.pathCache.put("root-id", "")
+	r.oauthChecked = true
+	r.oauthClientConfigured = true
+
+	_, err := r.pollChanges(context.Background(), "tok")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if errors.Is(err, ErrOAuthClientMissing) {
+		t.Errorf("expected error NOT to wrap ErrOAuthClientMissing (client is configured), got: %v", err)
 	}
 }

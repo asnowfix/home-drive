@@ -25,6 +25,15 @@ type ComponentHealth struct {
 	Name    string `json:"name"`
 	Healthy bool   `json:"healthy"`
 	Message string `json:"message,omitempty"`
+
+	// Degraded flags a known, non-fatal problem with this component --
+	// e.g. the rclone component's Drive Changes API OAuth client is
+	// unconfigured (issue #67) -- that does not itself flip Healthy to
+	// false. Kept separate from Healthy deliberately: some degraded
+	// conditions only clear via operator action (not a restart), so
+	// reporting them as unhealthy risks tripping external
+	// monitoring/restart loops for a condition a restart cannot fix.
+	Degraded bool `json:"degraded,omitempty"`
 }
 
 // HealthResult aggregates health from all checked components.
