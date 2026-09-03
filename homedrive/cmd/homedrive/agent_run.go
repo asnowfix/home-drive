@@ -149,7 +149,19 @@ func (a *Agent) shutdownStore() {
 // runPullLoop polls the Drive Changes API on cfg.Pull.ChangesAPIInterval,
 // taking bisyncMu.RLock around each cycle so it never overlaps a bisync
 // run (PLAN.md §7.2). syncer.Puller has no built-in bisync coordination,
-// so this loop owns the ticker itself rather than calling puller.Run.
+// so this loop owns its own timer rather than calling puller.Run.
+//
+// It uses a *time.Timer, re-armed after every cycle with
+// a.puller.NextPollInterval(), not a fixed *time.Ticker -- deliberately
+// mirroring Puller.Run's own mechanics (same doubling-capped OAuth
+// "no client_id" backoff, issue #67). A plain Ticker at the static
+// interval was the bug an issue #67 PR review caught: the backoff logic
+// lived entirely in Puller.Run, which this loop never calls, so
+// production kept polling Drive's token endpoint at full 30s cadence
+// through a sustained outage while a test that only drove Run() directly
+// stayed green. See NextPollInterval's doc comment for why the two
+// call sites are kept in sync by sharing that one method instead of each
+// computing the backoff themselves.
 func (a *Agent) runPullLoop(ctx context.Context) {
 	interval := a.cfg.Pull.ChangesAPIInterval.Duration
 	if interval <= 0 {
@@ -158,15 +170,23 @@ func (a *Agent) runPullLoop(ctx context.Context) {
 
 	a.pollOnceGuarded(ctx)
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	timer := time.NewTimer(a.puller.NextPollInterval())
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			a.pollOnceGuarded(ctx)
+			next := a.puller.NextPollInterval()
+			if next != interval {
+				a.log.Warn("polling backed off: oauth client_id/client_secret not configured for remote",
+					"op", "pull",
+					"next_poll_in", next.String(),
+				)
+			}
+			timer.Reset(next)
 		}
 	}
 }

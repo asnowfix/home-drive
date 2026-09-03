@@ -32,8 +32,8 @@ func TestPuller_OAuthClientMissing_BacksOffPollInterval(t *testing.T) {
 		slog.Default(), fixedClock(now),
 	)
 
-	if got := p.nextPollInterval(); got != 30*time.Second {
-		t.Fatalf("initial nextPollInterval = %v, want %v", got, 30*time.Second)
+	if got := p.NextPollInterval(); got != 30*time.Second {
+		t.Fatalf("initial NextPollInterval = %v, want %v", got, 30*time.Second)
 	}
 
 	wantIntervals := []time.Duration{
@@ -46,8 +46,8 @@ func TestPuller_OAuthClientMissing_BacksOffPollInterval(t *testing.T) {
 		if !errors.Is(err, rcloneclient.ErrOAuthClientMissing) {
 			t.Fatalf("poll %d: PollOnce error = %v, want it to wrap ErrOAuthClientMissing", i+1, err)
 		}
-		if got := p.nextPollInterval(); got != want {
-			t.Errorf("poll %d: nextPollInterval = %v, want %v", i+1, got, want)
+		if got := p.NextPollInterval(); got != want {
+			t.Errorf("poll %d: NextPollInterval = %v, want %v", i+1, got, want)
 		}
 	}
 
@@ -67,8 +67,8 @@ func TestPuller_OAuthClientMissing_BacksOffPollInterval(t *testing.T) {
 	if err := p.PollOnce(context.Background()); err != nil {
 		t.Fatalf("recovery PollOnce: %v", err)
 	}
-	if got := p.nextPollInterval(); got != 30*time.Second {
-		t.Errorf("after recovery, nextPollInterval = %v, want restored %v", got, 30*time.Second)
+	if got := p.NextPollInterval(); got != 30*time.Second {
+		t.Errorf("after recovery, NextPollInterval = %v, want restored %v", got, 30*time.Second)
 	}
 }
 
@@ -77,8 +77,8 @@ func TestPuller_OAuthClientMissing_BacksOffPollInterval(t *testing.T) {
 func TestPuller_NextPollInterval_CapsAtOAuthBackoffMax(t *testing.T) {
 	p := &Puller{cfg: PullerConfig{Interval: 30 * time.Second}}
 	p.oauthMissingStreak = 1000 // far more than needed to reach the cap
-	if got := p.nextPollInterval(); got != oauthBackoffMax {
-		t.Errorf("nextPollInterval with a long streak = %v, want capped at %v", got, oauthBackoffMax)
+	if got := p.NextPollInterval(); got != oauthBackoffMax {
+		t.Errorf("NextPollInterval with a long streak = %v, want capped at %v", got, oauthBackoffMax)
 	}
 }
 
@@ -107,13 +107,13 @@ func TestPuller_UnrelatedError_LeavesOAuthStreakAtZero(t *testing.T) {
 	if p.oauthMissingStreak != 0 {
 		t.Errorf("oauthMissingStreak = %d after an unrelated error, want 0", p.oauthMissingStreak)
 	}
-	if got := p.nextPollInterval(); got != 30*time.Second {
-		t.Errorf("nextPollInterval after an unrelated error = %v, want unchanged %v", got, 30*time.Second)
+	if got := p.NextPollInterval(); got != 30*time.Second {
+		t.Errorf("NextPollInterval after an unrelated error = %v, want unchanged %v", got, 30*time.Second)
 	}
 }
 
 // TestPuller_Run_AppliesOAuthBackoffViaTimer is an end-to-end confirmation
-// that Run() actually applies nextPollInterval's backoff through
+// that Run() actually applies NextPollInterval's backoff through
 // timer.Reset, not just that the pure function computes the right values
 // (proven above). Uses a tiny base interval so the test finishes fast
 // regardless of the real oauthBackoffMax cap.

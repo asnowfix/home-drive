@@ -67,7 +67,7 @@ type Puller struct {
 
 	// oauthMissingStreak counts consecutive poll cycles whose failure was
 	// classified as ErrOAuthClientMissing (see fetchChanges). It drives
-	// nextPollInterval's backoff and is reset to 0 by any other outcome
+	// NextPollInterval's backoff and is reset to 0 by any other outcome
 	// -- success or a different error (issue #67).
 	oauthMissingStreak int
 }
@@ -109,7 +109,21 @@ func NewPuller(
 }
 
 // Run starts the pull polling loop. It blocks until ctx is cancelled.
-// The first poll happens immediately, then every cfg.Interval.
+// The first poll happens immediately, then every cfg.Interval (subject to
+// NextPollInterval's OAuth backoff, issue #67).
+//
+// Not the shipped binary's pull loop: cmd/homedrive.Agent.runPullLoop
+// owns its own equivalent timer instead, so each cycle can be taken under
+// bisyncMu.RLock, which Run has no way to acquire (Puller has no bisync
+// coordination of its own -- see runPullLoop's doc comment). Run exists
+// for direct/standalone use of Puller (and is exercised that way by this
+// package's own tests) where that coordination either isn't needed or is
+// handled by the caller some other way -- if you are changing scheduling
+// behavior here for a production-facing reason, check whether
+// runPullLoop needs the same change; the two are deliberately kept in
+// sync by calling the same NextPollInterval rather than duplicating its
+// logic, but nothing enforces that they are actually invoked in the same
+// shape.
 func (p *Puller) Run(ctx context.Context) error {
 	p.log.Info("puller starting",
 		"interval", p.cfg.Interval.String(),
@@ -125,8 +139,8 @@ func (p *Puller) Run(ctx context.Context) error {
 	// A time.Timer (not time.Ticker) because the interval changes: it
 	// backs off while poll cycles keep failing to the OAuth
 	// "no client_id" class, and is restored the moment that stops (see
-	// nextPollInterval).
-	timer := time.NewTimer(p.nextPollInterval())
+	// NextPollInterval).
+	timer := time.NewTimer(p.NextPollInterval())
 	defer timer.Stop()
 
 	for {
@@ -138,7 +152,7 @@ func (p *Puller) Run(ctx context.Context) error {
 			if err := p.poll(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				p.log.Error("poll error", "error", err)
 			}
-			next := p.nextPollInterval()
+			next := p.NextPollInterval()
 			if next != p.cfg.Interval {
 				p.log.Warn("polling backed off: oauth client_id/client_secret not configured for remote",
 					"op", "pull",
@@ -150,12 +164,21 @@ func (p *Puller) Run(ctx context.Context) error {
 	}
 }
 
-// nextPollInterval computes the delay before the next poll cycle. It
+// NextPollInterval computes the delay before the next poll cycle. It
 // backs off exponentially, doubling per consecutive ErrOAuthClientMissing
 // failure and capped at oauthBackoffMax; any other outcome keeps (or
 // restores) the configured cfg.Interval. See oauthBackoffMax's doc
 // comment for why this narrow class, specifically, backs off (issue #67).
-func (p *Puller) nextPollInterval() time.Duration {
+//
+// Exported (not just used internally by Run, below) because the shipped
+// binary does not call Run: cmd/homedrive.Agent.runPullLoop owns its own
+// timer so it can hold bisyncMu.RLock around each cycle, something Run
+// has no way to do (see runPullLoop's doc comment). runPullLoop calls
+// this directly to stay in step with the same backoff -- see issue #67's
+// PR review for why that call was originally missing and how it was
+// caught (a test driving Run() in isolation passed while the production
+// path never invoked it).
+func (p *Puller) NextPollInterval() time.Duration {
 	if p.oauthMissingStreak == 0 {
 		return p.cfg.Interval
 	}
@@ -272,7 +295,7 @@ func (p *Puller) fetchChanges(ctx context.Context, token string) (Changes, error
 		)
 		p.emitPullFailure("", err)
 		// Track consecutive OAuth "no client_id" failures for
-		// nextPollInterval's backoff (issue #67); any other error resets
+		// NextPollInterval's backoff (issue #67); any other error resets
 		// the streak, since it is not the permanent condition backoff
 		// exists for.
 		if errors.Is(err, ErrOAuthClientMissing) {
