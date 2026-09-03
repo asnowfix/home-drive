@@ -180,6 +180,90 @@ func TestAgent_Healthz_UnhealthyWhenStoreClosed(t *testing.T) {
 	}
 }
 
+// TestAgent_RcloneHealth_DegradedWhenOAuthClientMissing proves issue #67's
+// chosen healthz shape: a missing client_id/client_secret is surfaced as
+// Degraded on the rclone component, WITHOUT flipping Healthy to false or
+// the overall /healthz result unhealthy -- see rcloneHealth's doc comment
+// for why (avoiding a restart-loop response to a condition only an
+// operator, not a restart, can fix).
+func TestAgent_RcloneHealth_DegradedWhenOAuthClientMissing(t *testing.T) {
+	j := newTestJournal(t)
+	rfs := &fakeRemoteFSWithOAuthStatus{
+		fakeRemoteFS: newFakeRemoteFS(),
+		status:       rcloneclient.OAuthStatus{Checked: true, ClientConfigured: false},
+	}
+	a := &Agent{log: slog.Default(), journal: j, rfs: rfs}
+
+	health := a.rcloneHealth()
+	if !health.Healthy {
+		t.Errorf("expected rclone component to stay Healthy=true, got %+v", health)
+	}
+	if !health.Degraded {
+		t.Errorf("expected rclone component Degraded=true when oauth client is not configured, got %+v", health)
+	}
+	if health.Message == "" {
+		t.Error("expected a non-empty degraded message")
+	}
+
+	result, err := a.Healthz(context.Background())
+	if err != nil {
+		t.Fatalf("healthz: %v", err)
+	}
+	if !result.Healthy {
+		t.Errorf("expected overall healthy=true even when rclone is degraded, got components %+v", result.Components)
+	}
+}
+
+// TestAgent_RcloneHealth_NotDegradedWhenOAuthClientConfigured is the
+// negative case: ClientConfigured=true must never report Degraded, even
+// though Checked=true.
+func TestAgent_RcloneHealth_NotDegradedWhenOAuthClientConfigured(t *testing.T) {
+	j := newTestJournal(t)
+	rfs := &fakeRemoteFSWithOAuthStatus{
+		fakeRemoteFS: newFakeRemoteFS(),
+		status:       rcloneclient.OAuthStatus{Checked: true, ClientConfigured: true},
+	}
+	a := &Agent{log: slog.Default(), journal: j, rfs: rfs}
+
+	health := a.rcloneHealth()
+	if health.Degraded {
+		t.Errorf("expected Degraded=false when oauth client is configured, got %+v", health)
+	}
+}
+
+// TestAgent_RcloneHealth_NotDegradedBeforeFirstCheck proves an unchecked
+// status (Checked=false, e.g. before the first pull cycle completes) is
+// not misreported as degraded -- "not yet known" must not read as "known
+// broken".
+func TestAgent_RcloneHealth_NotDegradedBeforeFirstCheck(t *testing.T) {
+	j := newTestJournal(t)
+	rfs := &fakeRemoteFSWithOAuthStatus{
+		fakeRemoteFS: newFakeRemoteFS(),
+		status:       rcloneclient.OAuthStatus{Checked: false, ClientConfigured: false},
+	}
+	a := &Agent{log: slog.Default(), journal: j, rfs: rfs}
+
+	health := a.rcloneHealth()
+	if health.Degraded {
+		t.Errorf("expected Degraded=false before the first OAuth check, got %+v", health)
+	}
+}
+
+// TestAgent_RcloneHealth_NoOAuthStatusCapability proves rcloneHealth
+// degrades gracefully (literally: stays non-degraded) for a RemoteFS that
+// does not implement the optional oauthStatusReporter capability at all
+// -- the common case for every mock in this test suite, and for MemFS in
+// syncer tests.
+func TestAgent_RcloneHealth_NoOAuthStatusCapability(t *testing.T) {
+	j := newTestJournal(t)
+	a := &Agent{log: slog.Default(), journal: j, rfs: newFakeRemoteFS()}
+
+	health := a.rcloneHealth()
+	if !health.Healthy || health.Degraded {
+		t.Errorf("expected Healthy=true Degraded=false without the capability, got %+v", health)
+	}
+}
+
 func TestUnixNanoToRFC3339_ZeroIsEmpty(t *testing.T) {
 	if got := unixNanoToRFC3339(0); got != "" {
 		t.Errorf("expected empty string for 0, got %q", got)

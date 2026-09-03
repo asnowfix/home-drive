@@ -10,6 +10,19 @@ import (
 	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 )
 
+// oauthBackoffMax bounds how far the poll interval backs off once Drive
+// Changes API polling starts failing on every attempt because this
+// remote's rclone.conf has no client_id/client_secret configured (issue
+// #67). This condition cannot self-heal by retrying: it clears only once
+// an operator configures OAuth credentials and restarts the process (see
+// homedrive/README.md's prerequisites). Retrying at the normal 30s
+// interval just burns Drive API quota and floods the journal for a
+// failure retrying can never fix. 30 minutes still surfaces incremental
+// changes reasonably promptly once the fix lands, without hammering a
+// broken remote meanwhile -- and the hourly bisync safety net (PLAN.md
+// §7.2) keeps carrying all sync traffic, unaffected, the whole time.
+const oauthBackoffMax = 30 * time.Minute
+
 // PullerConfig configures the pull loop.
 type PullerConfig struct {
 	// Interval between polling cycles (default 30s).
@@ -51,6 +64,12 @@ type Puller struct {
 	pub    Publisher
 	log    *slog.Logger
 	clock  func() time.Time
+
+	// oauthMissingStreak counts consecutive poll cycles whose failure was
+	// classified as ErrOAuthClientMissing (see fetchChanges). It drives
+	// NextPollInterval's backoff and is reset to 0 by any other outcome
+	// -- success or a different error (issue #67).
+	oauthMissingStreak int
 }
 
 // NewPuller creates a Puller. Pass a nil Publisher to disable MQTT events.
@@ -90,7 +109,21 @@ func NewPuller(
 }
 
 // Run starts the pull polling loop. It blocks until ctx is cancelled.
-// The first poll happens immediately, then every cfg.Interval.
+// The first poll happens immediately, then every cfg.Interval (subject to
+// NextPollInterval's OAuth backoff, issue #67).
+//
+// Not the shipped binary's pull loop: cmd/homedrive.Agent.runPullLoop
+// owns its own equivalent timer instead, so each cycle can be taken under
+// bisyncMu.RLock, which Run has no way to acquire (Puller has no bisync
+// coordination of its own -- see runPullLoop's doc comment). Run exists
+// for direct/standalone use of Puller (and is exercised that way by this
+// package's own tests) where that coordination either isn't needed or is
+// handled by the caller some other way -- if you are changing scheduling
+// behavior here for a production-facing reason, check whether
+// runPullLoop needs the same change; the two are deliberately kept in
+// sync by calling the same NextPollInterval rather than duplicating its
+// logic, but nothing enforces that they are actually invoked in the same
+// shape.
 func (p *Puller) Run(ctx context.Context) error {
 	p.log.Info("puller starting",
 		"interval", p.cfg.Interval.String(),
@@ -103,20 +136,60 @@ func (p *Puller) Run(ctx context.Context) error {
 		p.log.Error("poll error", "error", err)
 	}
 
-	ticker := time.NewTicker(p.cfg.Interval)
-	defer ticker.Stop()
+	// A time.Timer (not time.Ticker) because the interval changes: it
+	// backs off while poll cycles keep failing to the OAuth
+	// "no client_id" class, and is restored the moment that stops (see
+	// NextPollInterval).
+	timer := time.NewTimer(p.NextPollInterval())
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			p.log.Info("puller stopping", "reason", ctx.Err())
 			return ctx.Err()
-		case <-ticker.C:
+		case <-timer.C:
 			if err := p.poll(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				p.log.Error("poll error", "error", err)
 			}
+			next := p.NextPollInterval()
+			if next != p.cfg.Interval {
+				p.log.Warn("polling backed off: oauth client_id/client_secret not configured for remote",
+					"op", "pull",
+					"next_poll_in", next.String(),
+				)
+			}
+			timer.Reset(next)
 		}
 	}
+}
+
+// NextPollInterval computes the delay before the next poll cycle. It
+// backs off exponentially, doubling per consecutive ErrOAuthClientMissing
+// failure and capped at oauthBackoffMax; any other outcome keeps (or
+// restores) the configured cfg.Interval. See oauthBackoffMax's doc
+// comment for why this narrow class, specifically, backs off (issue #67).
+//
+// Exported (not just used internally by Run, below) because the shipped
+// binary does not call Run: cmd/homedrive.Agent.runPullLoop owns its own
+// timer so it can hold bisyncMu.RLock around each cycle, something Run
+// has no way to do (see runPullLoop's doc comment). runPullLoop calls
+// this directly to stay in step with the same backoff -- see issue #67's
+// PR review for why that call was originally missing and how it was
+// caught (a test driving Run() in isolation passed while the production
+// path never invoked it).
+func (p *Puller) NextPollInterval() time.Duration {
+	if p.oauthMissingStreak == 0 {
+		return p.cfg.Interval
+	}
+	interval := p.cfg.Interval
+	for i := 1; i < p.oauthMissingStreak && interval < oauthBackoffMax; i++ {
+		interval *= 2
+	}
+	if interval > oauthBackoffMax {
+		interval = oauthBackoffMax
+	}
+	return interval
 }
 
 // PollOnce executes a single pull cycle. Exported for testing.
@@ -204,6 +277,7 @@ func (p *Puller) ensurePageToken(ctx context.Context) (string, error) {
 func (p *Puller) fetchChanges(ctx context.Context, token string) (Changes, error) {
 	changes, err := p.remote.ListChanges(ctx, token)
 	if err == nil {
+		p.oauthMissingStreak = 0
 		return changes, nil
 	}
 
@@ -220,8 +294,21 @@ func (p *Puller) fetchChanges(ctx context.Context, token string) (Changes, error
 			"page_token", token,
 		)
 		p.emitPullFailure("", err)
+		// Track consecutive OAuth "no client_id" failures for
+		// NextPollInterval's backoff (issue #67); any other error resets
+		// the streak, since it is not the permanent condition backoff
+		// exists for.
+		if errors.Is(err, ErrOAuthClientMissing) {
+			p.oauthMissingStreak++
+		} else {
+			p.oauthMissingStreak = 0
+		}
 		return Changes{}, fmt.Errorf("listing changes: %w", err)
 	}
+
+	// A 410/400 reset is a different, self-healing failure class, not the
+	// permanent OAuth condition backoff targets.
+	p.oauthMissingStreak = 0
 
 	// Token is unusable, reset it. This covers two distinguishable causes
 	// (issue #64): the classic HTTP 410 GONE (Drive once recognized this

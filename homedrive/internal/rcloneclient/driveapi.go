@@ -81,11 +81,18 @@ func (r *RcloneFS) oauthHTTPClient(ctx context.Context) (*http.Client, error) {
 	clientID, _ := config.FileGetValue(r.remoteName, "client_id")
 	clientSecret, _ := config.FileGetValue(r.remoteName, "client_secret")
 
+	// Recorded for OAuthStatus (GET /healthz) and for pollChanges to
+	// classify a later token-refresh failure -- see oauthstatus.go. Called
+	// only from driveService, which already holds r.mu, so no separate
+	// locking is needed here (issue #67).
+	r.oauthChecked = true
+	r.oauthClientConfigured = clientID != "" && clientSecret != ""
+
 	oauthCfg, tok, err := buildOAuthConfig(tokenJSON, clientID, clientSecret)
 	if err != nil {
 		return nil, err
 	}
-	if clientID == "" || clientSecret == "" {
+	if !r.oauthClientConfigured {
 		r.log.Warn("remote has no client_id/client_secret in rclone.conf; "+
 			"Drive Changes API polling will start failing once the currently "+
 			"stored access token expires -- configure a personal OAuth client "+
@@ -228,6 +235,14 @@ func (r *RcloneFS) pollChanges(ctx context.Context, pageToken string) (Changes, 
 				// has the stale token in scope for its log line, so a
 				// second Warn here would just double-count every event.
 				return Changes{}, fmt.Errorf("rcloneclient: changes.list: %w", NewTokenRejectedErr(err))
+			}
+			if isOAuthClientMissingErr(err, r.OAuthStatus().ClientConfigured) {
+				// Permanent until an operator configures OAuth credentials
+				// and restarts (issue #67) -- syncer.Puller.fetchChanges
+				// classifies this via errors.Is(err, ErrOAuthClientMissing)
+				// and backs off the poll interval instead of retrying at
+				// the normal cadence indefinitely.
+				return Changes{}, fmt.Errorf("rcloneclient: changes.list: %w: %w", ErrOAuthClientMissing, err)
 			}
 			return Changes{}, fmt.Errorf("rcloneclient: changes.list: %w", err)
 		}

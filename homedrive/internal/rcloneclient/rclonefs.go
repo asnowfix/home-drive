@@ -58,11 +58,20 @@ type RcloneFS struct {
 	log        *slog.Logger
 
 	// mu guards changesSvc and rootID, which are lazily resolved on first
-	// use of the Drive Changes API and cached for the life of the process.
+	// use of the Drive Changes API and cached for the life of the process,
+	// and oauthChecked/oauthClientConfigured below.
 	mu         sync.Mutex
 	changesSvc *drivev3.Service
 	rootID     string
 	pathCache  *idPathCache
+
+	// oauthChecked and oauthClientConfigured cache the last observation
+	// from oauthHTTPClient of whether this remote's rclone.conf section
+	// has client_id/client_secret set. Read by OAuthStatus (GET /healthz,
+	// issue #67) and by pollChanges (to classify a token-refresh failure
+	// without parsing error text, via isOAuthClientMissingErr).
+	oauthChecked          bool
+	oauthClientConfigured bool
 }
 
 // NewRcloneFS initializes the rclone backend from the given config.

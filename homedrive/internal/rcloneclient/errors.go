@@ -44,6 +44,27 @@ var (
 	// below, never by hand: that keeps it always co-occurring with ErrGone
 	// (see NewTokenRejectedErr's doc comment for why that matters).
 	ErrTokenRejected = errors.New("rcloneclient: page token rejected (non-410)")
+
+	// ErrOAuthClientMissing indicates a Drive Changes API call failed
+	// while silently refreshing an expired OAuth access token because
+	// this remote's rclone.conf section has no client_id/client_secret.
+	// Google's token endpoint then returns RFC 6749's "invalid_request"
+	// ("Could not determine client ID from request"), surfaced to Go as
+	// *oauth2.RetrieveError -- see isOAuthClientMissingErr in
+	// oauthstatus.go for exactly how this is classified.
+	//
+	// This is a permanent condition: retrying does not help, only an
+	// operator configuring a personal OAuth client for the remote and
+	// re-authorising it does (homedrive/README.md's prerequisites). That
+	// is why syncer.Puller backs off its poll interval on this specific
+	// error class instead of retrying at cfg.Interval indefinitely
+	// (issue #67) -- deliberately narrower than "back off on any auth
+	// failure", see isOAuthClientMissingErr's doc comment for why.
+	//
+	// The same underlying precondition -- known from rclone.conf, not
+	// from this error -- is exposed to GET /healthz without an extra
+	// live probe via RcloneFS.OAuthStatus.
+	ErrOAuthClientMissing = errors.New("rcloneclient: oauth client_id/client_secret not configured for remote")
 )
 
 // NewTokenRejectedErr builds the error pollChanges returns when Drive

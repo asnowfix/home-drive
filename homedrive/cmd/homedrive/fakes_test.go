@@ -166,3 +166,50 @@ func (f *fakeRemoteFSWithChanges) ListChanges(_ context.Context, _ string) (rclo
 		},
 	}, nil
 }
+
+// fakeRemoteFSWithOAuthStatus wraps fakeRemoteFS (by pointer, to avoid
+// copying its embedded sync.Mutex) and adds an OAuthStatus method, letting
+// tests exercise rcloneHealth's optional-capability type assertion
+// (issue #67) without fakeRemoteFS itself needing to implement it -- most
+// tests have no reason to care about OAuth status at all.
+type fakeRemoteFSWithOAuthStatus struct {
+	*fakeRemoteFS
+	status rcloneclient.OAuthStatus
+}
+
+func (f *fakeRemoteFSWithOAuthStatus) OAuthStatus() rcloneclient.OAuthStatus {
+	return f.status
+}
+
+// fakeRemoteFSWithOAuthClientMissing wraps fakeRemoteFS (by pointer, same
+// reason as above) and overrides ListChanges to always fail as
+// rcloneclient.ErrOAuthClientMissing, letting tests drive
+// Agent.runPullLoop -- the actual shipped pull loop, not syncer.Puller.Run
+// -- through a sustained OAuth "no client_id" outage (issue #67 PR review:
+// a test of Run() in isolation is not evidence about what runPullLoop
+// does). It records the wall-clock time of every call so a test can
+// assert the real gap between calls grows, not just that some internal
+// counter advances.
+type fakeRemoteFSWithOAuthClientMissing struct {
+	*fakeRemoteFS
+
+	mu    sync.Mutex
+	calls []time.Time
+}
+
+func (f *fakeRemoteFSWithOAuthClientMissing) ListChanges(_ context.Context, _ string) (rcloneclient.Changes, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, time.Now())
+	f.mu.Unlock()
+	return rcloneclient.Changes{}, fmt.Errorf("fake changes.list: %w", rcloneclient.ErrOAuthClientMissing)
+}
+
+// callTimes returns a copy of the recorded call timestamps, safe to read
+// after the loop under test has stopped.
+func (f *fakeRemoteFSWithOAuthClientMissing) callTimes() []time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]time.Time, len(f.calls))
+	copy(out, f.calls)
+	return out
+}

@@ -31,6 +31,15 @@ var (
 	// eviction (PLAN.md §11.5).
 	ErrRemoteNotFound = rcloneclient.ErrNotFound
 
+	// ErrOAuthClientMissing is the same sentinel as
+	// rcloneclient.ErrOAuthClientMissing (see ErrGone above for why no
+	// adapter is used): a Drive Changes API token refresh failed because
+	// the remote has no client_id/client_secret configured. Puller's
+	// fetchChanges classifies this from RemoteFS.ListChanges's returned
+	// error and backs off the poll interval instead of retrying at
+	// cfg.Interval indefinitely (issue #67).
+	ErrOAuthClientMissing = rcloneclient.ErrOAuthClientMissing
+
 	// ErrConflict signals a sync conflict where local and remote state
 	// diverged from what the journal expected.
 	ErrConflict = errors.New("syncer: conflict detected")
