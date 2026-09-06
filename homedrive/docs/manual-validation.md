@@ -197,7 +197,7 @@ and logs.
 ## 15. Crash recovery
 
 - [ ] `sudo kill -9 $(pidof homedrive)` (simulate crash)
-- [ ] Wait for systemd to restart the service (10s RestartSec)
+- [ ] Wait for systemd to restart the service (60s RestartSec)
 - [ ] `homedrive ctl status` shows `running`
 - [ ] MQTT online sensor recovers to `online`
 - [ ] Create a file and verify it syncs normally (push path works)

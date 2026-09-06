@@ -1058,6 +1058,7 @@ Description=homedrive sync agent for %i
 Documentation=https://github.com/asnowfix/home-drive/blob/main/homedrive/README.md
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -1069,7 +1070,7 @@ ExecCondition=/bin/sh -c 'test -f $(getent passwd %i | cut -d: -f6)/.config/home
 ExecStart=/usr/bin/homedrive run
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
-RestartSec=10
+RestartSec=60
 StateDirectory=homedrive/%i
 LogsDirectory=homedrive/%i
 
@@ -1094,6 +1095,18 @@ systemd specifier issue (it resolves to `/root` in system units regardless
 of `User=`). `ExecCondition` gates startup on that same path so the unit
 fails fast with a clear reason if the user hasn't created their config yet,
 instead of crash-looping.
+
+`StartLimitIntervalSec=0` (in `[Unit]`, not `[Service]` -- that's where
+`StartLimit*=` has lived since systemd 230) disables systemd's start-limit
+trip entirely, and `RestartSec=60` (up from 10s) keeps a crash-looping
+agent -- e.g. a bad Drive credential, which fails in under a second -- from
+hammering Drive's OAuth endpoint. Before this, the unit's default 10s/5
+start-limit would trip and leave it permanently `inactive (dead)` while
+still `enabled`, requiring a human `systemctl restart` even after the
+underlying fault was fixed (#88). The trade-off is that ordinary transient
+crashes also now take up to 60s to recover instead of 10s; acceptable
+because local disk stays the source of truth regardless of restart
+latency (§3).
 
 ### 15.2 `linux/99-homedrive-inotify.conf`
 

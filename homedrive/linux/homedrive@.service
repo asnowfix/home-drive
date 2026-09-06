@@ -3,6 +3,14 @@ Description=homedrive sync agent for %i
 Documentation=https://github.com/asnowfix/home-drive/blob/main/homedrive/README.md
 After=network-online.target
 Wants=network-online.target
+# Never permanently give up restarting -- see #88. systemd's default
+# start-limit (10s window / 5 attempts) used to trip and leave the unit
+# stuck `inactive (dead)` while `enabled`, with no further retry, until a
+# human ran `systemctl restart`. StartLimitIntervalSec=0 disables that
+# trip entirely (systemd.unit(5)); a broken credential should not need a
+# human step to recover once it's fixed. StartLimit*= belongs in [Unit],
+# not [Service], since systemd 230.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -13,8 +21,13 @@ EnvironmentFile=-/etc/default/homedrive.%i
 ExecCondition=/bin/sh -c 'test -f $(getent passwd %i | cut -d: -f6)/.config/homedrive/config.yaml'
 ExecStart=/usr/bin/homedrive run
 ExecReload=/bin/kill -HUP $MAINPID
+# RestartSec=60 (was 10s): deliberately unhurried so a crash-looping agent
+# doesn't hammer Drive's OAuth endpoint once a credential goes bad. This
+# also slows recovery from an ordinary transient crash from 10s to 60s --
+# acceptable because local disk stays the source of truth regardless of
+# restart latency (PLAN.md §3).
 Restart=on-failure
-RestartSec=10
+RestartSec=60
 StateDirectory=homedrive/%i
 LogsDirectory=homedrive/%i
 

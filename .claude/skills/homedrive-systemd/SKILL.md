@@ -19,6 +19,7 @@ Description=homedrive sync agent for %i
 Documentation=https://github.com/asnowfix/home-drive/blob/main/homedrive/README.md
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -30,7 +31,7 @@ ExecCondition=/bin/sh -c 'test -f $(getent passwd %i | cut -d: -f6)/.config/home
 ExecStart=/usr/bin/homedrive run
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
-RestartSec=10
+RestartSec=60
 StateDirectory=homedrive/%i
 LogsDirectory=homedrive/%i
 
@@ -57,6 +58,18 @@ startup on that same path so a missing config fails fast with a clear
 `StateDirectory=`/`LogsDirectory=` (not `postinst.sh`) create
 `/var/lib/homedrive/<user>/` and `/var/log/homedrive/<user>/`, owned by that
 user, at service start.
+
+`StartLimitIntervalSec=0` lives in `[Unit]`, not `[Service]` — that's where
+`StartLimit*=` has been since systemd 230; putting it in `[Service]` is
+silently ignored (`systemd-analyze verify` will say "Unknown key name").
+It disables systemd's restart-rate trip entirely, so the unit can never end
+up permanently `inactive (dead)` while still `enabled` (#88). `RestartSec=60`
+(not the systemd default of ~100ms nor the previous 10s) is the matching
+half: a crash-looping agent — e.g. a bad Drive credential, which fails in
+under a second — retries once a minute instead of hammering Drive's OAuth
+endpoint. This also means an ordinary transient crash now takes up to 60s to
+recover instead of 10s, which is a deliberate trade (local disk stays the
+source of truth regardless of restart latency), not a regression.
 
 Activation (requires `~/.config/homedrive/config.yaml` to already exist for
 that user — see "Configuration" in `homedrive/README.md`):
