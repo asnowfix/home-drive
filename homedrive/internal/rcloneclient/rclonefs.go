@@ -111,14 +111,25 @@ func NewRcloneFS(ctx context.Context, cfg RcloneFSConfig) (*RcloneFS, error) {
 		"config_path", cfg.ConfigPath,
 	)
 
-	return &RcloneFS{
+	r := &RcloneFS{
 		remote:     remote,
 		remoteName: remoteSectionName(remote),
 		fsObj:      fsObj,
 		exclude:    cfg.Exclude,
 		log:        log,
 		pathCache:  newIDPathCache(),
-	}, nil
+	}
+
+	// Force an OAuth token refresh now, rather than trusting the cached
+	// access token, so a broken or mismatched Drive credential is reported
+	// at startup instead of appearing healthy for up to an hour (issue #86,
+	// see validateOAuthCredential's doc comment for what is and isn't
+	// caught and why).
+	if err := r.validateOAuthCredential(ctx); err != nil {
+		return nil, err
+	}
+
+	return r, nil
 }
 
 // CopyFile uploads a local file to the remote directory.

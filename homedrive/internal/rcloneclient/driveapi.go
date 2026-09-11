@@ -74,25 +74,19 @@ func (r *RcloneFS) driveService(ctx context.Context) (*drivev3.Service, error) {
 // present, the remote's own client_id/client_secret) rather than starting a
 // new OAuth consent flow.
 func (r *RcloneFS) oauthHTTPClient(ctx context.Context) (*http.Client, error) {
-	tokenJSON, ok := config.FileGetValue(r.remoteName, "token")
-	if !ok || tokenJSON == "" {
-		return nil, fmt.Errorf("no oauth token stored for remote %q in rclone.conf", r.remoteName)
+	oauthCfg, tok, clientConfigured, err := readOAuthConfig(r.remoteName)
+	if err != nil {
+		return nil, err
 	}
-	clientID, _ := config.FileGetValue(r.remoteName, "client_id")
-	clientSecret, _ := config.FileGetValue(r.remoteName, "client_secret")
 
 	// Recorded for OAuthStatus (GET /healthz) and for pollChanges to
 	// classify a later token-refresh failure -- see oauthstatus.go. Called
 	// only from driveService, which already holds r.mu, so no separate
 	// locking is needed here (issue #67).
 	r.oauthChecked = true
-	r.oauthClientConfigured = clientID != "" && clientSecret != ""
+	r.oauthClientConfigured = clientConfigured
 
-	oauthCfg, tok, err := buildOAuthConfig(tokenJSON, clientID, clientSecret)
-	if err != nil {
-		return nil, err
-	}
-	if !r.oauthClientConfigured {
+	if !clientConfigured {
 		r.log.Warn("remote has no client_id/client_secret in rclone.conf; "+
 			"Drive Changes API polling will start failing once the currently "+
 			"stored access token expires -- configure a personal OAuth client "+
@@ -101,6 +95,30 @@ func (r *RcloneFS) oauthHTTPClient(ctx context.Context) (*http.Client, error) {
 		)
 	}
 	return oauthCfg.Client(ctx, tok), nil
+}
+
+// readOAuthConfig reads remoteName's stored OAuth token and client
+// credentials from rclone.conf and builds the oauth2.Config/Token pair
+// shared by oauthHTTPClient (the live Changes API client, above) and
+// validateOAuthCredential (the startup forced-refresh check added for
+// issue #86, in oauthvalidate.go). Pure with respect to RcloneFS state:
+// callers record clientConfigured on r themselves, since their locking
+// requirements differ -- oauthHTTPClient is always called with r.mu
+// already held by driveService, while validateOAuthCredential runs before
+// the RcloneFS is shared with any other goroutine.
+func readOAuthConfig(remoteName string) (oauthCfg *oauth2.Config, tok *oauth2.Token, clientConfigured bool, err error) {
+	tokenJSON, ok := config.FileGetValue(remoteName, "token")
+	if !ok || tokenJSON == "" {
+		return nil, nil, false, fmt.Errorf("no oauth token stored for remote %q in rclone.conf", remoteName)
+	}
+	clientID, _ := config.FileGetValue(remoteName, "client_id")
+	clientSecret, _ := config.FileGetValue(remoteName, "client_secret")
+
+	oauthCfg, tok, err = buildOAuthConfig(tokenJSON, clientID, clientSecret)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	return oauthCfg, tok, clientID != "" && clientSecret != "", nil
 }
 
 // buildOAuthConfig parses a stored rclone.conf OAuth2 token and builds the

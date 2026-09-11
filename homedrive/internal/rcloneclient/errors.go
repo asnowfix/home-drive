@@ -65,6 +65,33 @@ var (
 	// from this error -- is exposed to GET /healthz without an extra
 	// live probe via RcloneFS.OAuthStatus.
 	ErrOAuthClientMissing = errors.New("rcloneclient: oauth client_id/client_secret not configured for remote")
+
+	// ErrOAuthClientMisconfigured indicates NewRcloneFS's startup
+	// validation (RcloneFS.validateOAuthCredential, oauthvalidate.go)
+	// forced a refresh of the stored OAuth token and Google's token
+	// endpoint definitively rejected it for a client-setup reason -- RFC
+	// 6749 error codes invalid_client, unauthorized_client,
+	// unsupported_grant_type or invalid_scope, the same bucket rclone's
+	// own lib/oauthutil groups as "client id/secret setup is wrong" (see
+	// homedrive/docs/oauth-troubleshooting.md). This is exactly what
+	// issue #87 hit: a token minted by one OAuth client while a
+	// different client's client_id/client_secret sat in rclone.conf --
+	// invisible while the still-valid access token kept working, only
+	// surfacing at the first real refresh. Forcing that refresh at
+	// startup surfaces it immediately instead (issue #86). NewRcloneFS
+	// returns this directly, failing agent startup loudly rather than
+	// running degraded for up to an hour.
+	ErrOAuthClientMisconfigured = errors.New("rcloneclient: oauth client_id/client_secret rejected by token endpoint at startup")
+
+	// ErrOAuthTokenInvalid indicates the same startup validation refresh
+	// was definitively rejected by Google's token endpoint, but for a
+	// token reason rather than a client-setup reason -- RFC 6749
+	// invalid_grant (expired, revoked, or issued to another client), or
+	// any error code not in ErrOAuthClientMisconfigured's bucket.
+	// Distinct from ErrOAuthClientMisconfigured because the fix differs
+	// (re-authorize the remote vs. fix the Cloud Console client setup) --
+	// see homedrive/docs/oauth-troubleshooting.md.
+	ErrOAuthTokenInvalid = errors.New("rcloneclient: oauth refresh token rejected by token endpoint at startup")
 )
 
 // NewTokenRejectedErr builds the error pollChanges returns when Drive
