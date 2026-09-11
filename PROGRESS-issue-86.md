@@ -47,4 +47,60 @@ removal, migration tooling, touching fs/config/configfile.
   any oauth error", consistent with isOAuthClientMissingErr's existing
   "deliberately narrower" precedent in this codebase.
 
-## Status: implementing
+## Status: resumed after spend-limit kill, finishing
+
+Picked up from commit 591895a (pushed by the maintainer after the previous
+agent was killed by a hard spend limit mid-task). What was done in this
+session:
+
+1. Fixed the compile error: `oauthvalidate.go` was missing `"log/slog"`.
+2. Wrote `oauthvalidate_test.go` (none existed before). Covers:
+   - `forceOAuthRefresh` table-driven over all 4 client-setup RFC 6749 codes
+     (-> `ErrOAuthClientMisconfigured`), `invalid_grant` + an unrecognized
+     code (-> `ErrOAuthTokenInvalid`), and a successful refresh (-> nil).
+   - Network-unreachable and context-timeout cases, both swallowed (nil).
+   - `classifyOAuthRefreshErr` directly, table-driven, no network.
+   - `validateOAuthCredential`'s three swallowed paths (no token stored,
+     malformed token, no refresh token) using `config.FileSetValue` against
+     unique section names -- same established pattern as
+     `TestOAuthHTTPClient_RecordsClientConfiguredStatus` in
+     `oauthstatus_test.go`. Deliberately does NOT test the "real refresh
+     token, reaches forceOAuthRefresh" path through `validateOAuthCredential`
+     end-to-end, because `readOAuthConfig` always builds `oauthCfg` against
+     `google.Endpoint` -- there is no seam to swap in a fake token server at
+     that layer, and reaching it would mean a real call to Google. That path
+     is why `forceOAuthRefresh` was split out as a function of its inputs
+     instead -- it's covered directly, with a fake server.
+   - A secret-leak check (`assertNoSecretLeak`) asserting neither the
+     returned error text nor captured log output contains the fake
+     token/client-secret markers used in test fixtures.
+   - Found and fixed a `t.Cleanup` LIFO-ordering deadlock in my own first
+     draft of the timeout test: closing `blockUntil` was registered before
+     `srv.Close()`, so `Close()` (which waits for in-flight handlers) hung
+     forever waiting for a handler that could only return once `blockUntil`
+     closed. Fixed by reordering registration.
+   - Coverage: 84.0% for `internal/rcloneclient` (gate is 70%).
+3. Resolved both open questions from the resume brief as documented
+   decisions in `oauthvalidate.go`'s doc comment on
+   `validateOAuthCredential` (not just flagged):
+   - Non-persistence of the refreshed token: kept as-is, deliberately, with
+     rationale (matches the pre-existing `oauthHTTPClient` gap; one call per
+     startup, not per poll cycle; persisting risks a new hang if
+     `rclone.conf` is encrypted and `Save()` wants a password with no TTY on
+     a headless systemd service; proper fix is a homedrive-owned `Storage`,
+     which is the deferred "own the secrets" option on #86).
+   - Interaction with #88's restart policy: the brief's still-current
+     concern was written against the *interim*, already-superseded
+     never-give-up/flat-60s policy. #88 was corrected 2026-09-07 to "quick
+     retries with exponential backoff, then fail after some attempts" --
+     not yet implemented in code. Documented why that direction is strictly
+     safer for this check (bounded attempts vs. unbounded), and flagged the
+     one real open risk (an aggressively fast early-backoff floor could
+     still burn several refreshes in the first second or two of a crash
+     loop) as a #88 design question, not something this slice should
+     second-guess.
+
+## Before opening the PR
+
+This file is for continuity only and must NOT land in the PR/main --
+delete it in the last local commit before pushing, per the resume brief.

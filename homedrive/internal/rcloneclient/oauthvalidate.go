@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -62,11 +63,32 @@ var clientSetupErrorCodes = map[string]bool{
 // deliberately narrower than "fail on any oauth error" for the same reason
 // isOAuthClientMissingErr (oauthstatus.go) is narrow.
 //
-// The refreshed token is never persisted back to rclone.conf: this is a
-// validate-only check, matching the existing (pre-#86) gap where
-// oauthHTTPClient's own refreshes aren't persisted either -- not a
-// regression introduced here, and out of this issue's scope (see the
-// "own the secrets" deferred option on issue #86).
+// Decision: the refreshed token is deliberately never persisted back to
+// rclone.conf, so every startup burns one refresh call. Considered and
+// rejected persisting it: oauthHTTPClient's own refreshes already have this
+// same gap (not a regression introduced here), the cost is one call per
+// process startup -- not per poll cycle -- so it is negligible in steady
+// state, and writing through configfile's Storage from a headless
+// systemd service risks a new failure mode this check exists to prevent
+// (e.g. an encrypted rclone.conf's Save() path prompting for a config
+// password with no TTY to answer it, turning a benign non-persistence gap
+// into a hang). Persistence is better addressed by a homedrive-owned
+// Storage, which is exactly the deferred "own the secrets" option on issue
+// #86 -- not this validate-only slice.
+//
+// Decision: this forces a refresh on every process startup, including
+// every restart of a crash-looping agent. At the time of writing, issue #88
+// is *designed* (not yet implemented) to replace the currently-deployed
+// never-give-up/flat-60s restart policy with a bounded number of attempts
+// on a quick exponential backoff. That direction is strictly safer for this
+// check than the interim policy actually running in production: bounded
+// attempts cap the total refresh calls a dead credential can trigger,
+// where the interim flat-60s policy does not. The one open risk is #88's
+// still-undecided backoff floor -- if early retries land near-instantly,
+// this check could burn several refreshes within the first second or two
+// of a crash loop. That is a #88 design question (what "quick" and "some
+// attempts" mean), not something this slice should second-guess by, say,
+// adding its own rate limiting -- see this PR's description for why.
 func (r *RcloneFS) validateOAuthCredential(ctx context.Context) error {
 	oauthCfg, tok, clientConfigured, err := readOAuthConfig(r.remoteName)
 	if err != nil {
