@@ -2,9 +2,11 @@ package rcloneclient
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,5 +126,97 @@ func TestRcloneFS_DownloadFile_NotFound(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "a.txt")
 	if err := r.DownloadFile(context.Background(), "missing.txt", dst); err == nil {
 		t.Fatal("expected an error for a missing remote object")
+	}
+}
+
+// TestNewRcloneFS_Ordering_ValidationFailureSkipsBuildFs is the regression
+// test for the issue #86 follow-up: PR #96 wired validateOAuthCredential
+// into NewRcloneFS, but called rclonefs.NewFs (buildFs here) *before* it, so
+// rclone's own eager root-directory lookup failed first with a generic
+// error for exactly the broken-credential case validateOAuthCredential
+// exists to catch -- confirmed live against the real #87 credential after
+// that PR merged. This proves the fix at the call-order level, not just
+// that classifyOAuthRefreshErr buckets error codes correctly (which
+// oauthvalidate_test.go already covers and which alone did not catch this
+// bug): buildFs must never run once validate has rejected the credential,
+// and the error returned to the caller must be validate's, not buildFs's.
+func TestNewRcloneFS_Ordering_ValidationFailureSkipsBuildFs(t *testing.T) {
+	wantErr := errors.New("stand-in for a classified ErrOAuthClientMisconfigured/ErrOAuthTokenInvalid")
+	buildFsCalled := false
+
+	validate := func(_ *RcloneFS, _ context.Context) error { return wantErr }
+	buildFs := func(context.Context, string) (rclonefs.Fs, error) {
+		buildFsCalled = true
+		return &fakeListingFS{}, nil
+	}
+
+	_, err := newRcloneFS(context.Background(), RcloneFSConfig{Remote: "gdrive:", Log: slog.Default()}, validate, buildFs)
+
+	if !errors.Is(err, wantErr) {
+		t.Errorf("newRcloneFS error = %v, want errors.Is(_, wantErr)", err)
+	}
+	if buildFsCalled {
+		t.Error("buildFs (rclonefs.NewFs) was called despite validation rejecting the credential -- " +
+			"this is exactly the issue #86 follow-up regression: a broken credential must never reach " +
+			"the doomed rclone backend construction that produces the generic, unclassified error")
+	}
+}
+
+// TestNewRcloneFS_Ordering_ValidationSuccessRunsBuildFs proves the other
+// half of the same ordering invariant: once validation passes, buildFs
+// (rclonefs.NewFs) still runs, with the exact remote string from cfg.Remote,
+// and its result reaches NewRcloneFS's normal post-construction checks (the
+// *drive.Fs type assertion below fails for this fake on purpose, proving
+// the returned Fs actually flowed through rather than the call being
+// skipped or its result discarded).
+func TestNewRcloneFS_Ordering_ValidationSuccessRunsBuildFs(t *testing.T) {
+	validateCalled := false
+	var gotRemote string
+
+	validate := func(_ *RcloneFS, _ context.Context) error { validateCalled = true; return nil }
+	buildFs := func(_ context.Context, remote string) (rclonefs.Fs, error) {
+		gotRemote = remote
+		return &fakeListingFS{}, nil
+	}
+
+	_, err := newRcloneFS(context.Background(), RcloneFSConfig{Remote: "gdrive:", Log: slog.Default()}, validate, buildFs)
+
+	if !validateCalled {
+		t.Error("validate was never called")
+	}
+	if gotRemote != "gdrive:" {
+		t.Errorf("buildFs called with remote %q, want %q", gotRemote, "gdrive:")
+	}
+	// fakeListingFS is not a *drive.Fs, so this is expected to fail the
+	// post-buildFs type assertion -- that failure is exactly the proof that
+	// buildFs's return value reached NewRcloneFS's existing checks.
+	if err == nil || !strings.Contains(err.Error(), "not a drive backend") {
+		t.Errorf("newRcloneFS error = %v, want a \"not a drive backend\" error proving buildFs's result was used", err)
+	}
+}
+
+// TestNewRcloneFS_Ordering_DefaultValidateRunsBeforeBuildFs ties the
+// abstract ordering proven above to NewRcloneFS's actual default wiring
+// (validate=nil, defaulting to (*RcloneFS).validateOAuthCredential): with no
+// OAuth token stored for the remote at all, real validateOAuthCredential
+// deterministically skips and returns nil without any network call (see
+// TestValidateOAuthCredential_NoTokenStored_SkipsAndReturnsNil), so this
+// asserts buildFs still runs afterward -- proving the production default,
+// not just an injected fake, preserves the order.
+func TestNewRcloneFS_Ordering_DefaultValidateRunsBeforeBuildFs(t *testing.T) {
+	buildFsCalled := false
+	buildFs := func(context.Context, string) (rclonefs.Fs, error) {
+		buildFsCalled = true
+		return &fakeListingFS{}, nil
+	}
+
+	cfg := RcloneFSConfig{Remote: "test-newrclonefs-ordering-no-token:", Log: slog.Default()}
+	_, err := newRcloneFS(context.Background(), cfg, nil, buildFs)
+
+	if !buildFsCalled {
+		t.Error("buildFs was never called even though the real validateOAuthCredential should have skipped (no token stored) and returned nil")
+	}
+	if err == nil || !strings.Contains(err.Error(), "not a drive backend") {
+		t.Errorf("newRcloneFS error = %v, want a \"not a drive backend\" error proving buildFs's result was used", err)
 	}
 }

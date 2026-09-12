@@ -74,9 +74,39 @@ type RcloneFS struct {
 	oauthClientConfigured bool
 }
 
+// buildFsFunc abstracts rclonefs.NewFs so the call-order invariant
+// newRcloneFS enforces below is directly unit-testable with a fake, without
+// a real rclone backend construction touching the network (see
+// TestNewRcloneFS_Ordering* in rclonefs_test.go). Production always passes
+// rclonefs.NewFs itself, via NewRcloneFS below.
+type buildFsFunc func(ctx context.Context, remote string) (rclonefs.Fs, error)
+
 // NewRcloneFS initializes the rclone backend from the given config.
 // It loads rclone.conf and creates the remote Fs object.
 func NewRcloneFS(ctx context.Context, cfg RcloneFSConfig) (*RcloneFS, error) {
+	return newRcloneFS(ctx, cfg, nil, rclonefs.NewFs)
+}
+
+// newRcloneFS is NewRcloneFS's real implementation. validate and buildFs are
+// both injectable so the order between them is directly testable with
+// fakes for both, without a real OAuth refresh or a real rclone backend
+// construction ever touching the network. Production (NewRcloneFS above)
+// always passes validate=nil, which defaults to (*RcloneFS).validateOAuthCredential
+// -- i.e. exactly the same call production always made -- so the default
+// wiring itself, not just the abstract order, is what tests exercise.
+//
+// The OAuth credential is validated before buildFs is ever called. This
+// used to be the other way around (buildFs, i.e. rclonefs.NewFs, ran
+// first): rclone's own NewFs does its own eager root-directory lookup for
+// the Drive backend, which needs a working token and -- for exactly the
+// broken credential validateOAuthCredential exists to catch -- fails first,
+// with a generic rclone error, before validateOAuthCredential ever got a
+// chance to run. That made the added startup validation (issue #86)
+// unreachable for the one failure mode it was built to catch, confirmed
+// live against the real #87 credential after issue #86's first PR merged.
+// See validateOAuthCredential's doc comment for what is and isn't caught
+// and why.
+func newRcloneFS(ctx context.Context, cfg RcloneFSConfig, validate func(*RcloneFS, context.Context) error, buildFs buildFsFunc) (*RcloneFS, error) {
 	if cfg.ConfigPath != "" {
 		if err := config.SetConfigPath(cfg.ConfigPath); err != nil {
 			return nil, fmt.Errorf("rcloneclient: set config path %q: %w", cfg.ConfigPath, err)
@@ -93,7 +123,28 @@ func NewRcloneFS(ctx context.Context, cfg RcloneFSConfig) (*RcloneFS, error) {
 		log = slog.Default()
 	}
 
-	fsObj, err := rclonefs.NewFs(ctx, remote)
+	r := &RcloneFS{
+		remote:     remote,
+		remoteName: remoteSectionName(remote),
+		exclude:    cfg.Exclude,
+		log:        log,
+		pathCache:  newIDPathCache(),
+	}
+
+	if validate == nil {
+		validate = (*RcloneFS).validateOAuthCredential
+	}
+
+	// Force an OAuth token refresh now, rather than trusting the cached
+	// access token, so a broken or mismatched Drive credential is reported
+	// at startup instead of appearing healthy for up to an hour (issue #86).
+	// This must run, and fail fast, before buildFs below -- see this
+	// function's doc comment for why the order matters.
+	if err := validate(r, ctx); err != nil {
+		return nil, err
+	}
+
+	fsObj, err := buildFs(ctx, remote)
 	if err != nil {
 		return nil, fmt.Errorf("rcloneclient: init remote %q: %w", remote, err)
 	}
@@ -111,24 +162,7 @@ func NewRcloneFS(ctx context.Context, cfg RcloneFSConfig) (*RcloneFS, error) {
 		"config_path", cfg.ConfigPath,
 	)
 
-	r := &RcloneFS{
-		remote:     remote,
-		remoteName: remoteSectionName(remote),
-		fsObj:      fsObj,
-		exclude:    cfg.Exclude,
-		log:        log,
-		pathCache:  newIDPathCache(),
-	}
-
-	// Force an OAuth token refresh now, rather than trusting the cached
-	// access token, so a broken or mismatched Drive credential is reported
-	// at startup instead of appearing healthy for up to an hour (issue #86,
-	// see validateOAuthCredential's doc comment for what is and isn't
-	// caught and why).
-	if err := r.validateOAuthCredential(ctx); err != nil {
-		return nil, err
-	}
-
+	r.fsObj = fsObj
 	return r, nil
 }
 
