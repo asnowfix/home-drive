@@ -46,6 +46,13 @@ var (
 	// cfg.Interval indefinitely (issue #67).
 	ErrOAuthClientMissing = rcloneclient.ErrOAuthClientMissing
 
+	// ErrDanglingShortcut is the same sentinel as
+	// rcloneclient.ErrDanglingShortcut (see ErrGone above for why no
+	// adapter is used): the remote object is a Drive shortcut whose
+	// target is gone. The Puller skips it (once-only warning, nothing
+	// journaled) instead of failing the cycle (issue #82).
+	ErrDanglingShortcut = rcloneclient.ErrDanglingShortcut
+
 	// ErrConflict signals a sync conflict where local and remote state
 	// diverged from what the journal expected.
 	ErrConflict = errors.New("syncer: conflict detected")

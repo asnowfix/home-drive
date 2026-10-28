@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -697,5 +698,28 @@ func TestBisync_MultipleLocalOnlyFiles(t *testing.T) {
 
 	if remote.CopyCount() != 3 {
 		t.Errorf("expected 3 copy calls, got %d", remote.CopyCount())
+	}
+}
+
+func TestBisync_DanglingShortcut_SkippedNoJournal(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	bisync, _, remote, journal, _, _ := newTestBisync(t, root, false)
+	remote.downloadErr["link"] = fmt.Errorf("mock: %w", ErrDanglingShortcut)
+
+	diffs := []FileDiff{
+		{Path: "link", Kind: DiffRemoteOnly, RemoteInfo: &RemoteObject{Path: "link", ModTime: now}},
+		{Path: "ok.txt", Kind: DiffRemoteOnly, RemoteInfo: &RemoteObject{Path: "ok.txt", ModTime: now}},
+	}
+	_, pulled, _ := bisync.syncDiffs(context.Background(), diffs)
+
+	if pulled != 1 {
+		t.Errorf("pulled = %d, want 1 (only ok.txt)", pulled)
+	}
+	if journal.Exists("link") {
+		t.Error("journal entry written for dangling shortcut")
+	}
+	if !journal.Exists("ok.txt") {
+		t.Error("ok.txt not journaled")
 	}
 }

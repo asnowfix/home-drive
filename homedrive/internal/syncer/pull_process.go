@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -233,12 +234,22 @@ func (p *Puller) downloadFile(ctx context.Context, ch Change, start time.Time) e
 		return p.recordDryRunDownload(ch, start)
 	}
 
+	if p.knownDangling(ch) {
+		p.log.Debug("skipping known dangling shortcut",
+			"path", ch.Path, "op", "pull", "origin", "remote")
+		return nil
+	}
+
 	dir := filepath.Dir(localPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating directory %s: %w", dir, err)
 	}
 
 	if err := p.remote.DownloadFile(ctx, ch.Path, localPath); err != nil {
+		if errors.Is(err, ErrDanglingShortcut) {
+			p.skipDanglingShortcut(ch, err, start)
+			return nil
+		}
 		p.emitPullFailure(ch.Path, err)
 		p.logAudit(AuditEntry{
 			Timestamp:  start,

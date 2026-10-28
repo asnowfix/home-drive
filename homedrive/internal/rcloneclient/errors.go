@@ -18,6 +18,15 @@ var (
 	// files are synced, so DeleteFile refuses to touch a folder (issue #115).
 	ErrIsDir = errors.New("remote path is a directory")
 
+	// ErrDanglingShortcut indicates the remote object is a Drive shortcut
+	// whose target no longer exists or is not accessible. rclone's drive
+	// backend gives such objects the made-up mime type
+	// danglingShortcutMimeType and refuses to open them. It is permanent
+	// for that object as it stands, so callers skip it instead of
+	// retrying or counting a failed cycle (issue #82). Returned by
+	// RcloneFS.DownloadFile, classified by mime type, not error text.
+	ErrDanglingShortcut = errors.New("remote object is a dangling Drive shortcut")
+
 	// ErrQuotaExhausted indicates the remote storage quota is full.
 	ErrQuotaExhausted = errors.New("remote quota exhausted")
 
