@@ -244,10 +244,7 @@ func (s *Syncer) execEvent(ctx context.Context, ev Event) (*RemoteObject, error)
 		}
 		return &obj, nil
 	case OpRemove:
-		if err := s.remote.DeleteFile(ctx, ev.Path); err != nil {
-			return nil, fmt.Errorf("delete file %q: %w", ev.Path, err)
-		}
-		return nil, nil
+		return nil, s.execRemove(ctx, ev.Path)
 	default:
 		return nil, fmt.Errorf("unhandled operation: %s", ev.Op)
 	}
