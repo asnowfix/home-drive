@@ -280,6 +280,15 @@ list, topic structure, and example automations.
 ### Build commands
 
 ```bash
+# Build for the host into dist/homedrive (the default target)
+make build
+
+# Install on this Linux machine as homedrive@$USER.service (uses sudo; run
+# from your own terminal). Create ~/.config/homedrive/config.yaml and the
+# rclone remote first, then `make start`.
+make install
+make start     # also: stop, restart, status, logs, uninstall
+
 # Local Mac build (type-checking only, not runnable on macOS in production)
 make build-mac
 
@@ -293,6 +302,9 @@ make build-amd64
 ### Testing
 
 ```bash
+# Base suite: go vet + all packages under the race detector
+make check
+
 # Run tests on Linux via OrbStack (required for inotify-dependent tests)
 make test-linux
 
