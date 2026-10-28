@@ -21,6 +21,12 @@ func TestSyncer_ExecRemove_Cases(t *testing.T) {
 			wantSuccess: true,
 		},
 		{
+			name:        "directory: one attempt, success, no failure event",
+			delErr:      fmt.Errorf("delete: %w", ErrRemoteIsDir),
+			wantCalls:   1,
+			wantSuccess: true,
+		},
+		{
 			name:        "other error: still retried and fails",
 			delErr:      errors.New("boom"),
 			wantCalls:   DefaultConfig().Retry.MaxAttempts,

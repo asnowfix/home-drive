@@ -20,5 +20,12 @@ func (s *Syncer) execRemove(ctx context.Context, rel string) error {
 		s.logger.Debug("remote object already absent, delete is a no-op", "path", rel)
 		return nil
 	}
+	if errors.Is(err, ErrRemoteIsDir) {
+		// Only files sync; a removed local directory (already gone, so
+		// handleEvent cannot stat it) must not be retried or reported as
+		// a failure, and nothing is deleted on the remote (issue #115).
+		s.logger.Debug("remote path is a directory, delete is a no-op", "path", rel)
+		return nil
+	}
 	return fmt.Errorf("delete file %q: %w", rel, err)
 }

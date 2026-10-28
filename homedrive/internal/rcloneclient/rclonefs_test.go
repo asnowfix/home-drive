@@ -298,9 +298,11 @@ func TestRcloneFS_DeleteFile_Cases(t *testing.T) {
 	tests := []struct {
 		name    string
 		seed    bool
+		dir     bool
 		wantErr error
 	}{
 		{name: "existing object is deleted", seed: true},
+		{name: "folder maps to ErrIsDir and survives", dir: true, wantErr: ErrIsDir},
 		{name: "missing object maps to ErrNotFound", wantErr: ErrNotFound},
 	}
 	for _, tt := range tests {
@@ -308,6 +310,11 @@ func TestRcloneFS_DeleteFile_Cases(t *testing.T) {
 			root := t.TempDir()
 			if tt.seed {
 				if err := os.WriteFile(filepath.Join(root, "f.txt"), []byte("x"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.dir {
+				if err := os.Mkdir(filepath.Join(root, "f.txt"), 0o755); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -320,6 +327,11 @@ func TestRcloneFS_DeleteFile_Cases(t *testing.T) {
 			err = r.DeleteFile(context.Background(), "f.txt")
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("DeleteFile error = %v, want %v", err, tt.wantErr)
+			}
+			if tt.dir {
+				if fi, statErr := os.Stat(filepath.Join(root, "f.txt")); statErr != nil || !fi.IsDir() {
+					t.Errorf("folder must survive DeleteFile: %v", statErr)
+				}
 			}
 			if tt.seed {
 				if _, statErr := os.Stat(filepath.Join(root, "f.txt")); !os.IsNotExist(statErr) {
