@@ -2,9 +2,12 @@ package syncer
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -23,9 +26,9 @@ type mockRemoteFS struct {
 
 	// changes is keyed by page token. Each call to ListChanges returns
 	// the Changes at that token and moves to the next.
-	changes     map[string]Changes
-	startToken  string
-	goneTokens  map[string]bool // tokens that trigger ErrGone (410-style)
+	changes    map[string]Changes
+	startToken string
+	goneTokens map[string]bool // tokens that trigger ErrGone (410-style)
 	// rejectedTokens simulates the non-410 "Drive never recognized this
 	// token" case (issue #64), e.g. HTTP 400 from changes.list. Also
 	// triggers the reset path, but errors.Is(err, ErrTokenRejected) is
@@ -89,6 +92,16 @@ func (m *mockRemoteFS) CopyFile(_ context.Context, src, dstDir string) (RemoteOb
 	// base name of the local source, matching RcloneFS.CopyFile.
 	remotePath := path.Join(dstDir, filepath.Base(src))
 	obj := RemoteObject{Path: remotePath, Size: 100, MD5: "md5-" + remotePath, ModTime: time.Now(), RemoteID: "id-" + remotePath}
+	// When src is a real local file, behave like RcloneFS.CopyFile: the
+	// remote object carries the file's mtime, size and content MD5.
+	if data, err := os.ReadFile(src); err == nil {
+		if info, err := os.Stat(src); err == nil {
+			sum := md5.Sum(data)
+			obj.Size = info.Size()
+			obj.MD5 = hex.EncodeToString(sum[:])
+			obj.ModTime = info.ModTime()
+		}
+	}
 	m.files[remotePath] = obj
 	return obj, nil
 }
