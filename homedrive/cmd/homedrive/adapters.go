@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/asnowfix/home-drive/homedrive/internal/store"
@@ -57,10 +58,28 @@ func (al *auditLoggerAdapter) Log(entry syncer.AuditEntry) error {
 // requiring a schema change to the journal.
 type watcherStoreAdapter struct {
 	j *store.Journal
+	// root is the local sync root. The watcher reports absolute paths but
+	// the journal is keyed by root-relative ones; empty means paths are
+	// already relative (tests).
+	root string
+}
+
+// relToRoot converts an absolute path under root to the root-relative,
+// slash-separated form used as journal and remote keys. Paths that are not
+// under root (or any path when root is empty) are returned unchanged.
+func relToRoot(root, p string) string {
+	if root == "" || !filepath.IsAbs(p) {
+		return p
+	}
+	rel, err := filepath.Rel(root, p)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return p
+	}
+	return filepath.ToSlash(rel)
 }
 
 func (a *watcherStoreAdapter) GetSyncRecord(path string) *watcher.SyncRecord {
-	entry, err := a.j.Get(path)
+	entry, err := a.j.Get(relToRoot(a.root, path))
 	if err != nil {
 		return nil
 	}

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	// Test-only: a real local Fs to exercise CopyFile; not linked into the binary.
+	_ "github.com/rclone/rclone/backend/local"
 	rclonefs "github.com/rclone/rclone/fs"
 )
 
@@ -218,5 +220,76 @@ func TestNewRcloneFS_Ordering_DefaultValidateRunsBeforeBuildFs(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "not a drive backend") {
 		t.Errorf("newRcloneFS error = %v, want a \"not a drive backend\" error proving buildFs's result was used", err)
+	}
+}
+
+func TestRcloneFS_CopyFile_Cases(t *testing.T) {
+	mtime := time.Date(2026, 4, 18, 8, 29, 52, 0, time.UTC)
+
+	cases := []struct {
+		name     string
+		dstDir   string
+		wantPath string
+	}{
+		{name: "RootDir", dstDir: "", wantPath: "note.md"},
+		{name: "NestedDir", dstDir: "a/b", wantPath: "a/b/note.md"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			remoteDir := t.TempDir()
+			// A real local-backend Fs stands in for Drive; the local
+			// backend is imported by this test only, never by the binary.
+			fsys, err := rclonefs.NewFs(ctx, remoteDir)
+			if err != nil {
+				t.Fatalf("NewFs: %v", err)
+			}
+			r := &RcloneFS{log: slog.Default(), fsObj: fsys}
+
+			src := filepath.Join(t.TempDir(), "note.md")
+			if err := os.WriteFile(src, []byte("hello drive"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chtimes(src, mtime, mtime); err != nil {
+				t.Fatal(err)
+			}
+
+			ro, err := r.CopyFile(ctx, src, tc.dstDir)
+			if err != nil {
+				t.Fatalf("CopyFile: %v", err)
+			}
+			if ro.Path != tc.wantPath || ro.Size != int64(len("hello drive")) {
+				t.Errorf("CopyFile = %+v, want path %q size 11", ro, tc.wantPath)
+			}
+
+			dst := filepath.Join(remoteDir, filepath.FromSlash(tc.wantPath))
+			got, err := os.ReadFile(dst)
+			if err != nil {
+				t.Fatalf("reading uploaded file: %v", err)
+			}
+			if string(got) != "hello drive" {
+				t.Errorf("uploaded content = %q, want %q", got, "hello drive")
+			}
+			info, err := os.Stat(dst)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !info.ModTime().Equal(mtime) {
+				t.Errorf("uploaded mtime = %v, want %v", info.ModTime(), mtime)
+			}
+		})
+	}
+}
+
+func TestRcloneFS_CopyFile_MissingSource(t *testing.T) {
+	fsys, err := rclonefs.NewFs(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFs: %v", err)
+	}
+	r := &RcloneFS{log: slog.Default(), fsObj: fsys}
+
+	_, err = r.CopyFile(context.Background(), filepath.Join(t.TempDir(), "absent.md"), "")
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("CopyFile of missing source: got %v, want os.ErrNotExist", err)
 	}
 }
