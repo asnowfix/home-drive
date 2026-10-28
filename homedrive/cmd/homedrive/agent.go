@@ -254,7 +254,7 @@ func (a *Agent) buildWatcher() error {
 		DirRenamePairWindow: a.cfg.Watcher.DirRenamePairWindow.Duration,
 		Exclude:             a.cfg.Watcher.Exclude,
 	}
-	w, err := watcher.New(wcfg, &watcherStoreAdapter{j: a.journal}, a.log)
+	w, err := watcher.New(wcfg, &watcherStoreAdapter{j: a.journal, root: a.cfg.LocalRoot}, a.log)
 	if err != nil {
 		return fmt.Errorf("init watcher: %w", err)
 	}

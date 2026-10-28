@@ -231,7 +231,11 @@ func (a *Agent) dispatchWatchEvent(ctx context.Context, we watcher.WatchEvent) {
 	}
 
 	if we.DirRename != nil {
-		dr := syncer.DirRename{From: we.DirRename.From, To: we.DirRename.To, At: we.DirRename.At}
+		dr := syncer.DirRename{
+			From: relToRoot(a.cfg.LocalRoot, we.DirRename.From),
+			To:   relToRoot(a.cfg.LocalRoot, we.DirRename.To),
+			At:   we.DirRename.At,
+		}
 		select {
 		case a.pushRenames <- dr:
 			a.lastPushUnixNano.Store(time.Now().UnixNano())
@@ -240,7 +244,7 @@ func (a *Agent) dispatchWatchEvent(ctx context.Context, we watcher.WatchEvent) {
 		return
 	}
 	if we.Event != nil {
-		ev := syncer.Event{Path: we.Event.Path, Op: toSyncerOp(we.Event.Op), At: we.Event.At}
+		ev := syncer.Event{Path: relToRoot(a.cfg.LocalRoot, we.Event.Path), Op: toSyncerOp(we.Event.Op), At: we.Event.At}
 		select {
 		case a.pushEvents <- ev:
 			a.lastPushUnixNano.Store(time.Now().UnixNano())

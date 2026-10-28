@@ -217,7 +217,7 @@ func resolveConflict(
 		pruneAfterConflict(ctx, deps, base)
 		// Upload the local winner.
 		localFile := fmt.Sprintf("%s/%s", deps.localRoot, path)
-		if _, err := deps.remote.CopyFile(ctx, localFile, path); err != nil {
+		if _, err := deps.remote.CopyFile(ctx, localFile, remoteDir(path)); err != nil {
 			return ConflictResult{}, fmt.Errorf("uploading local winner %s: %w", path, err)
 		}
 	}

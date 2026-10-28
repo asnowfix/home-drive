@@ -437,3 +437,44 @@ func TestSyncer_NilPublisherAndAudit(t *testing.T) {
 		t.Fatalf("expected 1 CopyFile call, got %d", len(copies))
 	}
 }
+
+// Push events carry root-relative paths; the upload source must be the
+// local file under LocalRoot and the destination its remote directory
+// (issue #104).
+func TestSyncer_FileCreate_SourceAndRemoteDir(t *testing.T) {
+	cases := []struct {
+		name    string
+		evPath  string
+		wantSrc string
+		wantDir string
+	}{
+		{"Nested", "docs/sub/hello.txt", "/root/docs/sub/hello.txt", "docs/sub"},
+		{"TopLevel", "hello.txt", "/root/hello.txt", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			remote := newMockRemoteFS()
+			cfg := DefaultConfig()
+			cfg.LocalRoot = "/root"
+			s := New(cfg, remote, newMockStore(), newMockAuditLogger(),
+				newMockPublisher(), newDiscardLogger(), WithSleepFunc(noSleep))
+
+			events := make(chan Event, 1)
+			events <- Event{Path: tc.evPath, Op: OpCreate, At: time.Now()}
+			runSyncer(t, s, events, make(chan DirRename), func() {})
+
+			remote.mu.Lock()
+			defer remote.mu.Unlock()
+			if len(remote.copiedFiles) != 1 {
+				t.Fatalf("expected 1 CopyFile call, got %d", len(remote.copiedFiles))
+			}
+			c := remote.copiedFiles[0]
+			if c.Src != tc.wantSrc || c.DstDir != tc.wantDir {
+				t.Errorf("CopyFile(%q, %q), want (%q, %q)", c.Src, c.DstDir, tc.wantSrc, tc.wantDir)
+			}
+			if _, ok := remote.files[tc.evPath]; !ok {
+				t.Errorf("remote has no object at %q", tc.evPath)
+			}
+		})
+	}
+}

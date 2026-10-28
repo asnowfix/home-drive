@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -84,16 +85,9 @@ func (m *mockRemoteFS) CopyFile(_ context.Context, src, dstDir string) (RemoteOb
 			return RemoteObject{}, err
 		}
 	}
-	// Compute destination path. Two calling conventions coexist:
-	//   push syncer: CopyFile(relPath, relPath)     → dstDir IS the full path
-	//   bisync:      CopyFile(absLocalPath, dir)     → join dir + basename(src)
-	name := filepath.Base(src)
-	remotePath := dstDir
-	if remotePath == "" || remotePath == "." {
-		remotePath = name
-	} else if filepath.Base(remotePath) != name {
-		remotePath = remotePath + "/" + name
-	}
+	// Destination is dstDir (remote dir, "" for root) joined with the
+	// base name of the local source, matching RcloneFS.CopyFile.
+	remotePath := path.Join(dstDir, filepath.Base(src))
 	obj := RemoteObject{Path: remotePath, Size: 100, MD5: "md5-" + remotePath, ModTime: time.Now(), RemoteID: "id-" + remotePath}
 	m.files[remotePath] = obj
 	return obj, nil

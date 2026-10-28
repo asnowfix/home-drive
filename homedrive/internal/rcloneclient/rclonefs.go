@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -166,11 +167,26 @@ func newRcloneFS(ctx context.Context, cfg RcloneFSConfig, validate func(*RcloneF
 	return r, nil
 }
 
-// CopyFile uploads a local file to the remote directory.
+// CopyFile uploads the local file src into the remote directory dstDir
+// (relative to the remote root; "" for the root), keeping its base name and
+// modification time. It streams through operations.Rcat rather than
+// operations.CopyFile so no local rclone backend needs to be registered
+// (only backend/drive is allowed, see the homedrive-rclone-import skill).
 func (r *RcloneFS) CopyFile(ctx context.Context, src, dstDir string) (RemoteObject, error) {
-	dstRemote := dstDir + "/" + filepath.Base(src)
+	dstRemote := path.Join(dstDir, filepath.Base(src))
 
-	dstObj, err := operations.CopyURL(ctx, r.fsObj, dstRemote, src, false, false, false)
+	f, err := os.Open(src)
+	if err != nil {
+		return RemoteObject{}, fmt.Errorf("rcloneclient: copy %q to %q: %w", src, dstRemote, err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return RemoteObject{}, fmt.Errorf("rcloneclient: copy %q to %q: %w", src, dstRemote, err)
+	}
+
+	// Rcat closes f.
+	dstObj, err := operations.Rcat(ctx, r.fsObj, dstRemote, f, info.ModTime(), nil)
 	if err != nil {
 		return RemoteObject{}, fmt.Errorf("rcloneclient: copy %q to %q: %w", src, dstRemote, err)
 	}

@@ -250,3 +250,47 @@ func TestNoopPublisher_TopicAndPublish(t *testing.T) {
 		t.Errorf("Topic() = %q, want %q", got, want)
 	}
 }
+
+func TestRelToRoot_Cases(t *testing.T) {
+	cases := []struct {
+		name, root, in, want string
+	}{
+		{"UnderRoot", "/data/gdrive", "/data/gdrive/a/b.txt", "a/b.txt"},
+		{"RootItself", "/data/gdrive", "/data/gdrive", "."},
+		{"OutsideRoot", "/data/gdrive", "/etc/passwd", "/etc/passwd"},
+		{"SiblingPrefix", "/data/gdrive", "/data/gdrive2/x", "/data/gdrive2/x"},
+		{"AlreadyRelative", "/data/gdrive", "a/b.txt", "a/b.txt"},
+		{"EmptyRoot", "", "/data/gdrive/a.txt", "/data/gdrive/a.txt"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := relToRoot(tc.root, tc.in); got != tc.want {
+				t.Errorf("relToRoot(%q, %q) = %q, want %q", tc.root, tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// The watcher passes absolute paths but the journal is keyed by
+// root-relative ones (issue #104): a pulled file must be recognised.
+func TestWatcherStoreAdapter_AbsolutePathHitsRelativeKey(t *testing.T) {
+	j := newTestJournal(t)
+	root := t.TempDir()
+	abs := filepath.Join(root, "docs", "note.md")
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(abs, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mtime := time.Now().Add(-time.Hour)
+	if err := j.Put(store.JournalEntry{Path: "docs/note.md", LocalMtime: mtime}); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &watcherStoreAdapter{j: j, root: root}
+	rec := adapter.GetSyncRecord(abs)
+	if rec == nil || !rec.LocalMtime.Equal(mtime) {
+		t.Fatalf("GetSyncRecord(%q) = %+v, want journal record with mtime %v", abs, rec, mtime)
+	}
+}

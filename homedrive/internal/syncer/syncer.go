@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -216,11 +217,24 @@ func (s *Syncer) handleEvent(ctx context.Context, ev Event) {
 	s.recordResult(ctx, ev.Path, ev.Op.String(), err, elapsed)
 }
 
+// remoteDir returns the remote directory (relative to the remote root, ""
+// for the root) that holds the root-relative file path rel.
+func remoteDir(rel string) string {
+	dir := filepath.ToSlash(filepath.Dir(filepath.FromSlash(rel)))
+	if dir == "." {
+		return ""
+	}
+	return dir
+}
+
 // execEvent dispatches a single event to the remote filesystem.
 func (s *Syncer) execEvent(ctx context.Context, ev Event) error {
 	switch ev.Op {
 	case OpCreate, OpWrite:
-		_, err := s.remote.CopyFile(ctx, ev.Path, ev.Path)
+		// ev.Path is relative to LocalRoot: upload the local file into
+		// the matching remote directory.
+		src := filepath.Join(s.cfg.LocalRoot, filepath.FromSlash(ev.Path))
+		_, err := s.remote.CopyFile(ctx, src, remoteDir(ev.Path))
 		if err != nil {
 			return fmt.Errorf("copy file %q: %w", ev.Path, err)
 		}
