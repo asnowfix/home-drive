@@ -294,6 +294,11 @@ func (b *Bisync) syncDiffs(
 			pushed++
 		case DiffRemoteOnly:
 			if err := b.syncRemoteToLocal(ctx, d); err != nil {
+				if errors.Is(err, ErrDanglingShortcut) {
+					b.log.Warn("bisync skipping dangling Drive shortcut",
+						"path", d.Path, "error", err)
+					continue
+				}
 				b.log.Error("bisync pull failed",
 					"path", d.Path, "error", err)
 				continue

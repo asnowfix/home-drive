@@ -131,6 +131,37 @@ func TestRcloneFS_DownloadFile_NotFound(t *testing.T) {
 	}
 }
 
+func TestRcloneFS_DownloadFile_DanglingShortcut(t *testing.T) {
+	tests := []struct {
+		name        string
+		mime        string
+		wantDangle  bool
+		wantContent bool
+	}{
+		{"dangling mime", danglingShortcutMimeType, true, false},
+		{"plain shortcut mime is not dangling", "application/vnd.google-apps.shortcut", false, true},
+		{"no mime", "", false, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fsys := &fakeListingFS{byPath: map[string]fakeObject{
+				"link": {remote: "link", size: 5, content: "hello", mime: tc.mime},
+			}}
+			r := &RcloneFS{log: slog.Default(), fsObj: fsys}
+			dst := filepath.Join(t.TempDir(), "link")
+
+			err := r.DownloadFile(context.Background(), "link", dst)
+			if got := errors.Is(err, ErrDanglingShortcut); got != tc.wantDangle {
+				t.Fatalf("errors.Is(err, ErrDanglingShortcut) = %v, want %v (err=%v)", got, tc.wantDangle, err)
+			}
+			_, statErr := os.Stat(dst)
+			if tc.wantContent != (statErr == nil) {
+				t.Errorf("local file exists = %v, want %v", statErr == nil, tc.wantContent)
+			}
+		})
+	}
+}
+
 // TestNewRcloneFS_Ordering_ValidationFailureSkipsBuildFs is the regression
 // test for the issue #86 follow-up: PR #96 wired validateOAuthCredential
 // into NewRcloneFS, but called rclonefs.NewFs (buildFs here) *before* it, so

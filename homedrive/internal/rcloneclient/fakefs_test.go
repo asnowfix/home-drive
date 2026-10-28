@@ -54,7 +54,11 @@ type fakeObject struct {
 	modTime time.Time
 	id      string
 	content string
+	mime    string // optional; empty means rclone falls back to the name
 }
+
+// MimeType implements rclone's optional fs.MimeTyper.
+func (o fakeObject) MimeType(context.Context) string { return o.mime }
 
 func (o fakeObject) Remote() string                    { return o.remote }
 func (o fakeObject) Size() int64                       { return o.size }

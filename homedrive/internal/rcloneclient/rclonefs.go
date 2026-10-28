@@ -329,12 +329,25 @@ func (r *RcloneFS) listRecursive(ctx context.Context, dir string, items *[]Chang
 	return nil
 }
 
+// danglingShortcutMimeType is the mime type rclone's backend/drive assigns
+// (in resolveShortcut, when the shortcut target returns 404) to a dangling
+// Drive shortcut. It is not a real Google mime type; it is pinned to rclone
+// v1.75.2 and must be re-checked when rclone is upgraded.
+const danglingShortcutMimeType = "application/vnd.google-apps.shortcut.dangling"
+
 // DownloadFile downloads the remote file at remotePath to localPath,
 // preserving the remote mtime for loop-prevention.
 func (r *RcloneFS) DownloadFile(ctx context.Context, remotePath, localPath string) error {
 	obj, err := r.fsObj.NewObject(ctx, remotePath)
 	if err != nil {
 		return fmt.Errorf("rcloneclient: open remote %q: %w", remotePath, err)
+	}
+
+	// rclone's drive backend marks a shortcut whose target is gone with a
+	// made-up mime type and only fails later, in Open, with a plain
+	// errors.New. Classify it here by structure (issue #82).
+	if rclonefs.MimeType(ctx, obj) == danglingShortcutMimeType {
+		return fmt.Errorf("rcloneclient: download %q: %w", remotePath, ErrDanglingShortcut)
 	}
 
 	rc, err := obj.Open(ctx)

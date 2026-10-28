@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
@@ -70,6 +71,12 @@ type Puller struct {
 	// NextPollInterval's backoff and is reset to 0 by any other outcome
 	// -- success or a different error (issue #67).
 	oauthMissingStreak int
+
+	// dangling remembers dangling Drive shortcuts already reported in this
+	// process so later sightings skip DownloadFile (issue #82). Memory
+	// only: nothing is journaled for them (see skipDanglingShortcut).
+	danglingMu sync.Mutex
+	dangling   map[danglingKey]struct{}
 }
 
 // NewPuller creates a Puller. Pass a nil Publisher to disable MQTT events.
@@ -105,6 +112,8 @@ func NewPuller(
 		pub:    pub,
 		log:    log,
 		clock:  clockFn,
+
+		dangling: make(map[danglingKey]struct{}),
 	}
 }
 
