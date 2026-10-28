@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -232,5 +233,159 @@ func TestWatcher_RemoveFile(t *testing.T) {
 	}
 	if ev.Event.Op != OpRemove {
 		t.Errorf("expected OpRemove, got %v", ev.Event.Op)
+	}
+}
+
+// createdPaths returns the set of paths of non-rename Event values.
+func createdPaths(events []WatchEvent) map[string]int {
+	got := make(map[string]int)
+	for _, ev := range events {
+		if ev.Event != nil && ev.Event.Op == OpCreate {
+			got[ev.Event.Path]++
+		}
+	}
+	return got
+}
+
+// TestWatcher_NewDirFiles covers the inotify new-directory race (#118):
+// files written immediately after their parent directory is created (or
+// already inside a directory moved in from elsewhere) must still produce
+// a Create event, because the watch on the parent did not exist yet.
+func TestWatcher_NewDirFiles(t *testing.T) {
+	tests := []struct {
+		name  string
+		files []string // relative to root; parents created with MkdirAll
+	}{
+		{"file_in_new_dir", []string{"sub/a.txt"}},
+		{"many_files_in_new_dir", []string{"sub/a.txt", "sub/b.txt", "sub/c.txt"}},
+		{"file_in_nested_new_dirs", []string{"sub/x/y/deep.txt", "sub/top.txt"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if runtime.GOOS != "linux" {
+				t.Skip("requires Linux inotify cookies")
+			}
+			w, root := newTestWatcher(t)
+			startWatcher(t, w)
+
+			// Back to back, with no pause: the race window.
+			for _, rel := range tc.files {
+				p := filepath.Join(root, rel)
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatalf("mkdir: %v", err)
+				}
+				if err := os.WriteFile(p, []byte("v1\n"), 0o644); err != nil {
+					t.Fatalf("write: %v", err)
+				}
+			}
+
+			got := createdPaths(collectEvents(t, w, 800*time.Millisecond))
+			for _, rel := range tc.files {
+				if got[filepath.Join(root, rel)] == 0 {
+					t.Errorf("no create event for %s", rel)
+				}
+			}
+			if n := got[filepath.Join(root, "sub")]; n != 0 {
+				// Directories are not pushed (#105); a Create for the dir
+				// itself is filtered downstream, so only warn on files.
+				t.Logf("dir create events: %d", n)
+			}
+		})
+	}
+}
+
+// TestWatcher_NewDirMovedIn is the deterministic variant: a populated
+// directory built outside the watched tree is moved in (no rename pair),
+// so every file in it pre-exists the watch.
+func TestWatcher_NewDirMovedIn(t *testing.T) {
+	tests := []struct {
+		name     string
+		files    []string
+		exclude  []string
+		wantNone []string // must not produce events
+		guarded  []string // journaled with matching mtime
+		want     []string
+	}{
+		{
+			name:  "plain_and_nested",
+			files: []string{"a.txt", "n/b.txt"},
+			want:  []string{"a.txt", "n/b.txt"},
+		},
+		{
+			name:     "excluded_files_skipped",
+			files:    []string{"keep.txt", "skip.tmp", ".git/config", "n/also.tmp"},
+			exclude:  []string{"**/*.tmp", "**/.git/**"},
+			want:     []string{"keep.txt"},
+			wantNone: []string{"skip.tmp", ".git/config", "n/also.tmp"},
+		},
+		{
+			name:     "mtime_guard_suppresses_journaled",
+			files:    []string{"synced.txt", "fresh.txt"},
+			guarded:  []string{"synced.txt"},
+			want:     []string{"fresh.txt"},
+			wantNone: []string{"synced.txt"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if runtime.GOOS != "linux" {
+				t.Skip("requires Linux inotify cookies")
+			}
+			root := t.TempDir()
+			staging := t.TempDir()
+			src := filepath.Join(staging, "moved")
+			store := &stubStore{records: map[string]*SyncRecord{}}
+			dst := filepath.Join(root, "moved")
+			for _, rel := range tc.files {
+				p := filepath.Join(src, rel)
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatalf("mkdir: %v", err)
+				}
+				if err := os.WriteFile(p, []byte("data"), 0o644); err != nil {
+					t.Fatalf("write: %v", err)
+				}
+			}
+			for _, rel := range tc.guarded {
+				info, err := os.Stat(filepath.Join(src, rel))
+				if err != nil {
+					t.Fatalf("stat: %v", err)
+				}
+				store.set(filepath.Join(dst, rel), &SyncRecord{LocalMtime: info.ModTime(), Size: info.Size()})
+			}
+
+			log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			w, err := New(Config{
+				LocalRoot:           root,
+				Exclude:             tc.exclude,
+				Debounce:            100 * time.Millisecond,
+				DirRenamePairWindow: 200 * time.Millisecond,
+			}, store, log)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			startWatcher(t, w)
+
+			if err := os.Rename(src, dst); err != nil {
+				t.Skipf("cannot rename across filesystems: %v", err)
+			}
+
+			events := collectEvents(t, w, 800*time.Millisecond)
+			for _, ev := range events {
+				if ev.DirRename != nil {
+					t.Errorf("unexpected DirRename %+v for an unpaired move-in", ev.DirRename)
+				}
+			}
+			got := createdPaths(events)
+			for _, rel := range tc.want {
+				if got[filepath.Join(dst, rel)] == 0 {
+					t.Errorf("no create event for %s", rel)
+				}
+			}
+			for _, rel := range tc.wantNone {
+				if got[filepath.Join(dst, rel)] != 0 {
+					t.Errorf("unexpected create event for %s", rel)
+				}
+			}
+		})
 	}
 }

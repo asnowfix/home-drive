@@ -222,8 +222,9 @@ func (w *Watcher) handleFSEvent(ev fsnotify.Event) {
 					"error", addErr,
 				)
 			}
-			// Walk the new directory to catch any files already inside.
-			w.walkNewDir(path)
+			// Watch is in place; now pick up subdirectories and files
+			// that were created before it existed (#118).
+			w.walkNewDir(path, true)
 		}
 
 		w.debouncePath(path, OpCreate, now)
@@ -285,23 +286,40 @@ func (w *Watcher) isSelfInduced(path string) bool {
 	return diff <= time.Second && info.Size() == rec.Size
 }
 
-// walkNewDir adds watches to all subdirectories of a newly created directory.
-func (w *Watcher) walkNewDir(root string) {
+// walkNewDir adds watches to all subdirectories of a newly created
+// directory. When emit is true it also feeds a Create event for every
+// regular file already inside, through debouncePath so excludes, the
+// mtime guard and debouncing still apply.
+//
+// inotify cannot deliver events for files created before the watch on
+// their parent exists (#118), so callers must add the watch on root
+// first and walk afterwards: anything created in between is then seen
+// by one or the other (duplicates are coalesced by the debouncer).
+// emit is false for a paired directory rename, whose subtree is already
+// known and is moved with a single DirRename (PLAN.md section 6).
+func (w *Watcher) walkNewDir(root string, emit bool) {
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if !d.IsDir() || path == root {
+		if d.IsDir() {
+			if path == root {
+				return nil
+			}
+			if w.filter.excluded(path) {
+				return filepath.SkipDir
+			}
+			if addErr := w.addWatch(path); addErr != nil {
+				w.log.Warn("failed to add watch during new dir walk",
+					"path", path,
+					"error", addErr,
+				)
+			}
 			return nil
 		}
-		if w.filter.excluded(path) {
-			return filepath.SkipDir
-		}
-		if addErr := w.addWatch(path); addErr != nil {
-			w.log.Warn("failed to add watch during new dir walk",
-				"path", path,
-				"error", addErr,
-			)
+		// Directories themselves are never pushed (#105); only files.
+		if emit && d.Type().IsRegular() && !w.filter.excluded(path) {
+			w.debouncePath(path, OpCreate, time.Now())
 		}
 		return nil
 	})
@@ -332,7 +350,7 @@ func (w *Watcher) onDirRenamePaired(dr DirRename) {
 			"error", err,
 		)
 	}
-	w.walkNewDir(dr.To)
+	w.walkNewDir(dr.To, false)
 
 	// Suppress any debounced events under both old and new paths, and the
 	// new directory's own Create event (present in the debouncer on macOS/kqueue
