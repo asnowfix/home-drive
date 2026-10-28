@@ -65,7 +65,7 @@ func New(cfg Config, store SyncStore, log *slog.Logger) (*Watcher, error) {
 		done:   make(chan struct{}),
 	}
 
-	w.debouncer = newDebouncer(cfg.Debounce, w.emitEvent)
+	w.debouncer = newDebouncer(cfg.Debounce, w.fireEvent)
 
 	w.pairer = newPairer(
 		cfg.DirRenamePairWindow,
@@ -249,18 +249,40 @@ func (w *Watcher) handleFSEvent(ev fsnotify.Event) {
 
 // debouncePath checks the mtime guard and feeds the event to the debouncer.
 func (w *Watcher) debouncePath(path string, op Op, at time.Time) {
-	// Inode/mtime guard: suppress self-induced echoes.
-	if w.store != nil && (op == OpWrite || op == OpCreate) {
-		if w.isSelfInduced(path) {
-			w.log.Debug("suppressed self-induced event",
-				"path", path,
-				"op", op.String(),
-			)
-			return
-		}
+	// Inode/mtime guard: suppress self-induced echoes. Checked again when
+	// the debouncer fires (fireEvent), because the Puller records the sync
+	// entry only after the download finishes (#122).
+	if w.suppressSelfInduced(path, op) {
+		return
 	}
 
 	w.debouncer.add(Event{Path: path, Op: op, At: at})
+}
+
+// suppressSelfInduced reports whether a Write/Create event on path matches
+// the last recorded sync state and should be dropped.
+func (w *Watcher) suppressSelfInduced(path string, op Op) bool {
+	if w.store == nil || (op != OpWrite && op != OpCreate) {
+		return false
+	}
+	if !w.isSelfInduced(path) {
+		return false
+	}
+	w.log.Debug("suppressed self-induced event",
+		"path", path,
+		"op", op.String(),
+	)
+	return true
+}
+
+// fireEvent is the debouncer callback. It re-runs the self-induced check
+// before emitting: the pull side records its journal entry only after the
+// file is on disk, so the check at event arrival can miss it (#122).
+func (w *Watcher) fireEvent(ev Event) {
+	if w.suppressSelfInduced(ev.Path, ev.Op) {
+		return
+	}
+	w.emitEvent(ev)
 }
 
 // isSelfInduced checks if a file event matches the last recorded sync
