@@ -90,7 +90,7 @@ func fileMD5(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only: a close error is not actionable
 	h := md5.New() //nolint:gosec // equality check against Drive's MD5
 	if _, err := io.Copy(h, f); err != nil {
 		return "", fmt.Errorf("read %s: %w", path, err)
