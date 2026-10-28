@@ -198,6 +198,10 @@ func (s *Syncer) handleEvent(ctx context.Context, ev Event) {
 	start := s.nowFn()
 	logger := s.logger.With("path", ev.Path, "op", ev.Op.String())
 
+	if s.skipDirEvent(logger, ev) {
+		return
+	}
+
 	if s.cfg.DryRun {
 		s.logDryRun(logger, ev)
 		return

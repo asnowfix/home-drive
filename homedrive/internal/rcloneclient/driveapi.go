@@ -29,6 +29,9 @@ import (
 // idempotent.
 const initialSyncPrefix = "initial_sync:"
 
+// driveFolderMimeType is the mimeType Drive reports for folders.
+const driveFolderMimeType = "application/vnd.google-apps.folder"
+
 // changesFields lists the change fields fetched from changes.list. Keeping
 // it minimal reduces response size and API quota usage.
 const changesFields = "nextPageToken,newStartPageToken," +
@@ -318,6 +321,7 @@ func (r *RcloneFS) translateChange(c *drivev3.Change) (Change, bool) {
 		ModTime:  parseDriveTime(c.File.ModifiedTime),
 		MD5:      c.File.Md5Checksum,
 		RemoteID: c.FileId,
+		IsDir:    c.File.MimeType == driveFolderMimeType,
 	}
 	return Change{Path: p, Object: &obj}, true
 }
