@@ -14,6 +14,10 @@ var (
 	// ErrNotFound indicates the requested remote object does not exist.
 	ErrNotFound = errors.New("remote object not found")
 
+	// ErrIsDir indicates the remote path names a folder, not a file. Only
+	// files are synced, so DeleteFile refuses to touch a folder (issue #115).
+	ErrIsDir = errors.New("remote path is a directory")
+
 	// ErrQuotaExhausted indicates the remote storage quota is full.
 	ErrQuotaExhausted = errors.New("remote quota exhausted")
 

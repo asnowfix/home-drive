@@ -197,12 +197,17 @@ func (r *RcloneFS) CopyFile(ctx context.Context, src, dstDir string) (RemoteObje
 
 // DeleteFile removes the file at the given remote path. A missing object
 // is reported as an error wrapping ErrNotFound (matching MemFS) so callers
-// can treat "already absent" as the desired end state.
+// can treat "already absent" as the desired end state. A path that names a
+// folder is reported as an error wrapping ErrIsDir and nothing is deleted
+// (only files are synced; issue #115).
 func (r *RcloneFS) DeleteFile(ctx context.Context, remotePath string) error {
 	obj, err := r.fsObj.NewObject(ctx, remotePath)
 	if err != nil {
 		if errors.Is(err, rclonefs.ErrorObjectNotFound) {
 			return fmt.Errorf("rcloneclient: delete lookup %q: %w", remotePath, ErrNotFound)
+		}
+		if errors.Is(err, rclonefs.ErrorIsDir) {
+			return fmt.Errorf("rcloneclient: delete lookup %q: %w", remotePath, ErrIsDir)
 		}
 		return fmt.Errorf("rcloneclient: delete lookup %q: %w", remotePath, err)
 	}
