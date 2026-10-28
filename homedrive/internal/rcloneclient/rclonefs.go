@@ -2,6 +2,7 @@ package rcloneclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -194,10 +195,15 @@ func (r *RcloneFS) CopyFile(ctx context.Context, src, dstDir string) (RemoteObje
 	return remoteObjectFromRclone(dstObj), nil
 }
 
-// DeleteFile removes the file at the given remote path.
+// DeleteFile removes the file at the given remote path. A missing object
+// is reported as an error wrapping ErrNotFound (matching MemFS) so callers
+// can treat "already absent" as the desired end state.
 func (r *RcloneFS) DeleteFile(ctx context.Context, remotePath string) error {
 	obj, err := r.fsObj.NewObject(ctx, remotePath)
 	if err != nil {
+		if errors.Is(err, rclonefs.ErrorObjectNotFound) {
+			return fmt.Errorf("rcloneclient: delete lookup %q: %w", remotePath, ErrNotFound)
+		}
 		return fmt.Errorf("rcloneclient: delete lookup %q: %w", remotePath, err)
 	}
 

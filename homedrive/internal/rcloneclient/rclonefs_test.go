@@ -293,3 +293,39 @@ func TestRcloneFS_CopyFile_MissingSource(t *testing.T) {
 		t.Errorf("CopyFile of missing source: got %v, want os.ErrNotExist", err)
 	}
 }
+
+func TestRcloneFS_DeleteFile_Cases(t *testing.T) {
+	tests := []struct {
+		name    string
+		seed    bool
+		wantErr error
+	}{
+		{name: "existing object is deleted", seed: true},
+		{name: "missing object maps to ErrNotFound", wantErr: ErrNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if tt.seed {
+				if err := os.WriteFile(filepath.Join(root, "f.txt"), []byte("x"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fsys, err := rclonefs.NewFs(context.Background(), root)
+			if err != nil {
+				t.Fatalf("NewFs: %v", err)
+			}
+			r := &RcloneFS{log: slog.Default(), fsObj: fsys}
+
+			err = r.DeleteFile(context.Background(), "f.txt")
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("DeleteFile error = %v, want %v", err, tt.wantErr)
+			}
+			if tt.seed {
+				if _, statErr := os.Stat(filepath.Join(root, "f.txt")); !os.IsNotExist(statErr) {
+					t.Errorf("file still present after DeleteFile: %v", statErr)
+				}
+			}
+		})
+	}
+}
