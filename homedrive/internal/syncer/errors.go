@@ -31,6 +31,12 @@ var (
 	// eviction (PLAN.md §11.5).
 	ErrRemoteNotFound = rcloneclient.ErrNotFound
 
+	// ErrRemoteIsDir is the same sentinel as rcloneclient.ErrIsDir (see
+	// ErrGone above for why no adapter is used): a push remove named a
+	// folder, which is never synced, so execRemove treats it as a no-op
+	// (issue #115).
+	ErrRemoteIsDir = rcloneclient.ErrIsDir
+
 	// ErrOAuthClientMissing is the same sentinel as
 	// rcloneclient.ErrOAuthClientMissing (see ErrGone above for why no
 	// adapter is used): a Drive Changes API token refresh failed because

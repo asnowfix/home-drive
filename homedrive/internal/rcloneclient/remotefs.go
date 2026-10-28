@@ -25,6 +25,12 @@ type RemoteObject struct {
 	// DryRun indicates this object was returned by a dry-run operation
 	// and does not exist on the remote.
 	DryRun bool
+
+	// IsDir is true when the object is a folder (Drive mimeType
+	// application/vnd.google-apps.folder) rather than a file. Only the
+	// incremental ListChanges path sets it; the full walk and List only
+	// ever return files.
+	IsDir bool
 }
 
 // Change represents a single modification reported by the remote.

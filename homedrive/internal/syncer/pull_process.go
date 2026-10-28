@@ -15,6 +15,10 @@ func (p *Puller) processChange(ctx context.Context, ch Change) error {
 	if ch.Deleted {
 		return p.processDelete(ctx, ch, start)
 	}
+	if ch.Object != nil && ch.Object.IsDir {
+		p.skipDirChange(ch)
+		return nil
+	}
 	return p.processFileChange(ctx, ch, start)
 }
 
@@ -42,7 +46,7 @@ func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) 
 	}
 
 	localPath := filepath.Join(p.cfg.LocalRoot, ch.Path)
-	if err := os.Remove(localPath); err != nil && !os.IsNotExist(err) {
+	if err := p.removeLocal(ch.Path, localPath); err != nil {
 		p.log.Error("failed to delete local file",
 			"path", ch.Path,
 			"op", "pull_delete",
@@ -74,6 +78,9 @@ func (p *Puller) processFileChange(ctx context.Context, ch Change, start time.Ti
 	}
 
 	if exists {
+		if same, err := p.adoptIdenticalRemote(ctx, ch, journal); err != nil || same {
+			return err
+		}
 		isConflict, localMtime, conflictErr := p.detectConflict(ch, journal)
 		if conflictErr != nil {
 			return conflictErr

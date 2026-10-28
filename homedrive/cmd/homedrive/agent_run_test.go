@@ -35,6 +35,7 @@ func TestToSyncerOp_Cases(t *testing.T) {
 
 func newDispatchTestAgent() *Agent {
 	return &Agent{
+		cfg:         &config.Config{LocalRoot: "/data/gdrive"},
 		log:         slog.Default(),
 		pushEvents:  make(chan syncer.Event, 4),
 		pushRenames: make(chan syncer.DirRename, 4),
@@ -43,13 +44,14 @@ func newDispatchTestAgent() *Agent {
 
 func TestDispatchWatchEvent_ForwardsFileEvent(t *testing.T) {
 	a := newDispatchTestAgent()
-	ev := watcher.WatchEvent{Event: &watcher.Event{Path: "a.txt", Op: watcher.OpWrite, At: time.Now()}}
+	ev := watcher.WatchEvent{Event: &watcher.Event{Path: "/data/gdrive/docs/a.txt", Op: watcher.OpWrite, At: time.Now()}}
 
 	a.dispatchWatchEvent(context.Background(), ev)
 
 	select {
 	case got := <-a.pushEvents:
-		if got.Path != "a.txt" || got.Op != syncer.OpWrite {
+		// Watcher paths are absolute; the syncer works on root-relative ones.
+		if got.Path != "docs/a.txt" || got.Op != syncer.OpWrite {
 			t.Errorf("unexpected event: %+v", got)
 		}
 	default:
@@ -62,13 +64,13 @@ func TestDispatchWatchEvent_ForwardsFileEvent(t *testing.T) {
 
 func TestDispatchWatchEvent_ForwardsDirRename(t *testing.T) {
 	a := newDispatchTestAgent()
-	ev := watcher.WatchEvent{DirRename: &watcher.DirRename{From: "old", To: "new", At: time.Now()}}
+	ev := watcher.WatchEvent{DirRename: &watcher.DirRename{From: "/data/gdrive/old", To: "/data/gdrive/sub/new", At: time.Now()}}
 
 	a.dispatchWatchEvent(context.Background(), ev)
 
 	select {
 	case got := <-a.pushRenames:
-		if got.From != "old" || got.To != "new" {
+		if got.From != "old" || got.To != "sub/new" {
 			t.Errorf("unexpected dir rename: %+v", got)
 		}
 	default:

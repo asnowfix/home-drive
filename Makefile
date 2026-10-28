@@ -1,5 +1,12 @@
-.PHONY: build-mac build-arm64 build-amd64 test test-linux test-pi deploy-pi \
-	dev-create dev-delete dev-setup dev-shell clean install-systemd install-package
+.PHONY: help build build-mac build-arm64 build-amd64 vet check test test-linux \
+	test-pi deploy-pi dev-create dev-delete dev-setup dev-shell clean \
+	install-systemd install-package install uninstall start stop restart \
+	status logs
+
+# `make` alone builds for the host.
+.DEFAULT_GOAL := build
+
+ME ?= $(shell whoami)
 
 BINARY := homedrive
 CMD    := ./homedrive/cmd/homedrive
@@ -19,6 +26,24 @@ ORB_RUN := orb run -m $(ORB_MACHINE) -s
 
 LDFLAGS := -s -w -X main.version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
+help:
+	@echo "Available targets:"
+	@echo "  build          - Build ./$(DIST)/$(BINARY) for the host (default)"
+	@echo "  check          - go vet + the base test suite with the race detector"
+	@echo "  install        - Build, then install the binary and systemd units and enable homedrive@$(ME) (uses sudo, Linux only)"
+	@echo "  uninstall      - Disable and remove the installed service and binary (uses sudo)"
+	@echo "  start|stop|restart - Control homedrive@$(ME).service (uses sudo)"
+	@echo "  status|logs    - Show service status / follow its journal"
+	@echo "  build-arm64|build-amd64|build-mac - Cross-compile into $(DIST)/"
+	@echo "  test           - go test only (no vet, no race detector)"
+	@echo "  test-linux     - Race-detector tests in the OrbStack VM"
+	@echo "  deploy-pi      - build-arm64 + scp + restart on the NAS"
+	@echo "  clean          - Remove $(DIST)/"
+
+build:
+	@mkdir -p $(DIST)
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(DIST)/$(BINARY) $(CMD)
+
 build-mac:
 	@mkdir -p $(DIST)
 	go build -o $(DIST)/$(BINARY) $(CMD)
@@ -32,6 +57,14 @@ build-amd64:
 	@mkdir -p $(DIST)
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" \
 		-o $(DIST)/$(BINARY)-amd64 $(CMD)
+
+vet:
+	go vet ./homedrive/...
+
+# The base suite: vet plus every package under the race detector. On Linux
+# this exercises real inotify, so it is the same suite CI runs.
+check: vet
+	go test -race ./homedrive/...
 
 # macOS-native tests (compile check + platform-agnostic suite).
 test:
@@ -103,6 +136,57 @@ install-package: build-arm64 install-systemd
 	install -d -m 0755 /etc/homedrive
 	install -m 0644 $(LINUX_DIR)/config.yaml /etc/homedrive/config.yaml
 	$(LINUX_DIR)/postinst.sh
+
+# --- Local install: homedrive@$(ME).service on this machine -----------------
+#
+# `make install` builds for the host and installs with sudo (run it from your
+# own terminal so sudo can prompt). It does not create the per-user config
+# (~/.config/homedrive/config.yaml) or the rclone remote; the unit refuses to
+# start until that config exists (ExecCondition).
+#
+# The unit ships ProtectHome=read-only, so when local_root (read from the
+# per-user config) is under /home, a drop-in grants write access to it and to
+# ~/.config/rclone, where rclone persists refreshed OAuth tokens.
+UNIT_DIR     := /etc/systemd/system
+SERVICE      := homedrive@$(ME).service
+USER_CONFIG  := $(HOME)/.config/homedrive/config.yaml
+LOCAL_ROOT   := $(shell sed -n 's/^local_root:[[:space:]]*//p' $(USER_CONFIG) 2>/dev/null | tr -d "\"'")
+
+install: build
+ifeq ($(shell uname -s),Linux)
+	sudo install -m 0755 $(DIST)/$(BINARY) $(PREFIX)/bin/$(BINARY)
+	sudo install -m 0644 $(LINUX_DIR)/homedrive@.service $(UNIT_DIR)/
+	sudo install -d -m 0755 /etc/default
+	sudo install -m 0644 $(LINUX_DIR)/homedrive.default /etc/default/homedrive
+	sudo install -m 0644 $(LINUX_DIR)/99-homedrive-inotify.conf /etc/sysctl.d/
+	sudo install -m 0644 $(LINUX_DIR)/homedrive.logrotate /etc/logrotate.d/homedrive
+	@if [ -n "$(LOCAL_ROOT)" ]; then \
+		sudo install -d -m 0755 $(UNIT_DIR)/$(SERVICE).d; \
+		printf '[Service]\nReadWritePaths=%s %s/.config/rclone\n' "$(LOCAL_ROOT)" "$(HOME)" \
+			| sudo tee $(UNIT_DIR)/$(SERVICE).d/rw-paths.conf >/dev/null; \
+	else \
+		echo "note: $(USER_CONFIG) not found; skipping the ReadWritePaths drop-in (re-run 'make install' after creating it)"; \
+	fi
+	sudo $(LINUX_DIR)/postinst.sh
+	sudo systemctl enable $(SERVICE)
+	@echo "installed; 'make start' once ~/.config/homedrive/config.yaml and the rclone remote exist"
+else
+	$(error make install is only supported on Linux)
+endif
+
+uninstall:
+	-sudo systemctl disable --now $(SERVICE)
+	sudo rm -rf $(UNIT_DIR)/homedrive@.service $(UNIT_DIR)/$(SERVICE).d $(PREFIX)/bin/$(BINARY)
+	sudo systemctl daemon-reload
+
+start stop restart:
+	sudo systemctl $@ $(SERVICE)
+
+status:
+	systemctl status $(SERVICE) --no-pager
+
+logs:
+	journalctl -u $(SERVICE) -f
 
 clean:
 	rm -rf $(DIST)

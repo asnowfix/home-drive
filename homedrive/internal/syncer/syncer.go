@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -197,6 +198,10 @@ func (s *Syncer) handleEvent(ctx context.Context, ev Event) {
 	start := s.nowFn()
 	logger := s.logger.With("path", ev.Path, "op", ev.Op.String())
 
+	if s.skipDirEvent(logger, ev) {
+		return
+	}
+
 	if s.cfg.DryRun {
 		s.logDryRun(logger, ev)
 		return
@@ -206,32 +211,46 @@ func (s *Syncer) handleEvent(ctx context.Context, ev Event) {
 	s.bisyncMu.RLock()
 	defer s.bisyncMu.RUnlock()
 
+	var obj *RemoteObject
 	err := retryFunc(ctx, s.cfg.Retry, logger, ev.Op.String(),
 		s.sleepFn, func(ctx context.Context) error {
-			return s.execEvent(ctx, ev)
+			var execErr error
+			obj, execErr = s.execEvent(ctx, ev)
+			return execErr
 		},
 	)
 
 	elapsed := s.nowFn().Sub(start)
-	s.recordResult(ctx, ev.Path, ev.Op.String(), err, elapsed)
+	s.recordResult(ctx, ev.Path, ev.Op.String(), obj, err, elapsed)
 }
 
-// execEvent dispatches a single event to the remote filesystem.
-func (s *Syncer) execEvent(ctx context.Context, ev Event) error {
+// remoteDir returns the remote directory (relative to the remote root, ""
+// for the root) that holds the root-relative file path rel.
+func remoteDir(rel string) string {
+	dir := filepath.ToSlash(filepath.Dir(filepath.FromSlash(rel)))
+	if dir == "." {
+		return ""
+	}
+	return dir
+}
+
+// execEvent dispatches a single event to the remote filesystem. For
+// uploads it returns the resulting remote object so it can be journaled.
+func (s *Syncer) execEvent(ctx context.Context, ev Event) (*RemoteObject, error) {
 	switch ev.Op {
 	case OpCreate, OpWrite:
-		_, err := s.remote.CopyFile(ctx, ev.Path, ev.Path)
+		// ev.Path is relative to LocalRoot: upload the local file into
+		// the matching remote directory.
+		src := filepath.Join(s.cfg.LocalRoot, filepath.FromSlash(ev.Path))
+		obj, err := s.remote.CopyFile(ctx, src, remoteDir(ev.Path))
 		if err != nil {
-			return fmt.Errorf("copy file %q: %w", ev.Path, err)
+			return nil, fmt.Errorf("copy file %q: %w", ev.Path, err)
 		}
-		return nil
+		return &obj, nil
 	case OpRemove:
-		if err := s.remote.DeleteFile(ctx, ev.Path); err != nil {
-			return fmt.Errorf("delete file %q: %w", ev.Path, err)
-		}
-		return nil
+		return nil, s.execRemove(ctx, ev.Path)
 	default:
-		return fmt.Errorf("unhandled operation: %s", ev.Op)
+		return nil, fmt.Errorf("unhandled operation: %s", ev.Op)
 	}
 }
 
@@ -317,6 +336,7 @@ func (s *Syncer) handleDirRename(ctx context.Context, dr DirRename) {
 func (s *Syncer) recordResult(
 	ctx context.Context,
 	path, op string,
+	obj *RemoteObject,
 	err error,
 	elapsed time.Duration,
 ) {
@@ -351,11 +371,7 @@ func (s *Syncer) recordResult(
 	)
 
 	// Record sync in journal (ignore store errors, they are logged).
-	record := JournalEntry{
-		Path:         path,
-		LastSyncedAt: s.nowFn(),
-		LastOrigin:   "local",
-	}
+	record := s.pushEntry(path, obj)
 	if putErr := s.store.Put(ctx, record); putErr != nil {
 		s.logger.Error("store put failed",
 			"path", path,

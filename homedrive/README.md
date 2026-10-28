@@ -46,6 +46,20 @@ Key properties:
 | Exclusion filters | Glob patterns for `.git`, editor temps, `node_modules`, etc. (exclude-only, no includes -- see [migration doc](docs/migrating-rclone-filters.md)) |
 | Systemd packaging | Templated per-user unit, hardened, with logrotate and sysctl tuning |
 
+### Directory semantics
+
+Only files are synced; directories exist as a side effect of the files
+beneath them.
+
+- **Push**: a local directory create/write event is ignored (never uploaded
+  as a file). Drive folders are created implicitly when a file under them is
+  uploaded, so an **empty local directory is not created on Drive**.
+- **Pull**: a Drive folder reported by the Changes API is ignored. Local
+  directories are created when a file beneath them is downloaded, so an
+  **empty Drive folder is not created locally**. Folders are not journaled.
+
+Empty directories therefore do not sync in either direction (issue #105).
+
 ## Quick start
 
 ### Prerequisites
@@ -280,6 +294,15 @@ list, topic structure, and example automations.
 ### Build commands
 
 ```bash
+# Build for the host into dist/homedrive (the default target)
+make build
+
+# Install on this Linux machine as homedrive@$USER.service (uses sudo; run
+# from your own terminal). Create ~/.config/homedrive/config.yaml and the
+# rclone remote first, then `make start`.
+make install
+make start     # also: stop, restart, status, logs, uninstall
+
 # Local Mac build (type-checking only, not runnable on macOS in production)
 make build-mac
 
@@ -293,6 +316,9 @@ make build-amd64
 ### Testing
 
 ```bash
+# Base suite: go vet + all packages under the race detector
+make check
+
 # Run tests on Linux via OrbStack (required for inotify-dependent tests)
 make test-linux
 
