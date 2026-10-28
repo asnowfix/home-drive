@@ -194,8 +194,10 @@ make uninstall-user # removes unit + binary; keeps config, state and audit log
 
 The binary is written to a temp name in `~/.local/bin` and renamed over the
 old one, so a running agent is never exposed to a half-written file.
-Without a login session, `systemctl --user` needs
-`XDG_RUNTIME_DIR=/run/user/$(id -u)` (and linger, above).
+The targets default `XDG_RUNTIME_DIR` to `/run/user/<uid>` when it is
+unset, so they work from sessions without a login (ssh without PAM, cron,
+remote runners); linger (above) is still required for the user manager to
+exist there.
 
 #### What differs from the system unit
 

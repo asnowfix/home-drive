@@ -207,7 +207,10 @@ USER_BIN_DIR     := $(USER_HOME)/.local/bin
 USER_UNIT_DIR    := $(USER_HOME)/.config/systemd/user
 USER_UNIT        := homedrive.service
 SYSTEMCTL_USER   ?= systemctl --user
-SYSTEM_SERVICE   := homedrive@$(ME).service
+# Sessions without PAM/login (ssh without pam_systemd, cron, remote runners)
+# leave this unset, which makes every `systemctl --user` fail; default it.
+export XDG_RUNTIME_DIR ?= /run/user/$(shell id -u)
+SYSTEM_SERVICE   :=homedrive@$(ME).service
 USER_CONFIG_PATH := $(USER_HOME)/.config/homedrive/config.yaml
 
 # Refuse to proceed while the system unit is active or enabled: two agents on
@@ -223,8 +226,12 @@ user-guard:
 	fi
 	@if ! $(SYSTEMCTL_USER) show-environment >/dev/null 2>&1; then \
 		echo "refusing: cannot reach the systemd user manager for $(ME)." >&2; \
-		echo "If this is a session without a login, try: export XDG_RUNTIME_DIR=/run/user/$$(id -u)" >&2; \
-		echo "and make sure linger is enabled (see the notice below)." >&2; \
+		echo "(XDG_RUNTIME_DIR=$$XDG_RUNTIME_DIR)" >&2; \
+		if [ "$$(loginctl show-user $(ME) -p Linger --value 2>/dev/null)" != "yes" ]; then \
+			echo "linger is off for $(ME), so no user manager runs without a login session." >&2; \
+			echo "As root, on a console, run:" >&2; \
+			echo "  loginctl enable-linger $(ME)" >&2; \
+		fi; \
 		exit 1; \
 	fi
 
