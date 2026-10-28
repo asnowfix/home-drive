@@ -54,12 +54,11 @@ beneath them.
 - **Push**: a local directory create/write event is ignored (never uploaded
   as a file). Drive folders are created implicitly when a file under them is
   uploaded, so an **empty local directory is not created on Drive**.
-- **Pull**: a Drive folder reported by the Changes API is created locally
-  (`mkdir -p`), so an **empty Drive folder becomes an empty local directory**.
-  Folders are not journaled.
+- **Pull**: a Drive folder reported by the Changes API is ignored. Local
+  directories are created when a file beneath them is downloaded, so an
+  **empty Drive folder is not created locally**. Folders are not journaled.
 
-This asymmetry (pull creates empty directories, push does not) is
-deliberate for now and is an open product decision (issue #105).
+Empty directories therefore do not sync in either direction (issue #105).
 
 ## Quick start
 

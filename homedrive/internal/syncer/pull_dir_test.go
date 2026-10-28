@@ -12,10 +12,9 @@ func TestPuller_FolderChange(t *testing.T) {
 	tests := []struct {
 		name   string
 		dryRun bool
-		want   bool // local dir created
 	}{
-		{"CreatesLocalDir", false, true},
-		{"DryRunLeavesNoDir", true, false},
+		{"EmptyFolderNotCreated", false},
+		{"EmptyFolderNotCreatedDryRun", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -26,9 +25,9 @@ func TestPuller_FolderChange(t *testing.T) {
 			remote.startToken = "start-1"
 			remote.changes["start-1"] = Changes{
 				Items: []Change{
-					{Path: "hd-test", Object: &RemoteObject{Path: "hd-test", RemoteID: "d1", IsDir: true}},
-					{Path: "hd-test/a.txt", Object: &RemoteObject{
-						Path: "hd-test/a.txt", Size: 3, MD5: "m", ModTime: now, RemoteID: "f1"}},
+					{Path: "empty", Object: &RemoteObject{Path: "empty", RemoteID: "d1", IsDir: true}},
+					{Path: "top.txt", Object: &RemoteObject{
+						Path: "top.txt", Size: 3, MD5: "m", ModTime: now, RemoteID: "f1"}},
 				},
 				NextPageToken: "token-2",
 			}
@@ -46,14 +45,14 @@ func TestPuller_FolderChange(t *testing.T) {
 				t.Fatalf("PollOnce: %v", err)
 			}
 
-			_, statErr := os.Stat(filepath.Join(localRoot, "hd-test"))
-			if got := statErr == nil; got != tt.want {
-				t.Errorf("local dir exists = %v, want %v", got, tt.want)
+			// Only files are synced: the empty folder is not mirrored.
+			if _, err := os.Stat(filepath.Join(localRoot, "empty")); err == nil {
+				t.Error("empty remote folder was created locally")
 			}
 			// The folder must never be downloaded as a file; the file
 			// after it in the same page is still processed (unless dry-run).
 			for _, dl := range remote.downloadedFiles {
-				if dl.RemotePath == "hd-test" {
+				if dl.RemotePath == "empty" {
 					t.Error("folder was passed to DownloadFile")
 				}
 			}
@@ -64,7 +63,7 @@ func TestPuller_FolderChange(t *testing.T) {
 			if len(remote.downloadedFiles) != wantDownloads {
 				t.Errorf("downloads = %d, want %d", len(remote.downloadedFiles), wantDownloads)
 			}
-			if _, ok, _ := store.Get(context.Background(), "hd-test"); ok {
+			if _, ok, _ := store.Get(context.Background(), "empty"); ok {
 				t.Error("folder must not be journaled")
 			}
 			if token, _ := store.GetPageToken(context.Background()); token != "token-2" {

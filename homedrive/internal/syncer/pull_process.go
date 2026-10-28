@@ -16,7 +16,8 @@ func (p *Puller) processChange(ctx context.Context, ch Change) error {
 		return p.processDelete(ctx, ch, start)
 	}
 	if ch.Object != nil && ch.Object.IsDir {
-		return p.processDirChange(ch, start)
+		p.skipDirChange(ch)
+		return nil
 	}
 	return p.processFileChange(ctx, ch, start)
 }
