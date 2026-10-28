@@ -78,6 +78,9 @@ func (p *Puller) processFileChange(ctx context.Context, ch Change, start time.Ti
 	}
 
 	if exists {
+		if same, err := p.adoptIdenticalRemote(ctx, ch, journal); err != nil || same {
+			return err
+		}
 		isConflict, localMtime, conflictErr := p.detectConflict(ch, journal)
 		if conflictErr != nil {
 			return conflictErr

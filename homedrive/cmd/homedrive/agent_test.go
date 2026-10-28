@@ -92,7 +92,8 @@ func runAgentInBackground(t *testing.T, a *Agent) (ctx context.Context, cancel c
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-runDone:
+		case err := <-runDone:
+			t.Logf("agent Run returned: %v", err)
 		case <-time.After(5 * time.Second):
 			t.Error("agent did not shut down within 5s of cancellation")
 		}
@@ -168,8 +169,8 @@ waitBlocked:
 	cancel()
 
 	select {
-	case <-runDone:
-		t.Fatal("Run() returned before the in-flight job was allowed to complete")
+	case err := <-runDone:
+		t.Fatalf("Run() returned before the in-flight job was allowed to complete (err=%v)", err)
 	case <-time.After(150 * time.Millisecond):
 		// Good: Run() is still draining.
 	}
