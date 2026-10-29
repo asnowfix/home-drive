@@ -1,0 +1,47 @@
+# Per-user unit for `systemctl --user` -- installed to
+# ~/.config/systemd/user/homedrive.service by `make install-user`.
+# Additive alternative to the system-wide templated homedrive@.service; the
+# two must never run against the same local_root (see README, "User-mode
+# install"). Keep in sync with .claude/skills/homedrive-systemd/SKILL.md.
+[Unit]
+Description=homedrive sync agent (user service)
+Documentation=https://github.com/asnowfix/home-drive/blob/main/homedrive/README.md
+# Never permanently give up restarting -- see #88 and homedrive@.service.
+# StartLimit*= belongs in [Unit], not [Service].
+StartLimitIntervalSec=0
+
+# No After=/Wants=network-online.target: a user manager cannot order against
+# system targets. Restart=on-failure covers an agent that starts before the
+# network is up.
+
+[Service]
+Type=simple
+# Same defaults as /etc/default/homedrive in the system unit. Optional
+# per-user overrides (VAR=value lines) go in the env file.
+Environment=HOMEDRIVE_LOG_LEVEL=info
+Environment=HOMEDRIVE_LOG=stderr
+EnvironmentFile=-%h/.config/homedrive/env
+# Fail fast with a clear status reason if the config does not exist yet.
+ExecCondition=/bin/sh -c 'test -f "$HOME/.config/homedrive/config.yaml"'
+# ExecStart omits --config on purpose: the binary resolves
+# ~/.config/homedrive/config.yaml itself via os.UserConfigDir().
+ExecStart=%h/.local/bin/homedrive run
+ExecReload=/bin/kill -HUP $MAINPID
+# Same restart policy as the system unit (#88). RestartSec=60 keeps a
+# crash-looping agent from hammering Drive's OAuth endpoint. No
+# RestartSteps=: the NAS runs systemd 252.
+Restart=on-failure
+RestartSec=60
+
+# Hardening: only what was verified to take effect in a user manager.
+# Dropped vs. homedrive@.service (verified on systemd 259, see issue #124):
+#   ProtectSystem/ProtectHome/PrivateTmp/ProtectKernelTunables/
+#   ProtectControlGroups: accepted but have no effect unprivileged (no
+#   mount namespace is set up), so keeping them would only claim a
+#   protection that is not there.
+#   ProtectKernelModules: makes the unit fail to start (218/CAPABILITIES).
+NoNewPrivileges=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

@@ -77,6 +77,20 @@ that user — see "Configuration" in `homedrive/README.md`):
 sudo systemctl enable --now homedrive@fix.service
 ```
 
+## User unit (`linux/homedrive.service`, #124)
+
+Additive per-user variant for `systemctl --user` (installed by
+`make install-user`; no sudo in any user-mode target). Same restart policy
+(`StartLimitIntervalSec=0` in `[Unit]`, `RestartSec=60`, no `RestartSteps=`),
+`WantedBy=default.target`, `ExecStart=%h/.local/bin/homedrive run`. Hardening
+is deliberately only `NoNewPrivileges=true`: on systemd 259 the
+`Protect*`/`PrivateTmp` set is a silent no-op unprivileged and
+`ProtectKernelModules=` fails the unit (218/CAPABILITIES). Do not re-add a
+directive without verifying it with a throwaway `systemd-run --user` unit
+that checks the effect, not just that it starts. No `StateDirectory=`: paths
+come from the config. The Makefile refuses user-mode start/install while the
+system unit is active or enabled.
+
 ## /etc/default loading rules
 
 - `/etc/default/homedrive` — global, loaded for every instance. Required.

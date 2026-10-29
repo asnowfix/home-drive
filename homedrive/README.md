@@ -124,6 +124,103 @@ sudo systemctl status homedrive@fix.service
 journalctl -u homedrive@fix.service -f
 ```
 
+### User-mode install (`systemctl --user`, no sudo)
+
+An additive alternative to the system unit, for driving the daily
+build/install/restart loop from a session with no tty (so sudo cannot
+prompt), e.g. a remote-control session. It installs
+`homedrive/linux/homedrive.service` as `~/.config/systemd/user/homedrive.service`
+and the binary as `~/.local/bin/homedrive`. The system unit, the `.deb` and
+the existing `make install`/`start`/... targets are unchanged. **Run one or
+the other against a given `local_root`, never both**: the user-mode targets
+refuse to proceed while `homedrive@<user>.service` is active or enabled.
+
+#### One-time setup (root, on a console)
+
+The user-mode targets detect each of these and print the command; they never
+call sudo. Replace `fix` with your user.
+
+```bash
+# 1. Disable and stop the system unit (migration only; skip on a fresh host)
+sudo systemctl disable --now homedrive@fix.service
+
+# 2. Let the user manager run without a login session (survives logout and
+#    starts at boot). Check: loginctl show-user fix -p Linger
+sudo loginctl enable-linger fix
+
+# 3. Host-wide inotify limits, if the live values are below the shipped ones
+#    (fs.inotify.max_user_watches=524288, max_user_instances=512). Not needed
+#    if the system package/`make install` was already run on this host.
+sudo install -m 0644 homedrive/linux/99-homedrive-inotify.conf /etc/sysctl.d/
+sudo sysctl --system
+```
+
+#### Paths: state and audit log
+
+`state.path` and `state.audit_log` have no built-in defaults, and the agent
+creates their parent directories itself, so no code or unit change is
+needed: the paths are simply set in `~/.config/homedrive/config.yaml`.
+Explicit values are never reinterpreted.
+
+- **Fresh host**: use user-writable locations (the XDG state dir):
+
+  ```yaml
+  state:
+    path: /home/fix/.local/state/homedrive/state.db
+    audit_log: /home/fix/.local/state/homedrive/audit.jsonl
+  ```
+
+  (systemd `StateDirectory=` was not used: the agent reads absolute paths
+  from the config, so the unit would have to be kept in sync with it for no
+  gain.)
+- **Migrating from the system unit**: leave the config unchanged. On an
+  installed host `/var/lib/homedrive/<user>/` and `/var/log/homedrive/<user>/`
+  are already owned by that user, so the user-mode agent keeps using the
+  existing `state.db`. The journal matters for loop prevention (PLAN.md §7.3)
+  and `.old.<N>` numbering (§11); starting a new one would forget both. The
+  audit log also keeps being rotated by the installed logrotate rule. Moving
+  to `~/.local/state` later is: stop the agent, copy `state.db`, edit the
+  config, start the agent.
+
+#### Daily flow
+
+```bash
+make install-user   # first time: build, install binary + unit, enable (not started)
+make start-user     # once config.yaml and the rclone remote exist
+make deploy-local   # every update: build, atomically replace the binary, restart
+make status-user    # also: logs-user, stop-user, restart-user
+make uninstall-user # removes unit + binary; keeps config, state and audit log
+```
+
+The binary is written to a temp name in `~/.local/bin` and renamed over the
+old one, so a running agent is never exposed to a half-written file.
+The targets default `XDG_RUNTIME_DIR` to `/run/user/<uid>` when it is
+unset, so they work from sessions without a login (ssh without PAM, cron,
+remote runners); linger (above) is still required for the user manager to
+exist there.
+
+#### What differs from the system unit
+
+- **Hardening reduced to `NoNewPrivileges=true`.** Verified on systemd 259:
+  `ProtectSystem=`, `ProtectHome=`, `PrivateTmp=`, `ProtectKernelTunables=`
+  and `ProtectControlGroups=` are accepted but have no effect in an
+  unprivileged user manager (the service's mount namespace is the host's),
+  and `ProtectKernelModules=true` makes the unit fail with
+  `218/CAPABILITIES`. They were dropped rather than kept as decoration. The
+  agent runs as your user with write access to your whole home. Behaviour on
+  the NAS's systemd 252 was not verified.
+- **No `After=network-online.target`**: a user manager cannot order against
+  system targets; `Restart=on-failure` (60 s) covers an early start.
+- **Starts at boot only with linger**; without it, only while you are
+  logged in.
+- **No `StateDirectory=`/`LogsDirectory=`**: directories come from the
+  configured paths. The audit log is rotated only while it stays under
+  `/var/log/homedrive/*/` (the shipped logrotate rule); under
+  `~/.local/state` it is not rotated.
+- **Logs** go to the user journal (`make logs-user`).
+- `/etc/default/homedrive` is not read; log defaults are in the unit and can
+  be overridden in `~/.config/homedrive/env`.
+
 ## Configuration
 
 homedrive uses two configuration layers:
@@ -302,6 +399,10 @@ make build
 # rclone remote first, then `make start`.
 make install
 make start     # also: stop, restart, status, logs, uninstall
+
+# Same, per-user via `systemctl --user` (no sudo); see "User-mode install"
+make install-user
+make deploy-local   # daily: build, atomic binary swap, restart
 
 # Local Mac build (type-checking only, not runnable on macOS in production)
 make build-mac

@@ -1,7 +1,8 @@
 .PHONY: help build build-mac build-arm64 build-amd64 vet check test test-linux \
 	test-pi deploy-pi dev-create dev-delete dev-setup dev-shell clean \
 	install-systemd install-package install uninstall start stop restart \
-	status logs
+	status logs install-user install-user-binary start-user stop-user restart-user \
+	status-user logs-user uninstall-user deploy-local user-guard user-notices
 
 # `make` alone builds for the host.
 .DEFAULT_GOAL := build
@@ -34,6 +35,9 @@ help:
 	@echo "  uninstall      - Disable and remove the installed service and binary (uses sudo)"
 	@echo "  start|stop|restart - Control homedrive@$(ME).service (uses sudo)"
 	@echo "  status|logs    - Show service status / follow its journal"
+	@echo "  install-user   - Build, then install binary + unit for 'systemctl --user' and enable it (NO sudo; Linux only)"
+	@echo "  deploy-local   - Build, atomically replace ~/.local/bin/homedrive, restart the user unit (NO sudo)"
+	@echo "  start-user|stop-user|restart-user|status-user|logs-user|uninstall-user - Control the user unit (NO sudo)"
 	@echo "  build-arm64|build-amd64|build-mac - Cross-compile into $(DIST)/"
 	@echo "  test           - go test only (no vet, no race detector)"
 	@echo "  test-linux     - Race-detector tests in the OrbStack VM"
@@ -187,6 +191,111 @@ status:
 
 logs:
 	journalctl -u $(SERVICE) -f
+
+# --- User-mode install: `systemctl --user`, no sudo anywhere (#124) ----------
+#
+# Additive alternative to the system path above, for driving the daily
+# build/install/restart loop from a session that has no tty (so no sudo
+# prompt). Nothing here touches /etc, /usr or the system unit. The recipes
+# never invoke privilege escalation; the few inherently-root, one-time steps
+# (linger, disabling the system unit, inotify sysctl) are detected and the
+# exact command is printed for a human to run on a console.
+#
+# Test overrides: USER_HOME (default $HOME), ME, SYSTEMCTL_USER (e.g. `echo`).
+USER_HOME        ?= $(HOME)
+USER_BIN_DIR     := $(USER_HOME)/.local/bin
+USER_UNIT_DIR    := $(USER_HOME)/.config/systemd/user
+USER_UNIT        := homedrive.service
+SYSTEMCTL_USER   ?= systemctl --user
+# Sessions without PAM/login (ssh without pam_systemd, cron, remote runners)
+# leave this unset, which makes every `systemctl --user` fail; default it.
+export XDG_RUNTIME_DIR ?= /run/user/$(shell id -u)
+SYSTEM_SERVICE   :=homedrive@$(ME).service
+USER_CONFIG_PATH := $(USER_HOME)/.config/homedrive/config.yaml
+
+# Refuse to proceed while the system unit is active or enabled: two agents on
+# one local_root would race each other and corrupt each other's journal view.
+# Also refuse if the user manager is unreachable (no linger/login session).
+user-guard:
+	@if systemctl is-active --quiet $(SYSTEM_SERVICE) 2>/dev/null \
+	   || systemctl is-enabled --quiet $(SYSTEM_SERVICE) 2>/dev/null; then \
+		echo "refusing: $(SYSTEM_SERVICE) is active or enabled; two agents must not share a local_root." >&2; \
+		echo "As root, on a console, run:" >&2; \
+		echo "  systemctl disable --now $(SYSTEM_SERVICE)" >&2; \
+		exit 1; \
+	fi
+	@if ! $(SYSTEMCTL_USER) show-environment >/dev/null 2>&1; then \
+		echo "refusing: cannot reach the systemd user manager for $(ME)." >&2; \
+		echo "(XDG_RUNTIME_DIR=$$XDG_RUNTIME_DIR)" >&2; \
+		if [ "$$(loginctl show-user $(ME) -p Linger --value 2>/dev/null)" != "yes" ]; then \
+			echo "linger is off for $(ME), so no user manager runs without a login session." >&2; \
+			echo "As root, on a console, run:" >&2; \
+			echo "  loginctl enable-linger $(ME)" >&2; \
+		fi; \
+		exit 1; \
+	fi
+
+# Non-fatal reminders of the inherently-root one-time steps. Never fails.
+user-notices:
+	@if [ "$$(loginctl show-user $(ME) -p Linger --value 2>/dev/null)" != "yes" ]; then \
+		echo "notice: linger is off for $(ME); the user unit will only run while logged in." >&2; \
+		echo "As root, on a console, run:" >&2; \
+		echo "  loginctl enable-linger $(ME)" >&2; \
+	fi
+	@want_w=$$(sed -n 's/^fs.inotify.max_user_watches=//p' $(LINUX_DIR)/99-homedrive-inotify.conf); \
+	want_i=$$(sed -n 's/^fs.inotify.max_user_instances=//p' $(LINUX_DIR)/99-homedrive-inotify.conf); \
+	have_w=$$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo 0); \
+	have_i=$$(cat /proc/sys/fs/inotify/max_user_instances 2>/dev/null || echo 0); \
+	if [ "$$have_w" -lt "$$want_w" ] || [ "$$have_i" -lt "$$want_i" ]; then \
+		echo "notice: inotify limits are low (watches $$have_w < $$want_w or instances $$have_i < $$want_i)." >&2; \
+		echo "As root, on a console, run:" >&2; \
+		echo "  install -m 0644 $(CURDIR)/$(LINUX_DIR)/99-homedrive-inotify.conf /etc/sysctl.d/ && sysctl --system" >&2; \
+	fi
+	@if [ ! -f "$(USER_CONFIG_PATH)" ]; then \
+		echo "notice: $(USER_CONFIG_PATH) not found; the unit will not start until it exists." >&2; \
+	fi
+
+# Install to a temp name in the same directory, then rename(2): a running
+# process (or a concurrent exec) never sees a half-written binary.
+install-user-binary: build
+	install -d -m 0755 $(USER_BIN_DIR)
+	install -m 0755 $(DIST)/$(BINARY) $(USER_BIN_DIR)/.$(BINARY).new
+	mv -f $(USER_BIN_DIR)/.$(BINARY).new $(USER_BIN_DIR)/$(BINARY)
+
+install-user: user-guard install-user-binary user-notices
+ifeq ($(shell uname -s),Linux)
+	install -d -m 0755 $(USER_UNIT_DIR)
+	install -m 0644 $(LINUX_DIR)/$(USER_UNIT) $(USER_UNIT_DIR)/$(USER_UNIT)
+	$(SYSTEMCTL_USER) daemon-reload
+	$(SYSTEMCTL_USER) enable $(USER_UNIT)
+	@echo "installed; 'make start-user' once ~/.config/homedrive/config.yaml and the rclone remote exist"
+else
+	$(error make install-user is only supported on Linux)
+endif
+
+# Daily loop: build, atomically replace the binary, restart. Does not
+# reinstall the unit (use install-user for that).
+deploy-local: user-guard install-user-binary
+	@test -f $(USER_UNIT_DIR)/$(USER_UNIT) || { echo "user unit not installed; run 'make install-user' first" >&2; exit 1; }
+	$(SYSTEMCTL_USER) restart $(USER_UNIT)
+
+start-user restart-user: user-guard
+	$(SYSTEMCTL_USER) $(patsubst %-user,%,$@) $(USER_UNIT)
+
+stop-user:
+	$(SYSTEMCTL_USER) stop $(USER_UNIT)
+
+status-user:
+	$(SYSTEMCTL_USER) status $(USER_UNIT) --no-pager
+
+logs-user:
+	journalctl --user -u $(USER_UNIT) -f
+
+# Leaves config, state/journal, audit log and the rclone config untouched.
+uninstall-user:
+	-$(SYSTEMCTL_USER) disable --now $(USER_UNIT)
+	rm -f $(USER_UNIT_DIR)/$(USER_UNIT) $(USER_BIN_DIR)/$(BINARY)
+	$(SYSTEMCTL_USER) daemon-reload
 
 clean:
 	rm -rf $(DIST)
