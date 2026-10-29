@@ -159,22 +159,12 @@ manual path mirrors what CI actually ships.
 
 ## Live testing on a dev host
 
-A dev host may run a live agent against its real `local_root` (e.g. a
-`homedrive.service` user unit syncing `~/gdrive` with the personal Drive).
-Two agents on one `local_root` race each other's journal (loop prevention,
-`.old.<N>` numbering), so:
-
-- Never `make install`, `install-user`, enable or start a unit on a host
-  that already runs one, and never touch its `local_root`, state or Drive
-  data, unless the user says to. Brief dispatched agents the same way.
-- To exercise a build against real Drive, run a **separate instance**: a
-  scratch config with its own `local_root`, `state.path`, `state.audit_log`,
-  `http.listen` port, and a Drive sub-folder as `remote:` (e.g.
-  `gdrive:Brain/<test-dir>`). Announce the test artifacts, purge them from
-  Drive and disk afterwards, and check the live agent did not pick them up
-  (it syncs the parent folder, so it can; clean up there too).
-- Never `pkill -f` a pattern that also matches your own command line; kill
-  by PID.
+A dev host may run a live agent against its real `local_root`. Never
+install, enable or start a second agent there (`make install`,
+`install-user`) and never touch its `local_root`, state or Drive data unless
+the user says so; brief dispatched agents the same way. To exercise a build
+against real Drive, run a separate, isolated instance. Procedure and
+pitfalls: `homedrive/docs/live-testing.md`.
 
 ## Knowledge capture (must survive a change of machine)
 

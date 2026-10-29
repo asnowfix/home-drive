@@ -453,6 +453,7 @@ development setup guide.
 | [docs/directory-rename.md](docs/directory-rename.md) | Cookie-based rename pairing and performance |
 | [docs/dev-environment.md](docs/dev-environment.md) | macOS + OrbStack setup, cross-compilation, VS Code |
 | [docs/home-assistant.md](docs/home-assistant.md) | MQTT entities, topics, and HA automations |
+| [docs/live-testing.md](docs/live-testing.md) | Exercising a build against real Drive with an isolated instance; cleanup pitfalls |
 | [docs/manual-validation.md](docs/manual-validation.md) | End-to-end test checklist for Pi validation |
 | [docs/migrating-rclone-filters.md](docs/migrating-rclone-filters.md) | Translating rclone `--filter`/`--exclude` rules to `watcher.exclude`; no include/allow-list support |
 | [docs/nas-install-log.md](docs/nas-install-log.md) | Log of the actual install on `gruissan` (2026-05-31) |
