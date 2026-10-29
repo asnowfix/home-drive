@@ -155,6 +155,35 @@ sudo install -m 0644 homedrive/linux/99-homedrive-inotify.conf /etc/sysctl.d/
 sudo sysctl --system
 ```
 
+#### Check the prerequisites (no root needed)
+
+Run these before and after the root steps above; each prints what the
+corresponding `make` guard checks.
+
+```bash
+# Old system unit must be inactive AND disabled (two agents on one local_root
+# would fight; the user-mode targets refuse otherwise).
+systemctl is-active homedrive@fix; systemctl is-enabled homedrive@fix
+# -> inactive / disabled
+
+# Linger must be on, or the user manager (and the agent) dies at logout.
+loginctl show-user fix -p Linger
+# -> Linger=yes
+
+# inotify limits must be at least the shipped values (524288 / 512).
+sysctl fs.inotify.max_user_watches fs.inotify.max_user_instances
+# -> fs.inotify.max_user_watches = 524288
+# -> fs.inotify.max_user_instances = 512
+```
+
+Why each matters: the unit and `make` refuse to start next to the system
+unit (double sync of one directory); without linger a remote-control or ssh
+session has no user manager to talk to; too-low inotify limits make the
+watcher silently miss events on large trees. You also need
+`~/.config/homedrive/config.yaml` and a working `~/.config/rclone/rclone.conf`
+for the `remote:` named in it; the agent validates the token at startup and
+logs `startup oauth validation: token refresh succeeded`.
+
 #### Paths: state and audit log
 
 `state.path` and `state.audit_log` have no built-in defaults, and the agent
@@ -198,6 +227,20 @@ The targets default `XDG_RUNTIME_DIR` to `/run/user/<uid>` when it is
 unset, so they work from sessions without a login (ssh without PAM, cron,
 remote runners); linger (above) is still required for the user manager to
 exist there.
+
+#### Verify it is running
+
+```bash
+make status-user                      # Active: active (running)
+homedrive --version                   # must match the commit you deployed
+curl -s 127.0.0.1:6090/status         # "state":"running", last_pull advancing
+make logs-user                        # JSON log lines via journalctl --user
+```
+
+A healthy start logs, in order: token refresh succeeded, `rclone remote
+initialized`, `starting homedrive agent`, `http server starting`,
+`watcher started`. `last_pull` in `/status` should move every
+`pull.changes_api_interval` (30 s by default).
 
 #### What differs from the system unit
 
