@@ -87,7 +87,9 @@ is deliberately only `NoNewPrivileges=true`: on systemd 259 the
 `Protect*`/`PrivateTmp` set is a silent no-op unprivileged and
 `ProtectKernelModules=` fails the unit (218/CAPABILITIES). Do not re-add a
 directive without verifying it with a throwaway `systemd-run --user` unit
-that checks the effect, not just that it starts. No `StateDirectory=`: paths
+that checks the effect, not just that it starts (`systemd-analyze verify`
+passing proves nothing about effect). Behaviour on the NAS's systemd 252 is
+unverified; re-check when it first runs the user unit. No `StateDirectory=`: paths
 come from the config. The Makefile refuses user-mode start/install while the
 system unit is active or enabled.
 

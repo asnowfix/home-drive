@@ -156,3 +156,31 @@ If you're deploying the resulting build to the NAS to verify before tagging,
 use `make deploy-pi` (or the same steps by hand): always cross-compile
 locally and transfer the binary, never build on the NAS itself, so the
 manual path mirrors what CI actually ships.
+
+## Live testing on a dev host
+
+A dev host may run a live agent against its real `local_root`. Never
+install, enable or start a second agent there (`make install`,
+`install-user`) and never touch its `local_root`, state or Drive data unless
+the user says so; brief dispatched agents the same way. To exercise a build
+against real Drive, run a separate, isolated instance. Procedure and
+pitfalls: `homedrive/docs/live-testing.md`.
+
+## Knowledge capture (must survive a change of machine)
+
+Anything learned that the next session needs must be written to one of
+these, committed or synced, **not** to an agent-private memory store
+(`.claude/agent-memory/`, per-machine `~/.claude/projects/*/memory/`):
+
+- **Project documentation** (`README.md`, `homedrive/docs/`, `PLAN.md`) for
+  facts about the product and how to operate it.
+- **Project agent instructions or skills** (this file, `.claude/skills/`,
+  `.claude/agents/`) for rules and procedures every contributor or agent in
+  this repo must follow.
+- **User agent instructions or skills** (`~/.claude/CLAUDE.md`,
+  `~/.claude/skills/`) for personal, host-specific or cross-project facts
+  (which machine runs what, accounts, preferences). Mirror changes to the
+  other agents as that file requires.
+
+When a note is machine- or session-specific, decide which of the three it
+belongs to before ending the session; if none fits, it is not worth keeping.
