@@ -166,6 +166,12 @@ the user says so; brief dispatched agents the same way. To exercise a build
 against real Drive, run a separate, isolated instance. Procedure and
 pitfalls: `homedrive/docs/live-testing.md`.
 
+Known dev host: **palmbeach** (Ubuntu, user `fix`) runs the live
+`homedrive.service` user unit (`systemctl --user`, binary
+`~/.local/bin/homedrive`, since 2026-10-29), syncing `~/gdrive` with
+`gdrive:Brain` on the personal Google Drive. Never start a second agent
+against `~/gdrive`. Update the live agent with `make deploy-local` (no sudo).
+
 ## Knowledge capture (must survive a change of machine)
 
 Anything learned that the next session needs must be written to one of
@@ -178,9 +184,11 @@ these, committed or synced, **not** to an agent-private memory store
   `.claude/agents/`) for rules and procedures every contributor or agent in
   this repo must follow.
 - **User agent instructions or skills** (`~/.claude/CLAUDE.md`,
-  `~/.claude/skills/`) for personal, host-specific or cross-project facts
-  (which machine runs what, accounts, preferences). Mirror changes to the
-  other agents as that file requires.
+  `~/.claude/skills/`) for personal or cross-project facts that are not
+  specific to this repo (preferences, rules shared by several projects).
+  Facts specific to this repo, including which dev host runs what, belong in
+  this file. Mirror user-level changes to the other agents as that file
+  requires.
 
 When a note is machine- or session-specific, decide which of the three it
 belongs to before ending the session; if none fits, it is not worth keeping.
