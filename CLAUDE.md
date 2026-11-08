@@ -31,7 +31,7 @@ make build-arm64      # cross-compile for the Pi (GOOS=linux GOARCH=arm64)
 make build-amd64      # cross-compile for x86_64 Linux
 make test-linux       # run tests inside OrbStack Ubuntu 24.04 VM (real inotify)
 make test-pi          # run tests via SSH on the production Pi
-make deploy-pi        # build-arm64 + scp + systemctl restart on nas.local
+make deploy-pi        # build-arm64 + scp + systemctl restart on the NAS
 ```
 
 Run a single package's tests on Linux:
@@ -184,3 +184,9 @@ these, committed or synced, **not** to an agent-private memory store
 
 When a note is machine- or session-specific, decide which of the three it
 belongs to before ending the session; if none fits, it is not worth keeping.
+
+## Home network
+
+Home devices (the NAS, the home display) and their SSH MCP servers are described in the owner's private
+notes, `~/.claude/home-network/devices.md` on the owner's machines. This repository is public: never write
+device addresses or hostnames here.
