@@ -1043,6 +1043,36 @@ two independent copies of one algorithm that could silently drift apart.
 - Issue: `[homedrive] Filter parity: honor excludes on pull path + rclone
   migration doc` (#54).
 
+### v0.2 — Dropbox as a second sync backend (epic #134) [PROPOSED, awaiting maintainer decision]
+
+Goal: sync a local directory with Dropbox in both directions, with the same
+semantics as Drive, so homedrive can replace Maestral (archived). This is
+not a Dropbox-to-Drive migration. Design:
+`homedrive/docs/design/dropbox-backend.md` (phases §13, cost and smaller
+options §14, maintainer questions §18). Research:
+`homedrive/docs/dropbox-backend-research.md`. Nothing here is approved yet;
+the scope and the questions in design §18 are open on #134.
+
+- [ ] Phase 17: backend seam with Drive as the only implementation, zero
+  behaviour change (`changeFeed` in `rcloneclient`, typed remote hash with
+  the `remote_md5` JSON tag kept).
+- [ ] Phase 18: profiles, so a second instance can run per user (`--profile`,
+  `mqtt.instance`, a second systemd unit).
+- [ ] Phase 19: syncer flags for a case-insensitive remote (case collisions,
+  adopt unjournaled local files by hash, folder-delete expansion), Dropbox
+  `content_hash`.
+- [ ] Phase 20: Dropbox change feed on the Dropbox SDK (`list_folder/continue`,
+  cursor `reset` leads to a full re-walk).
+- [ ] Phase 21: wire the backend. This PR adds the `backend/dropbox` import
+  and, in the same PR, updates the AGENTS.md allow-list, the
+  `homedrive-rclone-import` skill, §10 and the CI grep.
+- [ ] Phase 22: live validation against an App-folder-only Dropbox app,
+  Maestral cutover doc, `homedrive/v0.2.0` release notes.
+- Size measured 2026-11-14 (go1.27.4, not CI's Go 1.26): `backend/dropbox`
+  adds about 1.1 MB. arm64 goes from 22,151,328 to 23,265,440 bytes and amd64
+  from 23,883,936 to 25,092,256 bytes, against the 26,214,400-byte gate.
+  amd64 is the binding constraint.
+
 ---
 
 ## 15. Packaging
