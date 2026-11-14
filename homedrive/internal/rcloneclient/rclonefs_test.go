@@ -54,6 +54,9 @@ func TestRcloneFS_List(t *testing.T) {
 			fakeObject{remote: "a.txt", size: 1, id: "id-a"},
 			fakeDirectory{remote: "sub", id: "sub-id"},
 		},
+		"sub": {
+			fakeObject{remote: "sub/b.txt", size: 2, id: "id-b"},
+		},
 	}}
 	r := &RcloneFS{log: slog.Default(), fsObj: fsys}
 
@@ -61,8 +64,12 @@ func TestRcloneFS_List(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(objs) != 1 || objs[0].Path != "a.txt" {
-		t.Errorf("List = %+v, want single entry a.txt (directories excluded)", objs)
+	if len(objs) != 2 {
+		t.Fatalf("List = %+v, want a.txt and sub/b.txt (recursive, directories not returned)", objs)
+	}
+	got := map[string]bool{objs[0].Path: true, objs[1].Path: true}
+	if !got["a.txt"] || !got["sub/b.txt"] {
+		t.Errorf("List = %+v, want a.txt and sub/b.txt", objs)
 	}
 }
 

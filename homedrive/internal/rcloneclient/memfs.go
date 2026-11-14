@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -216,9 +217,8 @@ func (m *MemFS) Quota(_ context.Context) (Quota, error) {
 	return m.quota, nil
 }
 
-// List returns all objects whose immediate parent directory is dir
-// (non-recursive), matching the semantics of RcloneFS.List. dir="" means
-// the remote root.
+// List returns all objects under dir at any depth, matching the semantics
+// of RcloneFS.List. dir="" means the whole remote.
 func (m *MemFS) List(_ context.Context, dir string) ([]RemoteObject, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -229,7 +229,7 @@ func (m *MemFS) List(_ context.Context, dir string) ([]RemoteObject, error) {
 	}
 	var out []RemoteObject
 	for p, obj := range m.files {
-		if path.Dir(p) == clean || (clean == "" && path.Dir(p) == ".") {
+		if clean == "" || strings.HasPrefix(p, clean+"/") {
 			out = append(out, obj)
 		}
 	}
