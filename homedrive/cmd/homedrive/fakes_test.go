@@ -17,11 +17,12 @@ import (
 // interface (see adapters.go) shaped for what Agent needs, distinct from
 // rcloneclient.RemoteFS and syncer.RemoteFS.
 type fakeRemoteFS struct {
-	mu        sync.Mutex
-	files     map[string]rcloneclient.RemoteObject
-	copyCalls []string
-	moveCalls [][2]string
-	quota     rcloneclient.Quota
+	mu           sync.Mutex
+	files        map[string]rcloneclient.RemoteObject
+	copyCalls    []string
+	moveCalls    [][2]string
+	moveDirCalls [][2]string
+	quota        rcloneclient.Quota
 
 	// copyGate, if set, blocks CopyFile (ignoring ctx, like an in-flight
 	// network call) until releaseGate is called, to simulate a slow
@@ -92,6 +93,13 @@ func (f *fakeRemoteFS) MoveFile(_ context.Context, src, dst string) error {
 		delete(f.files, src)
 		f.files[dst] = obj
 	}
+	return nil
+}
+
+func (f *fakeRemoteFS) MoveDir(_ context.Context, src, dst string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.moveDirCalls = append(f.moveDirCalls, [2]string{src, dst})
 	return nil
 }
 

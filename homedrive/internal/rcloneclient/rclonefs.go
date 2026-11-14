@@ -232,6 +232,23 @@ func (r *RcloneFS) MoveFile(ctx context.Context, src, dst string) error {
 	return nil
 }
 
+// MoveDir renames or moves a remote directory (and everything under it)
+// from src to dst. MoveFile cannot do this: NewObject reports a directory
+// as fs.ErrorIsDir (issue #136). operations.DirMove uses the backend's
+// server-side DirMove when it has one (Drive: a single Files.Update call,
+// PLAN.md section 6) and only falls back to per-file moves otherwise.
+// A missing source is reported as an error wrapping ErrNotFound.
+func (r *RcloneFS) MoveDir(ctx context.Context, src, dst string) error {
+	if err := operations.DirMove(ctx, r.fsObj, src, dst); err != nil {
+		// Drive reports fs.ErrorDirNotFound; the local backend a raw os error.
+		if errors.Is(err, rclonefs.ErrorDirNotFound) || errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("rcloneclient: move dir %q: %w", src, ErrNotFound)
+		}
+		return fmt.Errorf("rcloneclient: move dir %q to %q: %w", src, dst, err)
+	}
+	return nil
+}
+
 // Stat returns metadata for the remote object at path.
 func (r *RcloneFS) Stat(ctx context.Context, remotePath string) (RemoteObject, error) {
 	obj, err := r.fsObj.NewObject(ctx, remotePath)

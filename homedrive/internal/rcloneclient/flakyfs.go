@@ -121,6 +121,14 @@ func (f *FlakyFS) MoveFile(ctx context.Context, src, dst string) error {
 	return f.inner.MoveFile(ctx, src, dst)
 }
 
+// MoveDir implements RemoteFS.
+func (f *FlakyFS) MoveDir(ctx context.Context, src, dst string) error {
+	if err := f.applyRule(ctx, "MoveDir", src); err != nil {
+		return err
+	}
+	return f.inner.MoveDir(ctx, src, dst)
+}
+
 // Stat implements RemoteFS.
 func (f *FlakyFS) Stat(ctx context.Context, path string) (RemoteObject, error) {
 	if err := f.applyRule(ctx, "Stat", path); err != nil {

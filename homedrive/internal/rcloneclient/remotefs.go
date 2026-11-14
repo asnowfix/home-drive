@@ -91,6 +91,11 @@ type RemoteFS interface {
 	// MoveFile renames or moves a remote file from src to dst.
 	MoveFile(ctx context.Context, src, dst string) error
 
+	// MoveDir renames or moves a remote directory and its whole subtree
+	// from src to dst as one server-side operation where the backend
+	// supports it (a paired local directory rename, PLAN.md section 6).
+	MoveDir(ctx context.Context, src, dst string) error
+
 	// Stat returns metadata for the remote object at path.
 	Stat(ctx context.Context, path string) (RemoteObject, error)
 
