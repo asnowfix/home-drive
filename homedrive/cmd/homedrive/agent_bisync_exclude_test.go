@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -33,7 +34,12 @@ func TestAgent_BisyncHonoursWatcherExclude(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- a.bisync.Run(ctx) }()
-	defer func() { cancel(); <-done }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+			t.Logf("bisync Run: %v", err)
+		}
+	}()
 	if err := a.bisync.ForceRun(ctx); err != nil {
 		t.Fatalf("ForceRun: %v", err)
 	}
