@@ -19,12 +19,12 @@ func (c memClock) Now() time.Time { return c.t }
 // newNestedBisync wires Bisync to the real rcloneclient.MemFS (not the
 // syncer's mockRemoteFS, whose List ignores its dir argument and so hides
 // non-recursive listing behaviour; issue #135).
-func newNestedBisync(t *testing.T, root string, now time.Time) (*Bisync, *rcloneclient.MemFS, *mockJournal) {
+func newNestedBisync(t *testing.T, root string, now time.Time, exclude ...string) (*Bisync, *rcloneclient.MemFS, *mockJournal) {
 	t.Helper()
 	remote := rcloneclient.NewMemFS(rcloneclient.WithClock(memClock{now}))
 	journal := newMockJournal()
 	b, _ := NewBisync(BisyncOpts{
-		Config:  BisyncConfig{Interval: time.Hour, LocalRoot: root},
+		Config:  BisyncConfig{Interval: time.Hour, LocalRoot: root, Exclude: exclude},
 		Remote:  remote,
 		Journal: journal,
 		Clock:   newMockClock(now),
@@ -102,6 +102,76 @@ func TestBisync_NestedFiles_Recursive(t *testing.T) {
 			tt.setup(t, root, remote, journal)
 			b.execute(context.Background())
 			tt.check(t, root, remote)
+		})
+	}
+}
+
+func TestBisync_Exclude_BothSides(t *testing.T) {
+	t0 := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	exclude := []string{"**/.git/**", "**/*.tmp"}
+
+	tests := []struct {
+		name       string
+		localFiles []string
+		remoteOnly []string
+		wantRemote []string // must exist remotely after the pass
+		noRemote   []string // must not be uploaded
+		wantLocal  []string // must exist locally after the pass
+		noLocal    []string // must not be downloaded
+	}{
+		{
+			name:       "excluded remote-only nested file is not pulled, sibling is",
+			remoteOnly: []string{"proj/.git/HEAD", "proj/src/main.go"},
+			wantLocal:  []string{"proj/src/main.go"},
+			noLocal:    []string{"proj/.git/HEAD"},
+		},
+		{
+			name:       "excluded local-only file is not pushed, sibling is",
+			localFiles: []string{"proj/.git/config", "proj/a.tmp", "proj/a.txt"},
+			wantRemote: []string{"proj/a.txt"},
+			noRemote:   []string{"proj/.git/config", "proj/a.tmp"},
+		},
+		{
+			name:       "excluded root-level pattern on both sides",
+			localFiles: []string{"x.tmp"},
+			remoteOnly: []string{"y.tmp"},
+			noRemote:   []string{"x.tmp"},
+			noLocal:    []string{"y.tmp"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			b, remote, _ := newNestedBisync(t, root, t0, exclude...)
+			for _, p := range tt.localFiles {
+				createLocalFile(t, root, p, t0)
+			}
+			for _, p := range tt.remoteOnly {
+				remote.Seed(p, t0, "m")
+			}
+			b.execute(context.Background())
+
+			files := remote.Files()
+			for _, p := range tt.wantRemote {
+				if _, ok := files[p]; !ok {
+					t.Errorf("%s should have been pushed", p)
+				}
+			}
+			for _, p := range tt.noRemote {
+				if _, ok := files[p]; ok {
+					t.Errorf("%s is excluded but was pushed", p)
+				}
+			}
+			for _, p := range tt.wantLocal {
+				if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(p))); err != nil {
+					t.Errorf("%s should have been pulled: %v", p, err)
+				}
+			}
+			for _, p := range tt.noLocal {
+				if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(p))); err == nil {
+					t.Errorf("%s is excluded but was pulled", p)
+				}
+			}
 		})
 	}
 }
