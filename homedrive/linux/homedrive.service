@@ -6,9 +6,10 @@
 [Unit]
 Description=homedrive sync agent (user service)
 Documentation=https://github.com/asnowfix/home-drive/blob/main/homedrive/README.md
-# Never permanently give up restarting -- see #88 and homedrive@.service.
+# Bounded restarts -- see #88 and homedrive@.service.
 # StartLimit*= belongs in [Unit], not [Service].
-StartLimitIntervalSec=0
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 # No After=/Wants=network-online.target: a user manager cannot order against
 # system targets. Restart=on-failure covers an agent that starts before the
@@ -27,11 +28,14 @@ ExecCondition=/bin/sh -c 'test -f "$HOME/.config/homedrive/config.yaml"'
 # ~/.config/homedrive/config.yaml itself via os.UserConfigDir().
 ExecStart=%h/.local/bin/homedrive run
 ExecReload=/bin/kill -HUP $MAINPID
-# Same restart policy as the system unit (#88). RestartSec=60 keeps a
-# crash-looping agent from hammering Drive's OAuth endpoint. No
-# RestartSteps=: the NAS runs systemd 252.
+# Same restart policy as the system unit (#88): the agent backs off
+# in-process at startup and exits 75 when it gives up, which
+# RestartPreventExitStatus=75 turns into a final `failed` (manual
+# `systemctl --user start` afterwards). No RestartSteps=: the NAS runs
+# systemd 252.
 Restart=on-failure
-RestartSec=60
+RestartSec=10
+RestartPreventExitStatus=75
 
 # Hardening: only what was verified to take effect in a user manager.
 # Dropped vs. homedrive@.service (verified on systemd 259, see issue #124):
