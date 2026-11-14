@@ -1,6 +1,7 @@
 # Design: Dropbox as a second sync backend
 
 - **Status**: Proposed (not approved). **Date**: 2026-11-14.
+- **Version note**: `main` moved from rclone v1.75.2 to **v1.76.0** (Dependabot PR #131) on the day this was written. The size figures below are re-measured on v1.76.0; the research citations are not re-checked.
 - **Inputs**: `homedrive/docs/dropbox-backend-research.md` (cited as *research*, with its section numbers),
   `homedrive/PLAN.md`, `homedrive/docs/architecture.md`, `AGENTS.md`, the `homedrive-*` skills, and the code at
   `b8b425d`.
@@ -91,8 +92,8 @@ Backend-neutral already [code]: `CopyFile` (`operations.Rcat`), `DeleteFile`, `M
 2. **Upgrade safety for the live Drive agent.** After `make deploy-pi` with this work, the Drive agent
    starts against its existing `state.db`, polls with its existing page token, and produces byte-identical
    journal JSON for unchanged entries. Phase 17 must show zero behaviour change.
-3. **Binary size (amd64 binds).** Measured with backend/dropbox imported: amd64 is 25,092,256 bytes (1.07 MiB
-   headroom) and arm64 is 23,265,440 bytes (2.8 MiB). All new Dropbox code must fit in the amd64 headroom,
+3. **Binary size (amd64 binds).** Measured with backend/dropbox imported: amd64 is 25,571,488 bytes (0.61 MiB
+   headroom) and arm64 is 23,724,192 bytes (2.3 MiB), re-measured on rclone v1.76.0 (main 5a241cd; the v1.75.2 figures were 25,092,256 and 23,265,440). All new Dropbox code must fit in the amd64 headroom,
    measured with **CI's toolchain** (`setup-go 1.26`, not the go1.27.4 used for the measurement).
 4. **Data safety on a case-insensitive remote.** Two local names that differ only in case never silently
    overwrite each other, either remotely or locally. Each such collision produces an error event and the
@@ -369,7 +370,7 @@ change and could link fewer SDK packages. *Why it loses*: homedrive would own up
   `dropbox/oauth`** (not in the list). Use `golang.org/x/oauth2`, which is already linked.
 - `lib/encoder` is already linked through rclone. `contenthash` uses only `crypto/sha256` and `crypto/md5`.
 - Our own production code is estimated at about 1.2k lines. Expected cost is about 0.1–0.25 MiB against
-  1.07 MiB of amd64 headroom [inferred; no measurement].
+  0.61 MiB of amd64 headroom (re-measured on rclone v1.76.0) [inferred; no measurement of the new code].
 - Risk: a future rclone, SDK or Go bump can eat the remaining margin. Phases 20 and 21 must record both arch
   sizes in the PR, built with CI's Go 1.26. See open question Q4 for the gate policy.
 

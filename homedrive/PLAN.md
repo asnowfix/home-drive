@@ -1068,10 +1068,12 @@ the scope and the questions in design §18 are open on #134.
   `homedrive-rclone-import` skill, §10 and the CI grep.
 - [ ] Phase 22: live validation against an App-folder-only Dropbox app,
   Maestral cutover doc, `homedrive/v0.2.0` release notes.
-- Size measured 2026-11-14 (go1.27.4, not CI's Go 1.26): `backend/dropbox`
-  adds about 1.1 MB. arm64 goes from 22,151,328 to 23,265,440 bytes and amd64
-  from 23,883,936 to 25,092,256 bytes, against the 26,214,400-byte gate.
-  amd64 is the binding constraint.
+- Size measured 2026-11-14 on `main` 5a241cd (rclone v1.76.0; go1.27.4, not
+  CI's Go 1.26): `backend/dropbox` adds about 1.1 MB. arm64 goes from
+  22,610,080 to 23,724,192 bytes and amd64 from 24,359,072 to 25,571,488
+  bytes, against the 26,214,400-byte gate. amd64 is the binding constraint,
+  with about 0.61 MiB left for all new Dropbox code. Dependency bumps alone
+  added about 0.45 MB between rclone v1.75.2 and v1.76.0.
 
 ---
 

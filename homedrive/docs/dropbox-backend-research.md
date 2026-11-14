@@ -1,5 +1,8 @@
 # Dropbox as a second sync backend: reference research
 
+> **Version note (2026-11-14):** this research was done against rclone **v1.75.2**. During the same day, Dependabot PR #131 moved `main` to rclone **v1.76.0**, and the Dropbox SDK it pulls in from v6.4.0 to **v6.6.2**. File:line citations into rclone and the SDK refer to the older versions and have **not** been re-checked against v1.76.0. Re-verify any citation that a phase relies on.
+
+
 ## What was asked
 
 Reference for designing a Dropbox backend for `homedrive` (local directory <-> Dropbox, same
