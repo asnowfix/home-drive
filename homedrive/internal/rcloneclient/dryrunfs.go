@@ -57,6 +57,16 @@ func (d *DryRunFS) MoveFile(_ context.Context, src, dst string) error {
 	return nil
 }
 
+// MoveDir logs the intended directory move and returns success.
+func (d *DryRunFS) MoveDir(_ context.Context, src, dst string) error {
+	d.log.Info("would move directory",
+		"op", "MoveDir",
+		"src", src,
+		"dst", dst,
+	)
+	return nil
+}
+
 // Stat delegates to the inner RemoteFS (read-only, safe in dry-run).
 func (d *DryRunFS) Stat(ctx context.Context, remotePath string) (RemoteObject, error) {
 	return d.inner.Stat(ctx, remotePath)

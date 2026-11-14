@@ -254,7 +254,7 @@ func (s *Syncer) execEvent(ctx context.Context, ev Event) (*RemoteObject, error)
 	}
 }
 
-// handleDirRename processes a directory rename with a single MoveFile
+// handleDirRename processes a directory rename with a single MoveDir
 // call and a bulk store prefix rewrite.
 func (s *Syncer) handleDirRename(ctx context.Context, dr DirRename) {
 	start := s.nowFn()
@@ -271,7 +271,7 @@ func (s *Syncer) handleDirRename(ctx context.Context, dr DirRename) {
 
 	err := retryFunc(ctx, s.cfg.Retry, logger, "dir_rename",
 		s.sleepFn, func(ctx context.Context) error {
-			return s.remote.MoveFile(ctx, dr.From, dr.To)
+			return s.remote.MoveDir(ctx, dr.From, dr.To)
 		},
 	)
 
