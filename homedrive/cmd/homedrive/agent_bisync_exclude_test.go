@@ -33,7 +33,7 @@ func TestAgent_BisyncHonoursWatcherExclude(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- a.bisync.Run(ctx) }()
-	defer func() { cancel(); _ = <-done }()
+	defer func() { cancel(); <-done }()
 	if err := a.bisync.ForceRun(ctx); err != nil {
 		t.Fatalf("ForceRun: %v", err)
 	}
