@@ -1,5 +1,5 @@
 .PHONY: help build build-mac build-arm64 build-amd64 vet check test test-linux \
-	test-pi deploy-pi dev-create dev-delete dev-setup dev-shell clean \
+	test-pi deploy-pi pi-host-guard dev-create dev-delete dev-setup dev-shell clean \
 	install-systemd install-package install uninstall start stop restart \
 	status logs install-user install-user-binary start-user stop-user restart-user \
 	status-user logs-user uninstall-user deploy-local user-guard user-notices
@@ -41,7 +41,7 @@ help:
 	@echo "  build-arm64|build-amd64|build-mac - Cross-compile into $(DIST)/"
 	@echo "  test           - go test only (no vet, no race detector)"
 	@echo "  test-linux     - Race-detector tests in the OrbStack VM"
-	@echo "  deploy-pi      - build-arm64 + scp + restart on the NAS"
+	@echo "  deploy-pi      - build-arm64, then install + restart the user unit on PI_HOST over ssh (NO sudo; PI_HOST required)"
 	@echo "  clean          - Remove $(DIST)/"
 
 build:
@@ -78,17 +78,79 @@ test:
 test-linux: dev-setup
 	$(ORB_RUN) 'cd $(CURDIR)/homedrive && go test -race ./...'
 
-test-pi:
-	ssh fix@nas.local 'cd /tmp/homedrive-test && go test ./...'
+# Remote targets (test-pi, deploy-pi). The target host has no default: this
+# repo is public, so no hostname or IP lives here. Set PI_HOST on the command
+# line or in the environment: `make deploy-pi PI_HOST=<nas-host>`.
+PI_HOST     ?=
+PI_USER     ?= $(ME)
+# Extra options for both ssh and scp, e.g. `-i ~/.ssh/nas -o Port=2222` (use
+# -o Port=, not -p/-P, which differ between ssh and scp). Empty by default.
+PI_SSH_OPTS ?=
+PI_TARGET   = $(PI_USER)@$(PI_HOST)
 
-# Installs to /usr/bin, matching install-package and the systemd unit's
-# ExecStart=/usr/bin/homedrive run -- NOT /usr/local/bin. Diverging from
-# that path would leave a stale binary shadowing the real one on PATH
-# for anyone running `homedrive` interactively (see issue #68).
-deploy-pi: build-arm64
-	scp $(DIST)/$(BINARY)-arm64 fix@nas.local:/tmp/$(BINARY)
-	ssh fix@nas.local 'sudo install /tmp/$(BINARY) /usr/bin/'
-	ssh fix@nas.local 'sudo systemctl restart homedrive@fix.service'
+pi-host-guard:
+	@if [ -z "$(PI_HOST)" ]; then \
+		echo "PI_HOST is not set: there is no default target host." >&2; \
+		echo "Usage: make <target> PI_HOST=<nas-host> [PI_USER=<user>] [PI_SSH_OPTS=...]" >&2; \
+		exit 1; \
+	fi
+
+# NOTE (#81): this cannot work -- the NAS has no Go toolchain, and building on
+# the NAS is against the release rules. Kept, pointed at PI_HOST, pending a
+# maintainer decision to keep or remove it.
+test-pi: pi-host-guard
+	ssh $(PI_SSH_OPTS) $(PI_TARGET) 'cd /tmp/homedrive-test && go test ./...'
+
+# deploy-pi deploys the *per-user* unit (see the user-mode section below) to
+# $(PI_TARGET), with no sudo anywhere. The remote has no repo, make or Go, so
+# every remote step is a plain ssh/scp command. The scripts below are passed
+# as single-quoted ssh arguments, so they must not contain single quotes.
+# (Recursive `=` because USER_UNIT/LINUX_DIR are defined further down.)
+#
+# Preflight, before anything is copied: refuse while the system unit is
+# active/enabled (two agents must not share a local_root; mirrors user-guard)
+# and while the user manager is unreachable. Non-PAM ssh sessions do not set
+# XDG_RUNTIME_DIR, so it is exported here.
+PI_SYSTEM_SERVICE = homedrive@$(PI_USER).service
+PI_PREFLIGHT = \
+	if systemctl is-active --quiet $(PI_SYSTEM_SERVICE) 2>/dev/null \
+	   || systemctl is-enabled --quiet $(PI_SYSTEM_SERVICE) 2>/dev/null; then \
+		echo "refusing: $(PI_SYSTEM_SERVICE) is active or enabled; two agents must not share a local_root." >&2; \
+		echo "As root, on a console, run:" >&2; \
+		echo "  systemctl disable --now $(PI_SYSTEM_SERVICE)" >&2; \
+		exit 1; \
+	fi; \
+	export XDG_RUNTIME_DIR=/run/user/$$(id -u); \
+	if ! systemctl --user show-environment >/dev/null 2>&1; then \
+		echo "refusing: cannot reach the systemd user manager for $(PI_USER) (XDG_RUNTIME_DIR=$$XDG_RUNTIME_DIR)." >&2; \
+		if [ "$$(loginctl show-user $(PI_USER) -p Linger --value 2>/dev/null)" != "yes" ]; then \
+			echo "linger is off, so no user manager runs without a login session. As root, on a console, run:" >&2; \
+			echo "  loginctl enable-linger $(PI_USER)" >&2; \
+		fi; \
+		exit 1; \
+	fi; \
+	mkdir -p "$$HOME/.local/bin" "$$HOME/.config/systemd/user"
+
+# Install: both files were copied under temp names; rename(2) them into place
+# (atomic, as install-user-binary does), then reload, enable and restart.
+PI_INSTALL = \
+	set -e; \
+	export XDG_RUNTIME_DIR=/run/user/$$(id -u); \
+	cd; \
+	chmod 0755 .local/bin/.$(BINARY).new; \
+	chmod 0644 .config/systemd/user/.$(USER_UNIT).new; \
+	mv -f .local/bin/.$(BINARY).new .local/bin/$(BINARY); \
+	mv -f .config/systemd/user/.$(USER_UNIT).new .config/systemd/user/$(USER_UNIT); \
+	systemctl --user daemon-reload; \
+	systemctl --user enable $(USER_UNIT); \
+	systemctl --user restart $(USER_UNIT); \
+	systemctl --user is-active $(USER_UNIT)
+
+deploy-pi: pi-host-guard build-arm64
+	ssh $(PI_SSH_OPTS) $(PI_TARGET) '$(PI_PREFLIGHT)'
+	scp $(PI_SSH_OPTS) $(DIST)/$(BINARY)-arm64 $(PI_TARGET):.local/bin/.$(BINARY).new
+	scp $(PI_SSH_OPTS) $(LINUX_DIR)/$(USER_UNIT) $(PI_TARGET):.config/systemd/user/.$(USER_UNIT).new
+	ssh $(PI_SSH_OPTS) $(PI_TARGET) '$(PI_INSTALL)'
 
 # Provision the OrbStack `dev` machine if it does not exist.
 dev-create:

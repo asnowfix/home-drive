@@ -104,23 +104,98 @@ make build-mac      # macOS local build
 make build-arm64    # cross-compile for Pi
 make build-amd64    # cross-compile for x86_64 Linux
 make test-linux     # run tests inside OrbStack
-make test-pi        # run tests on the production Pi via SSH
-make deploy-pi      # build-arm64 + scp + systemctl restart
+make test-pi        # run tests on the production Pi via SSH (cannot work today, see below)
+make deploy-pi      # build-arm64 + scp + restart the per-user unit over SSH (no sudo)
 ```
+
+The two remote targets need `PI_HOST`, which has **no default** (this
+repository is public, so no hostname or address is written in it); they fail
+early with a usage message when it is unset. `PI_USER` defaults to the local
+user (`whoami`) and is both the ssh login and the owner of the user unit.
+`PI_SSH_OPTS` (empty by default) is passed to both `ssh` and `scp`, for a
+non-default key or port (`PI_SSH_OPTS='-i ~/.ssh/nas -o Port=2222'`; use
+`-o Port=`, since `ssh -p` and `scp -P` differ).
+
+`make test-pi` runs `go test` on the NAS, which has no Go toolchain (and
+building on the NAS is against the release rules), so it cannot work as is.
+It is kept, pointed at `PI_HOST`, until the maintainer decides to remove it.
 
 ## Deploy to Pi for manual testing
 
+`make deploy-pi` cross-compiles locally (never on the NAS), then deploys the
+**per-user** unit (`systemctl --user`, see "User-mode install" in
+`homedrive/README.md`) over ssh. No sudo is used anywhere. The remote has no
+repo, make or Go, so every remote step is a plain ssh/scp command.
+
 ```bash
 # Build and deploy in one step
-make deploy-pi
+make deploy-pi PI_HOST=<nas-host> [PI_USER=<user>]
 
-# Or manually:
+# Or manually (what the target runs; <user>@<nas-host> is your login there):
 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
   -o dist/homedrive-arm64 ./homedrive/cmd/homedrive
-scp dist/homedrive-arm64 fix@nas.local:/tmp/
-ssh fix@nas.local 'sudo install /tmp/homedrive-arm64 /usr/local/bin/homedrive'
-ssh fix@nas.local 'sudo systemctl restart homedrive@fix.service'
+# 1. Preflight on the NAS: the system unit must be neither active nor enabled
+#    (systemctl is-active / is-enabled homedrive@<user>.service), and
+#    `export XDG_RUNTIME_DIR=/run/user/$(id -u)` must make
+#    `systemctl --user show-environment` succeed (non-PAM ssh sessions do not
+#    set it). The target refuses, and prints the root command, otherwise.
+ssh <user>@<nas-host> 'mkdir -p ~/.local/bin ~/.config/systemd/user'
+# 2. Copy under temp names, then rename into place (atomic)
+scp dist/homedrive-arm64 <user>@<nas-host>:.local/bin/.homedrive.new
+scp homedrive/linux/homedrive.service <user>@<nas-host>:.config/systemd/user/.homedrive.service.new
+ssh <user>@<nas-host> 'export XDG_RUNTIME_DIR=/run/user/$(id -u); cd &&
+  chmod 0755 .local/bin/.homedrive.new &&
+  mv -f .local/bin/.homedrive.new .local/bin/homedrive &&
+  mv -f .config/systemd/user/.homedrive.service.new .config/systemd/user/homedrive.service &&
+  systemctl --user daemon-reload && systemctl --user enable homedrive.service &&
+  systemctl --user restart homedrive.service'
 ```
+
+Differences from what CI ships: the release `.deb` installs the *system*
+unit (`/lib/systemd/system`); `deploy-pi` runs the same binary under the
+user unit, with reduced hardening (`NoNewPrivileges=true` only) and, under
+journald `Storage=volatile`, logs readable only from a root/`adm` account
+(`sudo journalctl _UID=<uid>`; `make logs-user` shows nothing for a plain
+user). See "What differs from the system unit" in `homedrive/README.md`.
+
+### Switching a host from the system unit to the user unit
+
+Do this only with the owner's agreement: it changes how the production agent
+is supervised. Two agents must never share a `local_root`, so `deploy-pi`
+refuses while `homedrive@<user>.service` is active or enabled.
+
+Prerequisites on the NAS (check, do not assume): `loginctl show-user <user>
+-p Linger` is `yes` (otherwise `loginctl enable-linger <user>` as root); the
+inotify limits from `99-homedrive-inotify.conf` are applied; the user's
+`~/.config/homedrive/config.yaml` and rclone remote exist. The user unit
+reuses the same config, state database and audit log as the system unit.
+
+```bash
+# 1. One-time, as root on the NAS (a console or a sudo-capable account):
+systemctl disable --now homedrive@<user>.service
+
+# 2. From the dev host:
+make deploy-pi PI_HOST=<nas-host> PI_USER=<user>
+
+# 3. Verify: version matches, state is running, last_pull advances
+ssh <user>@<nas-host> 'curl -s 127.0.0.1:6090/status'
+```
+
+Rollback (the system unit's binary, `/usr/bin/homedrive`, is untouched by
+`deploy-pi`, so it is still the previously installed version):
+
+```bash
+# as <user> on the NAS (export XDG_RUNTIME_DIR=/run/user/$(id -u) first in a non-PAM ssh session)
+systemctl --user disable --now homedrive.service
+# then as root on the NAS
+systemctl enable --now homedrive@<user>.service
+```
+
+Logs: with journald `Storage=volatile`, `journalctl --user` fails for a
+non-root user ("No journal files were opened due to insufficient
+permissions"), because no per-user journal files exist and the user is in
+neither `adm` nor `systemd-journal`. Read the logs from a root or `adm`
+account: `sudo journalctl _UID=<uid-of-the-agent-user>`.
 
 ## Build tags for Linux-only code
 
