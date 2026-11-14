@@ -68,6 +68,26 @@ func retryFunc(
 	return fmt.Errorf("%s: %w: %w", desc, ErrRetriesExhausted, lastErr)
 }
 
+// Retry is the exported entry point to the shared exponential-backoff loop
+// (see retryFunc) for callers outside this package, e.g. the agent's
+// startup remote init (#88). sleepFn must return early when ctx is
+// cancelled; pass ContextSleep in production.
+func Retry(
+	ctx context.Context,
+	cfg RetryConfig,
+	logger *slog.Logger,
+	desc string,
+	sleepFn func(context.Context, time.Duration),
+	fn func(ctx context.Context) error,
+) error {
+	return retryFunc(ctx, cfg, logger, desc, sleepFn, fn)
+}
+
+// ContextSleep sleeps for d, returning early if ctx is cancelled.
+func ContextSleep(ctx context.Context, d time.Duration) {
+	contextSleep(ctx, d)
+}
+
 // nextBackoff doubles the backoff, capping at maxBackoff.
 func nextBackoff(current, max time.Duration) time.Duration {
 	next := current * 2

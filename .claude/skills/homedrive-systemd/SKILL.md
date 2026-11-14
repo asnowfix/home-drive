@@ -19,7 +19,8 @@ Description=homedrive sync agent for %i
 Documentation=https://github.com/asnowfix/home-drive/blob/main/homedrive/README.md
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=0
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -31,7 +32,8 @@ ExecCondition=/bin/sh -c 'test -f $(getent passwd %i | cut -d: -f6)/.config/home
 ExecStart=/usr/bin/homedrive run
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
-RestartSec=60
+RestartSec=10
+RestartPreventExitStatus=75
 StateDirectory=homedrive/%i
 LogsDirectory=homedrive/%i
 
@@ -59,17 +61,26 @@ startup on that same path so a missing config fails fast with a clear
 `/var/lib/homedrive/<user>/` and `/var/log/homedrive/<user>/`, owned by that
 user, at service start.
 
-`StartLimitIntervalSec=0` lives in `[Unit]`, not `[Service]` — that's where
-`StartLimit*=` has been since systemd 230; putting it in `[Service]` is
-silently ignored (`systemd-analyze verify` will say "Unknown key name").
-It disables systemd's restart-rate trip entirely, so the unit can never end
-up permanently `inactive (dead)` while still `enabled` (#88). `RestartSec=60`
-(not the systemd default of ~100ms nor the previous 10s) is the matching
-half: a crash-looping agent — e.g. a bad Drive credential, which fails in
-under a second — retries once a minute instead of hammering Drive's OAuth
-endpoint. This also means an ordinary transient crash now takes up to 60s to
-recover instead of 10s, which is a deliberate trade (local disk stays the
-source of truth regardless of restart latency), not a regression.
+Restart policy (#88), in two layers. The NAS runs systemd 252, which has no
+`RestartSteps=`/`RestartMaxDelaySec=`/`RestartMode=` (254+): use none of them.
+
+1. In the agent: `rcloneclient.NewRcloneFS` is retried 8 times with
+   exponential backoff (waits 5, 10, 20, 40, 80, 160, 300s, about 10 min 15 s
+   total). On exhaustion the agent exits **75** (`EX_TEMPFAIL`, sentinel
+   `ErrRemoteInitExhausted`, `cmd/homedrive/remote_init.go`); every other
+   fatal error exits 1.
+2. In the unit: `RestartPreventExitStatus=75` stops systemd restarting an
+   agent that has given up, so the unit ends `failed`. After that, repairing
+   the credential does **not** bring sync back by itself: someone must run
+   `systemctl start`. Other failures restart after `RestartSec=10`, and
+   `StartLimitIntervalSec=600` + `StartLimitBurst=5` stop a crash loop after
+   5 starts in 10 minutes.
+
+`StartLimit*=` lives in `[Unit]`, not `[Service]` — that's where it has been
+since systemd 230; putting it in `[Service]` is silently ignored
+(`systemd-analyze verify` will say "Unknown key name"). This replaced the
+earlier never-give-up policy (`StartLimitIntervalSec=0`, `RestartSec=60`);
+do not restore it.
 
 Activation (requires `~/.config/homedrive/config.yaml` to already exist for
 that user — see "Configuration" in `homedrive/README.md`):
@@ -81,7 +92,8 @@ sudo systemctl enable --now homedrive@fix.service
 
 Additive per-user variant for `systemctl --user` (installed by
 `make install-user`; no sudo in any user-mode target). Same restart policy
-(`StartLimitIntervalSec=0` in `[Unit]`, `RestartSec=60`, no `RestartSteps=`),
+(`StartLimitIntervalSec=600`/`StartLimitBurst=5` in `[Unit]`, `RestartSec=10`,
+`RestartPreventExitStatus=75`, no `RestartSteps=`),
 `WantedBy=default.target`, `ExecStart=%h/.local/bin/homedrive run`. Hardening
 is deliberately only `NoNewPrivileges=true`: on systemd 259 the
 `Protect*`/`PrivateTmp` set is a silent no-op unprivileged and

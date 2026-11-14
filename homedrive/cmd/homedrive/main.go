@@ -37,7 +37,7 @@ func main() {
 	root := newRootCmd(logLevel)
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		slog.Error("fatal error", "error", err)
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
 }
 

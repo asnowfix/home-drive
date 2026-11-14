@@ -121,12 +121,15 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 		return nil, err
 	}
 
-	rfs, err := rcloneclient.NewRcloneFS(ctx, rcloneclient.RcloneFSConfig{
-		Remote:     cfg.Remote,
-		ConfigPath: cfg.RcloneConfig,
-		Exclude:    cfg.Watcher.Exclude,
-		Log:        log,
-	})
+	rfs, err := initWithBackoff(ctx, remoteInitRetryConfig(), log, syncer.ContextSleep,
+		func(ctx context.Context) (*rcloneclient.RcloneFS, error) {
+			return rcloneclient.NewRcloneFS(ctx, rcloneclient.RcloneFSConfig{
+				Remote:     cfg.Remote,
+				ConfigPath: cfg.RcloneConfig,
+				Exclude:    cfg.Watcher.Exclude,
+				Log:        log,
+			})
+		})
 	if err != nil {
 		_ = journal.Close()
 		closeAuditFile(auditFile, log)
