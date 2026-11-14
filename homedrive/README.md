@@ -260,7 +260,13 @@ initialized`, `starting homedrive agent`, `http server starting`,
   configured paths. The audit log is rotated only while it stays under
   `/var/log/homedrive/*/` (the shipped logrotate rule); under
   `~/.local/state` it is not rotated.
-- **Logs** go to the user journal (`make logs-user`).
+- **Logs** go to the user journal (`make logs-user`). With journald
+  `Storage=volatile` (common on a Pi) no per-user journal files are written,
+  so a non-root user who is in neither `adm` nor `systemd-journal` cannot
+  read its own user-unit logs (`journalctl --user` reports "No journal files
+  were opened due to insufficient permissions", and `make logs-user` shows
+  nothing). Read them from a root or `adm` account instead:
+  `sudo journalctl _UID=<uid-of-the-agent-user>`.
 - `/etc/default/homedrive` is not read; log defaults are in the unit and can
   be overridden in `~/.config/homedrive/env`.
 
@@ -466,8 +472,9 @@ make check
 # Run tests on Linux via OrbStack (required for inotify-dependent tests)
 make test-linux
 
-# Run tests on the production Pi
-make test-pi
+# Run tests on the production Pi (needs PI_HOST; see the note in
+# homedrive/docs/dev-environment.md: the NAS has no Go, so this cannot work today)
+make test-pi PI_HOST=<nas-host>
 
 # Run a single package's tests
 orb run -m dev -- go test -race ./homedrive/internal/watcher/...
