@@ -184,13 +184,16 @@ func (m *mockRemoteFS) DownloadFile(_ context.Context, remotePath, localPath str
 	return writeTestFile(localPath, "content-of-"+remotePath)
 }
 
-// List returns all seeded/copied files (for bisync tests).
-func (m *mockRemoteFS) List(_ context.Context, _ string) ([]RemoteObject, error) {
+// List returns all seeded/copied files under dir at any depth, like the
+// real recursive RemoteFS.List (issue #135). dir="" lists everything.
+func (m *mockRemoteFS) List(_ context.Context, dir string) ([]RemoteObject, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	result := make([]RemoteObject, 0, len(m.files))
-	for _, obj := range m.files {
-		result = append(result, obj)
+	for p, obj := range m.files {
+		if dir == "" || strings.HasPrefix(p, dir+"/") {
+			result = append(result, obj)
+		}
 	}
 	return result, nil
 }

@@ -330,6 +330,7 @@ func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer, auditor *s
 			Retention:     retentionPolicy(a.cfg.Conflict.Retention),
 			SweepInterval: a.cfg.Conflict.Retention.SweepInterval.Duration,
 			RepairChains:  a.cfg.Conflict.RepairChains == nil || *a.cfg.Conflict.RepairChains,
+			Exclude:       a.cfg.Watcher.Exclude,
 		},
 		Remote:  a.rfs,
 		Journal: &bisyncJournalAdapter{j: a.journal},

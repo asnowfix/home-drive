@@ -94,9 +94,10 @@ type RemoteFS interface {
 	// Stat returns metadata for the remote object at path.
 	Stat(ctx context.Context, path string) (RemoteObject, error)
 
-	// List returns all objects in the given remote directory
-	// (non-recursive). Required by the bisync safety net (PLAN.md §7.2)
-	// to diff the remote tree against the local one.
+	// List returns every object under the given remote directory,
+	// recursively ("" is the remote root); Path is relative to the remote
+	// root. Required by the bisync safety net (PLAN.md §7.2) to diff the
+	// whole remote tree against the local one (issue #135).
 	List(ctx context.Context, dir string) ([]RemoteObject, error)
 
 	// ListChanges returns changes since the given page token.

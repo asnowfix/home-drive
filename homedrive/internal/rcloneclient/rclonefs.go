@@ -381,19 +381,37 @@ func (r *RcloneFS) DownloadFile(ctx context.Context, remotePath, localPath strin
 	return nil
 }
 
-// List returns all objects in the given remote directory (non-recursive).
+// List returns every object under dir, recursively (dir "" is the remote
+// root). Object paths are relative to the remote root, like Stat and
+// DownloadFile expect. Unlike listRecursive (the Changes walk), it applies no
+// watcher.exclude filtering and does not touch the id-path cache: it feeds the
+// bisync diff, which compares against an unfiltered local walk (issue #135).
 func (r *RcloneFS) List(ctx context.Context, dir string) ([]RemoteObject, error) {
-	entries, err := r.fsObj.List(ctx, dir)
-	if err != nil {
-		return nil, fmt.Errorf("rcloneclient: list %q: %w", dir, err)
-	}
 	var objs []RemoteObject
-	for _, entry := range entries {
-		if obj, ok := entry.(rclonefs.Object); ok {
-			objs = append(objs, remoteObjectFromRclone(obj))
-		}
+	if err := r.listObjects(ctx, dir, &objs); err != nil {
+		return nil, err
 	}
 	return objs, nil
+}
+
+// listObjects appends every object under dir to objs, descending into
+// sub-directories.
+func (r *RcloneFS) listObjects(ctx context.Context, dir string, objs *[]RemoteObject) error {
+	entries, err := r.fsObj.List(ctx, dir)
+	if err != nil {
+		return fmt.Errorf("rcloneclient: list %q: %w", dir, err)
+	}
+	for _, entry := range entries {
+		switch v := entry.(type) {
+		case rclonefs.Object:
+			*objs = append(*objs, remoteObjectFromRclone(v))
+		case rclonefs.Directory:
+			if err := r.listObjects(ctx, entry.Remote(), objs); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // Quota returns the current remote storage usage via fs.About.
