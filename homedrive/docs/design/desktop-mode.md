@@ -18,8 +18,10 @@ Decided by the maintainer, not re-opened here:
 - Per-folder pinning is wanted.
 - The NAS mode (the current `homedrive run`) must not regress.
 - Updated 2026-11-15: the rclone import allow-list is lifted **for this study**
-  and the 25 MB cap is a regression guard, not a hardware limit. A proposed
-  allow-list and size budget are in sections 6 and 7.
+  and the 25 MB cap was removed (#149: no size limit, must run on a Raspberry
+  Pi 3B+ alongside other workloads). The proposed allow-list is in section 6.
+- Decisions of 2026-11-15 (section 12): single executable with two modes, no
+  offline mode, default cache cap 25% of the cache filesystem.
 - Updated 2026-11-15: desktop mode runs on the maintainer's desktop (the host the
   trial ran on), and it starts and stops **with the desktop session**, unlike NAS
   mode, which is a lingering user service.
@@ -170,7 +172,7 @@ in under 10 s. It does **not** do:
 | | Option | What it is | Covers |
 |---|---|---|---|
 | **O0** | Supported `rclone mount` unit plus docs | A `homedrive-desktop.service` user unit and a page in `homedrive/docs/` that runs a pinned rclone release with tested flags. No Go code. | Everything in 3.3 except 1–6. Pinning approximated by a timer that `cat`s pinned folders (fragile, see 8.2). |
-| **O1** | Desktop mode in Go, rclone VFS as a library, **no rclone fork** | A homedrive binary/mode that builds an `fs.Fs` for Drive, **wraps it** in a homedrive `Fs` (offline gate, conflict check, events), hands it to `vfs.New` and mounts it with `cmd/mount2`. Pinning by keeping pinned items recently used. | 1 (soft, see 8.2), 4, 5, 6, 7. Not 2 or 3. |
+| **O1** | Desktop mode in Go, rclone VFS as a library, **no rclone fork** | A homedrive binary/mode that builds an `fs.Fs` for Drive, **wraps it** in a homedrive `Fs` (bounded timeouts, conflict check, events), hands it to `vfs.New` and mounts it with `cmd/mount2`. Pinning by keeping pinned items recently used. | 1 (soft, see 8.2), 4, 5, 6, 7. Not 2 or 3. |
 | **O2** | O1 plus a small upstream rclone change | Contribute an eviction filter (`vfscommon.Options.CacheKeep func(name string) bool` or similar) and touch-as-access to rclone. Until it lands, carry it as a `replace` against a fork. | All of 1–7. |
 | **O3** | Own FUSE layer and own cache, no rclone VFS | Write the VFS and cache from scratch over `go-fuse`. | Everything, at several thousand lines; reimplements what rclone already does well. **Not recommended.** |
 
@@ -224,7 +226,7 @@ _ "github.com/rclone/rclone/backend/drive"
 ```
 
 Proposed: keep that list for NAS code, and allow **only the desktop code paths**
-(the package `internal/desktop`, plus `cmd/homedrive-desktop` under option A) to
+(the package `internal/desktop` and the `mount` subcommand wiring) to
 add:
 
 ```go
@@ -241,7 +243,7 @@ in-process rc calls of section 8.4 explicit. The rc **HTTP server**
 
 The `internal/rcloneclient`-only rule becomes "`internal/rcloneclient` and
 `internal/desktop`". The CI check gains a second grep: any import of the four
-desktop packages outside `internal/desktop` and `cmd/homedrive-desktop` fails.
+desktop packages outside `internal/desktop` and the `mount` subcommand fails.
 Still exactly one backend (`backend/drive`). If #86 lands first (drop
 `configfile`), the desktop list follows it.
 
@@ -262,9 +264,9 @@ in the desktop-only probe). Measured 2026-11-15.
 | (b) same with `cmd/mount` (bazil) instead | 26,222,752 B | 24,314,016 B | +1.86 / +1.70 MB |
 | (b) same with `cmount` (cgo) | not measured (no `fuse.h`) | not measured (no cross toolchain) | |
 
-Note that **amd64 is already within 1.9 MB of the 25 MB guard today**
-(24,363,168 B vs 26,214,400 B), and the open Dropbox design (#134/#137) measured
-another ~1.1 MB. Option (b) alone breaks the guard on amd64 (26.29 MB).
+The 25 MB guard these figures were measured against was removed by #149: there
+is no size limit any more, only the rule that homedrive must run on a Raspberry
+Pi 3B+ alongside other workloads (AGENTS.md "Target hardware").
 
 | | (a) Dual executables | (b) Single executable, two modes |
 |---|---|---|
@@ -279,38 +281,30 @@ another ~1.1 MB. Option (b) alone breaks the guard on amd64 (26.29 MB).
 | Allow-list enforcement | Per directory, mechanical (grep) | Per package inside one binary; the NAS binary still links the desktop packages |
 | Risk to NAS | None at runtime or size | NAS process links FUSE and VFS init code; `init()`s from `cmd/mount2`/rclone `cmd` run in the NAS process too |
 
-**Leaning: (a), a second `cmd/` in the same module, not a build tag.** It costs one
-goreleaser entry and gives the NAS a binary that is byte-for-byte unaffected. A
-build tag (`//go:build desktop`) is the worst of both: two binaries in practice,
-but the desktop code is invisible to `go vet ./...`, `golangci-lint` and coverage
-unless every CI step is run twice with the tag. Option (b) is the better choice
-only if the maintainer values "one artifact, one CLI" over NAS isolation; it is
-fully viable, the cost is 1.9 MB on every NAS install and a budget change.
-
-**Suggested budgets** (replacing the single 25 MB guard, which was a proxy for
-"no `backend/all`"): NAS binary **26 MB amd64 / 24 MB arm64**; desktop binary or
-single binary **30 MB on both**. Pair each with a **delta check** in CI (fail if a
-PR grows a binary by more than 1 MB without a PLAN.md §10 note), which catches
-an accidental `backend/all` far better than an absolute cap.
+**Decision (maintainer, 2026-11-15): (b), a single executable with two modes.**
+The dual-binary saving is about 0.5 MB, and the size guard that motivated (a) is
+gone. One build, one `.deb`, one config loader, no duplicated wiring. The NAS
+process links the FUSE/VFS packages but never initialises a mount; D1 must check
+that no rclone `cmd`/`mount2` `init()` does work at NAS start-up (memory, flags)
+and record the arm64 RSS of NAS mode before and after on a Pi 3B+-class host.
 
 ## 8. Design
 
 ### 8.1 Runtime topology
 
 ```
-homedrive-desktop (one process, started by the graphical session)
+homedrive mount (desktop mode of the single binary, started by the graphical session)
   mount2 (go-fuse) ──▶ rclone vfs.VFS (dir cache, LRU file cache, write-back)
                           │
                           ▼
                      desktop.GuardFs  (homedrive's fs.Fs wrapper)
-                       - offline gate: fail fast when offline
+                       - short remote timeouts: EIO instead of minute-long hangs
                        - conflict check before Update/Put (newer_wins, .old.<N>)
                        - events to MQTT + audit log + store journal
                           │
                           ▼
                      backend/drive fs.Fs (rclone.conf via configfile)
   pinner     ── walks pinned folders, keeps them listed and recently read
-  connectivity probe ── sets the offline gate
   http :6091 ── /status /healthz /metrics /pin /unpin
   mqtt ── homedrive/<host>/<user>/desktop/... (section 8.6)
 ```
@@ -321,7 +315,7 @@ gives homedrive one place to observe and veto remote I/O without forking rclone.
 
 ### 8.2 Pinning
 
-Config: `pins: ["Documents/Taxes", "Projects/current"]`, also `homedrive-desktop
+Config: `pins: ["Documents/Taxes", "Projects/current"]`, also `homedrive
 pin <path>` / `unpin <path>` over the HTTP control port, persisted in the store.
 
 **O1 (no fork): keep pinned content warm.**
@@ -353,40 +347,34 @@ plus no cap check and no offline listing guarantee.
 
 ### 8.3 Cache cap and eviction
 
-- `cache.max_size` (default 10 GiB), `cache.max_age` (default 0: no age limit;
+- `cache.max_size`: default **25% of the size of the filesystem holding the cache
+  dir** (256 GiB on the current desktop host, 1 TiB disk), overridable with an
+  absolute size (decision, 2026-11-15). `cache.max_age` (default 0: no age limit;
   rclone's default of 1h would evict everything hourly), `cache.min_free_space`
   (default 5 GiB; rclone's `--vfs-cache-min-free-space`), cache dir
   `$XDG_CACHE_HOME/homedrive-desktop`.
 - `cache.poll_interval` 10 s: the soft-cap overshoot is bounded by one interval
   of reads; 10 s keeps it small.
-- LRU by **open/read/close/write** is rclone's behaviour. **Touch is not** (O1).
-  With O2 it is. The maintainer asked for "access/touch/update"; O1 delivers
-  access and update only. Flagged as a question.
+- LRU by **open/read/close/write** is rclone's behaviour; **touch is not**.
+  Accepted by the maintainer (2026-11-15), so O2 is not needed for eviction.
 - Dirty (not yet uploaded) items are never evicted (rclone guarantees this).
 
-### 8.4 Offline story
+### 8.4 Offline: not supported (decision, 2026-11-15)
 
-1. **Connectivity probe:** a cheap Drive call (or NetworkManager's
-   `org.freedesktop.NetworkManager.Connectivity` over D-Bus, which this GNOME host
-   has) every few seconds while offline, every 30 s while online. Its state
-   drives the gate and is published as `online`/`offline` in MQTT and `/status`.
-2. **Gate:** while offline, `GuardFs` returns an error **immediately** for
-   `List`, `NewObject` and `Open` of anything not already cached, so the VFS
-   surfaces `EIO` in milliseconds instead of blocking for minutes. Cached reads
-   are served by the VFS without touching the `Fs`.
-3. **Writes offline:** creating and editing files works (measured: 14 ms,
-   queued as dirty uploads). `mkdir`, rename and delete do **not**: rclone needs
-   the remote synchronously and they blocked for 3 to 9 minutes in the trial.
-   While offline, the gate makes them fail fast with `EIO`. Queuing metadata
-   operations offline is not proposed (it needs its own journal and a replay with
-   conflict rules); it is a question for the maintainer.
-4. **Back online:** the gate opens and desktop mode **kicks the upload queue**
-   (otherwise rclone waits for each item's own backoff, up to 5 min, as
-   measured). The `vfs` package registers the in-process rc calls `vfs/queue` and
-   `vfs/queue-set-expiry` (rclone v1.76.0 `vfs/rc.go:516`), which can set each
-   queued item's expiry to now, so no rclone change is needed. Then Drive
-   change polling resumes from its page token, so changes made while offline are
-   picked up.
+A Linux desktop is treated as **always online**. There is no offline mode, no
+connectivity probe and no queueing of metadata operations:
+
+- Reads of cached content are served by the VFS as usual.
+- Any operation that needs Drive while it is unreachable (read of uncached
+  content, listing an uncached directory, `mkdir`, rename, delete) returns
+  **`EIO`**. The trial showed rclone blocking 150 to 543 s instead, so desktop
+  mode bounds remote calls with short timeouts and low retry counts (applied in
+  `GuardFs` or via rclone's `--contimeout`/`--timeout`/`--low-level-retries`
+  equivalents) so the error comes back in seconds, not minutes.
+- Writes to already-open or cached files may still be queued as dirty uploads by
+  the VFS; they are uploaded when Drive is reachable again and go through the
+  conflict check of section 8.5, which closes the trial's "offline edit
+  overwrote a newer Drive version" finding.
 
 ### 8.5 Conflicts: newer_wins and `.old.<N>`
 
@@ -451,7 +439,7 @@ Requisite=graphical-session.target
 
 [Service]
 Type=notify            # mountlib can notify readiness after the mount is live
-ExecStart=%h/.local/bin/homedrive-desktop mount
+ExecStart=%h/.local/bin/homedrive mount
 ExecStop=             # none: SIGTERM triggers flush then unmount (9.3)
 TimeoutStopSec=45
 Restart=on-failure
@@ -476,7 +464,7 @@ WantedBy=graphical-session.target
 
 ### 9.2 XDG autostart `.desktop` entry (alternative)
 
-`~/.config/autostart/homedrive-desktop.desktop` with `Exec=homedrive-desktop
+`~/.config/autostart/homedrive-desktop.desktop` with `Exec=homedrive
 mount`. On this host systemd's `systemd-xdg-autostart-generator` turns it into an
 `app-homedrive\x2ddesktop@autostart.service` unit anyway. It works on desktops that
 do not start `graphical-session.target`, but gives no `Restart=`, no
@@ -504,10 +492,10 @@ fallback** for desktops without `graphical-session.target`.
   systemd 259's user-session freezing interacts badly with a FUSE daemon in the
   same user session is **not established** (no suspend was tried during this
   study). Mitigation if it does: a `systemd-inhibit --what=sleep --mode=delay`
-  lock taken by the daemon, released after it flushes and sets the offline gate.
+  lock taken by the daemon, released after it flushes.
   Phase D3 must test suspend/resume on this host.
-- **Resume without network:** the probe sets the gate offline, cached files keep
-  working, uncached access fails fast (8.4).
+- **Resume without network:** cached files keep working, uncached access returns
+  `EIO` after the bounded timeouts (8.4).
 - **Resume with network:** the token is refreshed on the first call, Drive change
   polling resumes from its page token.
 
@@ -555,12 +543,12 @@ Numbered `D0`–`D5` to avoid colliding with the Dropbox proposal (#137, phases
   homedrive-desktop-rclone.service` (session-bound, flags from section 3), a docs
   page with the trial's findings and known limits. No Go. About 150 lines.
   Useful alone; the baseline for everything below.
-- **D1: desktop binary skeleton.** `cmd/homedrive-desktop` (or `homedrive mount`
-  under option b), config, `vfs` + `mount2`, signal handling and flush-then-
+- **D1: desktop mode skeleton.** `homedrive mount` subcommand (option b), config, `vfs` + `mount2`, signal handling and flush-then-
   unmount, `Type=notify`. Re-run the section 3 matrix on `mount2`, including
   dirty re-upload after restart. Allow-list and size checks per section 6/7.
-- **D2: `GuardFs` offline gate + connectivity probe.** Fail-fast offline; tests
-  with a fake `fs.Fs` (no Google calls, per `homedrive-test-mocks`).
+- **D2: `GuardFs` + bounded timeouts.** `EIO` within seconds when Drive is
+  unreachable (no offline mode, section 8.4); tests with a fake `fs.Fs` (no
+  Google calls, per `homedrive-test-mocks`).
 - **D3: session unit, suspend/resume.** `homedrive-desktop.service` per 9.1,
   `.desktop` fallback, measured logout and suspend/resume behaviour on this host.
 - **D4: conflicts.** Journal fingerprints, `newer_wins` with `.old.<N>` in
@@ -572,28 +560,32 @@ Numbered `D0`–`D5` to avoid colliding with the Dropbox proposal (#137, phases
 Rough size: D1–D5 about 2,000–2,500 lines including tests, five PRs. D0 alone is
 one small PR.
 
-## 12. Questions for the maintainer
+## 12. Decisions and open questions
+
+Answered by the maintainer on 2026-11-15:
+
+- **Binary shape (was Q2):** (b), single executable with two modes (section 7).
+- **Size budgets (was Q3):** no size limit; must run on a Raspberry Pi 3B+
+  alongside other workloads (#149).
+- **Touch (was Q4):** LRU by open/read/write is enough.
+- **Default cap (was Q9, part):** 25% of the cache filesystem (256 GiB here).
+- **Offline (was Q10):** none; a desktop is always online, `EIO` for uncached
+  content when Drive is unreachable (section 8.4).
+- **Which host made the `.old.1` copies (was Q11):** the NAS agent, a newer_wins
+  false positive tracked in #146; desktop mode does not cause it.
+- **Alerting:** homedrive only publishes over MQTT; home-automation does any
+  alerting.
+
+Still open:
 
 1. **Go/no-go and depth:** O0 only (unit + docs), O1 (D0–D5), or O1 plus the
-   upstream rclone patch (O2)? "Build nothing yet" is also an answer.
-2. **Binary shape:** (a) dual executables or (b) one executable with two modes?
-   The study leans (a); both are measured in section 7.
-3. **Size budgets:** accept per-binary budgets (NAS 26/24 MB, desktop 30 MB) with
-   a 1 MB delta check, replacing the single 25 MB guard?
-4. **Touch:** is LRU by open/read/write enough, or must `touch` refresh the LRU
-   position (needs the upstream patch)?
-5. **Pinning guarantee:** is "pinned set must fit in 80% of the cap, best-effort
+   upstream rclone patch (O2)?
+2. **Pinning guarantee:** is "pinned set must fit in 80% of the cap, best-effort
    re-warm" acceptable for a first version, or is a hard keep-set required (O2)?
-6. **This host:** does desktop mode **replace** the NAS-mode agent on this
+3. **This host:** does desktop mode **replace** the NAS-mode agent on this
    desktop, or run **beside** it? If beside: mount the whole Drive, or exclude
    `Brain` (already synced to `~/gdrive`)?
-7. **rclone.conf:** a separate `rclone.conf` for desktop mode, or wait for #86?
-8. **Conflict side:** in desktop mode both versions end up on Drive (section
+4. **rclone.conf:** a separate `rclone.conf` for desktop mode, or wait for #86?
+5. **Conflict side:** in desktop mode both versions end up on Drive (section
    8.5). Is that the intended reading of `newer_wins` here?
-9. **Mount point and defaults:** `~/GoogleDrive`, 10 GiB cap, 5 GiB min free?
-10. **Offline metadata operations:** is "`mkdir`/rename/delete fail fast while
-    offline" acceptable, or must they be queued and replayed (a larger design)?
-11. **Which host syncs the Drive root?** Some homedrive instance created `.old.1`
-    copies of every new file in a top-level Drive folder within seconds (3.4). If
-    it is meant to sync the whole Drive, desktop mode must not mount the same
-    tree on another host without a plan for the two fighting.
+6. **Mount point and min free space:** `~/GoogleDrive` and 5 GiB?
