@@ -20,7 +20,7 @@ atomic PR per phase.
 4. **Tests are not optional.** Each phase ships with the test scenarios
    listed in `homedrive/PLAN.md`. Refuse to mark a phase done if tests are missing.
 5. **No regressions on invariants:**
-   - Binary size < 25 MB stripped.
+   - Runs on a Raspberry Pi 3B+ alongside other workloads (no binary size limit).
    - Exactly one rclone backend registered (`drive`) — only enforced once rclone is in `go.mod`.
    - No `panic` outside `main`.
    - No `fmt.Println` — structured `slog` only.
@@ -69,7 +69,7 @@ Refuse to proceed (or ask before proceeding) if:
 - `go test -race -coverprofile=coverage.out ./homedrive/...` — required
   before declaring a phase done.
 - `grep -rn '"github.com/rclone/rclone/backend/' homedrive/ --include='*.go' | grep -v _test.go | grep -v rclone/backend/drive` — must print nothing (only `drive` may be explicitly imported; `crypt` is a transitive dependency of `drive` itself, so a raw `go tool nm` binary symbol count is not a reliable check).
-- `du -h <binary>` — must be < 25 MB.
+- `du -h <binary>` — reported in the PR, no limit.
 
 ## Reporting back
 

@@ -5,7 +5,8 @@ description: Rules for importing rclone packages and calling rclone from Go in h
 
 # Importing rclone in homedrive
 
-Goal: keep the binary < 25 MB by registering only the Drive backend, and
+Goal: keep the build lean (it must run on a Raspberry Pi 3B+ alongside other
+workloads) by registering only the Drive backend, and
 keep all rclone calls behind a stable wrapper interface.
 
 ## Allow-list
@@ -24,7 +25,7 @@ import (
 
 Adding **any** other rclone package requires:
 1. User approval.
-2. Verification that the binary stays < 25 MB stripped on `linux/arm64`.
+2. The measured `linux/arm64` stripped binary size before and after.
 3. A note in PLAN.md §10 documenting why and the size impact.
 
 ## Wrapper pattern
@@ -116,8 +117,8 @@ Dry-run also disables store writes so re-runs replay the same plan.
 ## Verification (mandatory after every build)
 
 ```bash
-# Binary size
-test "$(stat -c%s homedrive)" -lt 26214400  # < 25 MB
+# Binary size (reported, no limit)
+du -h homedrive
 
 # Only "drive" may be explicitly imported anywhere in source. crypt is a
 # transitive dependency of drive itself, so a raw go tool nm binary symbol

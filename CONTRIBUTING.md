@@ -23,7 +23,7 @@ contributions too.
    ```bash
    GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
      -o homedrive-bin ./homedrive/cmd/homedrive
-   du -h homedrive-bin                                # < 25 MB
+   du -h homedrive-bin                                # reported, no limit
    go tool nm homedrive-bin | grep -c rclone/backend  # = 1
    ```
 7. Update `PLAN.md` §14 to tick the phase complete.
@@ -52,7 +52,7 @@ See `.claude/skills/homedrive-test-mocks/SKILL.md`.
 Reject PRs that:
 - Combine multiple phases.
 - Skip tests for any scenario listed in `PLAN.md` §16.3.
-- Push the binary over 25 MB.
+- Would not run on a Raspberry Pi 3B+ alongside other workloads (memory, CPU).
 - Add rclone backends beyond `drive`.
 - Use `fmt.Println` or unstructured logging.
 - Add MQTT subscriptions in v0.1 (publish-only).

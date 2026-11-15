@@ -17,7 +17,7 @@ Key design points:
 - Push: fsnotify watches → debouncer → job queue → rclone Drive backend.
 - Pull: Drive Changes API every 30s + hourly bisync safety net.
 - Conflict policy: **newer wins**, loser kept as `.old.<N>`.
-- Single binary, minimal rclone import (only `backend/drive` — binary must be < 25 MB).
+- Single binary, minimal rclone import (only `backend/drive`). No binary size limit, but it must run on a Raspberry Pi 3B+ alongside other workloads (see "Target hardware").
 - MQTT publisher for Home Assistant integration (publish-only in v0.1).
 - HTTP control endpoint on `127.0.0.1:6090`.
 
@@ -41,7 +41,7 @@ orb run -m dev -- go test -race ./homedrive/internal/watcher/...
 
 CI invariants to verify before any PR:
 ```bash
-# Binary size < 25 MB
+# Build for the Pi (size is reported, not gated; mention notable growth in the PR)
 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
   -o homedrive-bin ./homedrive/cmd/homedrive
 du -h homedrive-bin
@@ -52,6 +52,21 @@ du -h homedrive-bin
 grep -rn '"github.com/rclone/rclone/backend/' homedrive/ --include='*.go' \
   | grep -v '_test.go' | grep -v 'rclone/backend/drive'  # must print nothing
 ```
+
+## Target hardware
+
+There is **no binary size limit**. The binding constraint is that homedrive
+must run on a **Raspberry Pi 3B+** (4x Cortex-A53, 1 GB RAM, SD card or USB
+disk) **alongside other workloads** sharing that board (e.g. a home-automation
+daemon, an MQTT broker, other sync clients). In practice:
+
+- Keep resident memory modest and bounded: no unbounded in-memory queues,
+  caches or full-tree listings held longer than needed.
+- Keep idle CPU near zero; batch and debounce work, avoid busy polling.
+- Avoid needless disk writes (SD card wear); prefer append-only logs and
+  batched store transactions.
+- A change that noticeably raises memory, CPU or binary size should say so in
+  the PR, with the measured figure on arm64.
 
 ## Go workspace integration
 
@@ -111,11 +126,11 @@ Use `homedrive-implementer` agent (`.claude/agents/homedrive-implementer.md`) fo
 2. Branch `phase-N-<short-title>`.
 3. Read the relevant skills.
 4. Implement with tests; run `orb run -m dev -- go test -race ./homedrive/...`.
-5. Verify binary size and rclone backend count.
+5. Verify the rclone backend count and note the arm64 binary size.
 6. Tick the phase in `homedrive/PLAN.md` §14.
 7. Open PR, link issue, paste test output.
 
-PRs that combine phases, skip required test scenarios from `homedrive/PLAN.md` §16.3, exceed 25 MB binary, add rclone backends beyond `drive`, use unstructured logging, or add MQTT subscriptions in v0.1 are rejected.
+PRs that combine phases, skip required test scenarios from `homedrive/PLAN.md` §16.3, would not run on a Raspberry Pi 3B+ alongside other workloads, add rclone backends beyond `drive`, use unstructured logging, or add MQTT subscriptions in v0.1 are rejected.
 
 ## Release workflow (tagging)
 

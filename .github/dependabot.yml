@@ -9,9 +9,8 @@ updates:
       # Patch/minor bumps are low-risk and grouped into one PR so they can
       # auto-merge together (see dependabot-auto-merge.yml). Major bumps are
       # excluded: each lands as its own PR and is never auto-merged. CI still
-      # gates every merge on the <25 MB binary-size and single-rclone-backend
-      # checks, so a size/backend-breaking minor bump fails CI, not silently
-      # merges.
+      # gates every merge on the single-rclone-backend check, so a
+      # backend-breaking minor bump fails CI, not silently merges.
       go-minor-patch:
         update-types:
           - "minor"
