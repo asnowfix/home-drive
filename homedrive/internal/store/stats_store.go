@@ -2,10 +2,15 @@ package store
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 
 	bolt "go.etcd.io/bbolt"
 )
+
+// ErrStatsBucketMissing is returned when the stats or meta bucket does not
+// exist (a journal not opened through OpenJournal).
+var ErrStatsBucketMissing = errors.New("store: stats bucket missing")
 
 // bucketStats holds the 5-minute statistics buckets written by
 // internal/stats. Key: YYYYMMDDHHMM (UTC bucket start); value: compact
@@ -25,22 +30,25 @@ func (j *Journal) SaveStats(puts map[string][]byte, deleteBefore string, meta ma
 		sb := tx.Bucket(bucketStats)
 		mb := tx.Bucket(bucketMeta)
 		if sb == nil || mb == nil {
-			return fmt.Errorf("store: stats bucket missing")
+			return ErrStatsBucketMissing
 		}
 		for k, v := range puts {
 			if err := sb.Put([]byte(k), v); err != nil {
-				return err
+				return fmt.Errorf("store: put stats bucket %q: %w", k, err)
 			}
 		}
 		for k, v := range meta {
 			if err := mb.Put([]byte(k), []byte(v)); err != nil {
-				return err
+				return fmt.Errorf("store: put stats meta %q: %w", k, err)
 			}
 		}
 		if deleteBefore == "" {
 			return nil
 		}
-		return deleteStatsBefore(sb, []byte(deleteBefore))
+		if err := deleteStatsBefore(sb, []byte(deleteBefore)); err != nil {
+			return fmt.Errorf("store: prune stats before %q: %w", deleteBefore, err)
+		}
+		return nil
 	})
 }
 
@@ -62,13 +70,13 @@ func (j *Journal) LoadStats() (buckets map[string][]byte, meta map[string]string
 	err = j.db.View(func(tx *bolt.Tx) error {
 		sb, mb := tx.Bucket(bucketStats), tx.Bucket(bucketMeta)
 		if sb == nil || mb == nil {
-			return nil
+			return ErrStatsBucketMissing
 		}
 		if err := sb.ForEach(func(k, v []byte) error {
 			buckets[string(k)] = append([]byte(nil), v...)
 			return nil
 		}); err != nil {
-			return err
+			return fmt.Errorf("store: read stats buckets: %w", err)
 		}
 		c := mb.Cursor()
 		prefix := []byte(StatsMetaPrefix)

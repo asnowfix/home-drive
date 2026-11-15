@@ -55,6 +55,7 @@ type Snapshot struct {
 type Tracker struct {
 	cfg Config
 
+	flushMu   sync.Mutex // serialises Flush; never held with mu across I/O
 	mu        sync.Mutex
 	buckets   map[time.Time]*bucket
 	dirty     map[time.Time]struct{}

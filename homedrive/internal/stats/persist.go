@@ -19,17 +19,41 @@ const (
 )
 
 // Flush writes every dirty bucket and the meta values in one Bolt
-// transaction and prunes buckets older than Retention. On failure the
-// dirty state is kept so the next Flush retries; the error is returned
-// (callers log it with op=stats_flush).
+// transaction and prunes buckets older than Retention. The state is
+// snapshotted under t.mu but the (fsync-bound) save runs outside it, so
+// Record is never blocked by disk I/O. On failure the dirty state is
+// restored so the next Flush retries; the error is returned (callers log
+// it with op=stats_flush).
 func (t *Tracker) Flush() error {
 	if t == nil || t.cfg.Store == nil {
 		return nil
 	}
+	t.flushMu.Lock()
+	defer t.flushMu.Unlock()
+
+	puts, starts, meta, cutoff, err := t.prepareFlush()
+	if err != nil {
+		return err
+	}
+	if err := t.cfg.Store.SaveStats(puts, bucketKey(cutoff), meta); err != nil {
+		t.mu.Lock()
+		for _, st := range starts {
+			t.dirty[st] = struct{}{}
+		}
+		t.metaDirty = t.metaDirty || meta != nil
+		t.mu.Unlock()
+		return fmt.Errorf("stats: save: %w", err)
+	}
+	return nil
+}
+
+// prepareFlush prunes, then takes the dirty set (clearing it) and renders
+// the rows to write. Restoring on a failed save is the caller's job.
+func (t *Tracker) prepareFlush() (puts map[string][]byte, starts []time.Time, meta map[string]string, cutoff time.Time, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	cutoff := bucketStart(t.cfg.Now()).Add(-Retention)
+	cutoff = bucketStart(t.cfg.Now()).Add(-Retention)
 	for start := range t.buckets {
 		if start.Before(cutoff) {
 			delete(t.buckets, start)
@@ -37,28 +61,23 @@ func (t *Tracker) Flush() error {
 		}
 	}
 
-	puts := make(map[string][]byte, len(t.dirty))
+	puts = make(map[string][]byte, len(t.dirty))
 	for start := range t.dirty {
-		data, err := json.Marshal(t.buckets[start])
-		if err != nil {
-			return fmt.Errorf("stats: marshal bucket: %w", err)
+		data, merr := json.Marshal(t.buckets[start])
+		if merr != nil {
+			return nil, nil, nil, cutoff, fmt.Errorf("stats: marshal bucket: %w", merr)
 		}
 		puts[bucketKey(start)] = data
+		starts = append(starts, start)
 	}
-	var meta map[string]string
 	if t.metaDirty {
-		var err error
 		if meta, err = t.encodeMeta(); err != nil {
-			return err
+			return nil, nil, nil, cutoff, err
 		}
-	}
-
-	if err := t.cfg.Store.SaveStats(puts, bucketKey(cutoff), meta); err != nil {
-		return fmt.Errorf("stats: save: %w", err)
 	}
 	t.dirty = make(map[time.Time]struct{})
 	t.metaDirty = false
-	return nil
+	return puts, starts, meta, cutoff, nil
 }
 
 // encodeMeta renders the non-bucket state. Callers hold t.mu.
