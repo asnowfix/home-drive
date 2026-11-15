@@ -80,7 +80,7 @@ func (b *Bisync) sameContent(path string, remote RemoteObject) bool {
 	if err != nil {
 		return false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := md5.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return false
