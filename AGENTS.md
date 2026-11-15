@@ -170,7 +170,8 @@ pitfalls: `homedrive/docs/live-testing.md`.
 
 `homedrive/docs/legal/privacy-policy.md` and `terms-of-service.md` are the
 source of truth for the pages published on the maintainer's GitHub Pages
-site (repo `asnowfix/asnowfix.github.io`, under `home-drive/legal/*.html`).
+site (repo `asnowfix/asnowfix.github.io`, served at
+`https://github.asnowfix.fr/home-drive/legal/*.html`).
 Google's OAuth consent screen (Branding page) links to the published copies.
 
 Any change to `homedrive/docs/legal/` that is merged to `main` **MUST** be

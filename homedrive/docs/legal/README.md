@@ -1,7 +1,7 @@
 # Legal documents and Google OAuth branding: research notes
 
 > **Published copies.** `privacy-policy.md` and `terms-of-service.md` are
-> published as HTML at <https://asnowfix.github.io/home-drive/legal/>
+> published as HTML at <https://github.asnowfix.fr/home-drive/legal/>
 > (repo `asnowfix/asnowfix.github.io`), and Google's OAuth consent screen
 > links there. Any merged change to this directory must be mirrored to that
 > repo with a matching PR. See "Legal documents" in the repo's agent
@@ -262,10 +262,15 @@ maintainer publishes the maintainer's client.
 
 ## What could not be established
 
-- **Whether Google Cloud Console accepts `asnowfix.github.io` as an authorized
-  domain.** The top private domain analysis above points that way, but no Google
-  page says so for a shared-suffix host. Test it in the Console and in Search
-  Console.
+- ~~Whether Google Cloud Console accepts `asnowfix.github.io` as an authorized
+  domain.~~ **Tested 2026-11-15: rejected.** The Branding page refused
+  `https://asnowfix.github.io/home-drive/` with "The website of your home page
+  URL ... is not registered to you." Resolved by serving the site on a domain the
+  maintainer owns: `github.asnowfix.fr` (CNAME to `asnowfix.github.io`, set as
+  the Pages custom domain) with `asnowfix.fr` verified as a Search Console
+  Domain property. Branding URLs: `https://github.asnowfix.fr/home-drive/`,
+  `.../legal/privacy-policy.html`, `.../legal/terms-of-service.html`; authorized
+  domain `asnowfix.fr`.
 - **Whether a `github.com` homepage is rejected by the Console.** Google's docs
   state the homepage must be on a verified domain you own. They do not mention
   GitHub. The conclusion that it fails is by that rule, not by a documented
