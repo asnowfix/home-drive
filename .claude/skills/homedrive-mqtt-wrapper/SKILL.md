@@ -72,6 +72,20 @@ All entities share a `device` block:
 }
 ```
 
+## Status document
+
+One retained JSON document (QoS 1) on `homedrive/<host>/<user>/status`,
+`"schema":"2.0"`, built from `internal/stats` and published by
+`mqtt.StatePublisher` every `publish_interval` (default 30s; the document
+always carries `publish_interval_s` > 0). All timestamps are UTC `Z`,
+second precision; absent values are `null`. The contract lives in
+`homedrive/docs/design/status-v2.md`; changing a field means updating it
+(additive = minor bump, rename/remove/retype = major). The old per-field
+subtopics (`last_push`, `queue/*`, ...) are gone and must not be revived.
+
+`Config.ReconnectMax` defaults to and is clamped at 2 min
+(`mqtt.MaxReconnectCap`): paho's own default is 10 min.
+
 ## Event payloads
 
 Topic: `homedrive/<host>/<user>/events/<type>` (QoS 1, retain false).
@@ -80,7 +94,8 @@ Allowed types: `push.success`, `push.failure`, `pull.success`,
 `pull.failure`, `conflict.detected`, `conflict.resolved`, `dir_rename`,
 `quota.warning`, `quota.exhausted`, `oauth.refresh_failed`.
 
-JSON payload format includes always: `ts` (ISO8601 UTC), `type`. Other
+JSON payload format includes always: `ts` (RFC3339 UTC with `Z`, never a local offset), `type`.
+Also emitted today: `conflict.pruned` and the slash-separated `events/bisync/started|completed`. Other
 fields are type-specific. See PLAN.md §9.2.
 
 ## Reserved future namespaces
