@@ -132,12 +132,15 @@ func TestSyncer_DirRename(t *testing.T) {
 
 	runSyncer(t, s, events, dirRenames, func() {})
 
-	moves := remote.getMoveCalls()
+	if n := len(remote.getMoveCalls()); n != 0 {
+		t.Errorf("expected no MoveFile calls (MoveFile cannot move a directory), got %d", n)
+	}
+	moves := remote.getMoveDirCalls()
 	if len(moves) != 1 {
-		t.Fatalf("expected exactly 1 MoveFile call, got %d", len(moves))
+		t.Fatalf("expected exactly 1 MoveDir call, got %d", len(moves))
 	}
 	if moves[0][0] != "old_dir" || moves[0][1] != "new_dir" {
-		t.Errorf("expected MoveFile(old_dir, new_dir), got MoveFile(%s, %s)",
+		t.Errorf("expected MoveDir(old_dir, new_dir), got MoveDir(%s, %s)",
 			moves[0][0], moves[0][1])
 	}
 
@@ -157,6 +160,34 @@ func TestSyncer_DirRename(t *testing.T) {
 	}
 	if len(remote.getDeleteCalls()) != 0 {
 		t.Error("expected no DeleteFile calls for dir rename")
+	}
+}
+
+// TestSyncer_DirRename_RemoteFailure checks a failed remote directory move
+// leaves the store untouched (no prefix rewrite for a move that did not
+// happen) and reports push.failure, after the configured retries.
+func TestSyncer_DirRename_RemoteFailure(t *testing.T) {
+	remote := newMockRemoteFS()
+	remote.moveDirErr = func(string) error { return fmt.Errorf("boom") }
+	store := newMockStore()
+	pub := newMockPublisher()
+
+	s := New(DefaultConfig(), remote, store, newMockAuditLogger(), pub,
+		newDiscardLogger(), WithSleepFunc(noSleep))
+
+	dirRenames := make(chan DirRename, 1)
+	dirRenames <- DirRename{From: "old_dir", To: "new_dir", At: time.Now()}
+	runSyncer(t, s, make(chan Event), dirRenames, func() {})
+
+	if got, want := len(remote.getMoveDirCalls()), DefaultConfig().Retry.MaxAttempts; got != want {
+		t.Errorf("MoveDir attempts = %d, want %d", got, want)
+	}
+	if n := len(store.getRewriteCalls()); n != 0 {
+		t.Errorf("RewritePrefix calls = %d, want 0 after a failed move", n)
+	}
+	pubEvents := pub.getEvents()
+	if len(pubEvents) != 1 || pubEvents[0].Topic != "homedrive/test/events/push.failure" {
+		t.Errorf("published events = %+v, want one push.failure", pubEvents)
 	}
 }
 
@@ -287,8 +318,8 @@ func TestSyncer_DryRun(t *testing.T) {
 	if len(remote.getDeleteCalls()) != 0 {
 		t.Error("expected no DeleteFile calls in dry-run")
 	}
-	if len(remote.getMoveCalls()) != 0 {
-		t.Error("expected no MoveFile calls in dry-run")
+	if len(remote.getMoveCalls()) != 0 || len(remote.getMoveDirCalls()) != 0 {
+		t.Error("expected no MoveFile/MoveDir calls in dry-run")
 	}
 
 	// No store writes.

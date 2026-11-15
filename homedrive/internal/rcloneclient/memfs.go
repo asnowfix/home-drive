@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -167,6 +168,41 @@ func (m *MemFS) MoveFile(_ context.Context, src, dst string) error {
 	obj.Path = dst
 	m.files[dst] = obj
 	delete(m.files, src)
+	return nil
+}
+
+// MoveDir renames every file under the src directory to the matching path
+// under dst in one step. MemFS has no directory objects, so a directory
+// exists when at least one file lives under it. A missing source reports
+// ErrNotFound; any destination collision reports ErrAlreadyExists and
+// moves nothing.
+func (m *MemFS) MoveDir(_ context.Context, src, dst string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	srcPrefix := src + "/"
+	dstPrefix := dst + "/"
+	var moving []string
+	for p := range m.files {
+		if strings.HasPrefix(p, srcPrefix) {
+			moving = append(moving, p)
+		}
+	}
+	if len(moving) == 0 {
+		return fmt.Errorf("move dir %q: %w", src, ErrNotFound)
+	}
+	for _, p := range moving {
+		to := dstPrefix + strings.TrimPrefix(p, srcPrefix)
+		if _, exists := m.files[to]; exists {
+			return fmt.Errorf("move dir to %q: %w", dst, ErrAlreadyExists)
+		}
+	}
+	for _, p := range moving {
+		obj := m.files[p]
+		obj.Path = dstPrefix + strings.TrimPrefix(p, srcPrefix)
+		m.files[obj.Path] = obj
+		delete(m.files, p)
+	}
 	return nil
 }
 

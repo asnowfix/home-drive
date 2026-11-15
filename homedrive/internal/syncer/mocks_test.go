@@ -45,11 +45,14 @@ type mockRemoteFS struct {
 	// error hooks for push tests
 	copyErr func(path string) error
 	delErr  func(path string) error
+	// moveDirErr, if set, is consulted by MoveDir.
+	moveDirErr func(src string) error
 
 	// call recorders
 	downloadedFiles []downloadCall
 	copiedFiles     []copyCall
 	movedFiles      []moveCall
+	movedDirs       []moveCall
 	deletedFiles    []string
 }
 
@@ -127,6 +130,22 @@ func (m *mockRemoteFS) MoveFile(_ context.Context, src, dst string) error {
 		obj.Path = dst
 		m.files[dst] = obj
 		delete(m.files, src)
+	}
+	return nil
+}
+
+// MoveDir records the call and, like rclone, fails when moveDirErr says so.
+// MoveFile on a directory is not modelled here: the production RcloneFS
+// rejects it with fs.ErrorIsDir (issue #136), so pushing a directory rename
+// through MoveFile must never be attempted.
+func (m *mockRemoteFS) MoveDir(_ context.Context, src, dst string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.movedDirs = append(m.movedDirs, moveCall{Src: src, Dst: dst})
+	if m.moveDirErr != nil {
+		if err := m.moveDirErr(src); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -264,6 +283,17 @@ func (m *mockRemoteFS) getMoveCalls() [][2]string {
 	defer m.mu.Unlock()
 	out := make([][2]string, len(m.movedFiles))
 	for i, mv := range m.movedFiles {
+		out[i] = [2]string{mv.Src, mv.Dst}
+	}
+	return out
+}
+
+// getMoveDirCalls returns [src, dst] pairs from all MoveDir calls (for push tests).
+func (m *mockRemoteFS) getMoveDirCalls() [][2]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([][2]string, len(m.movedDirs))
+	for i, mv := range m.movedDirs {
 		out[i] = [2]string{mv.Src, mv.Dst}
 	}
 	return out
