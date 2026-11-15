@@ -32,7 +32,7 @@ type Config struct {
 	HADiscoveryPrefix string        // homeassistant
 	QoS               byte          // 0|1|2 (default 1)
 	KeepAlive         time.Duration // default 30s
-	ReconnectMax      time.Duration // default 5m
+	ReconnectMax      time.Duration // default and ceiling 2m (MaxReconnectCap)
 	Username          string        // optional
 	Password          string        // optional
 }
@@ -57,6 +57,10 @@ type Publisher interface {
 	// the maximum time to wait for in-flight messages.
 	Close(ctx context.Context) error
 }
+
+// MaxReconnectCap is both the default and the upper bound of
+// Config.ReconnectMax.
+const MaxReconnectCap = 2 * time.Minute
 
 // Client implements Publisher by wrapping a paho MQTT client with LWT,
 // auto-reconnect, and structured logging.
@@ -250,8 +254,11 @@ func withDefaults(cfg Config) Config {
 	if cfg.KeepAlive == 0 {
 		cfg.KeepAlive = 30 * time.Second
 	}
-	if cfg.ReconnectMax == 0 {
-		cfg.ReconnectMax = 5 * time.Minute
+	// paho's own default is 10 min (options.go, v1.5.1), which would push a
+	// consumer close to its 15 min offline threshold after a broker
+	// restart; cap the gap at MaxReconnectCap (issue #141).
+	if cfg.ReconnectMax <= 0 || cfg.ReconnectMax > MaxReconnectCap {
+		cfg.ReconnectMax = MaxReconnectCap
 	}
 	if cfg.BaseTopic == "" {
 		cfg.BaseTopic = "homedrive"

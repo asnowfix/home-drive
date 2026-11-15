@@ -49,7 +49,9 @@ type Snapshot struct {
 	Local        *homedrive.LocalInfo
 }
 
-// Tracker accumulates outcomes. All methods are safe for concurrent use.
+// Tracker accumulates outcomes. All methods are safe for concurrent use,
+// and the Record* methods are no-ops on a nil *Tracker (so a nil tracker
+// stored in a syncer.Recorder interface is harmless).
 type Tracker struct {
 	cfg Config
 
@@ -104,6 +106,9 @@ func (t *Tracker) bucketFor(ts time.Time) *bucket {
 
 // RecordStart counts one process start in the current bucket.
 func (t *Tracker) RecordStart() {
+	if t == nil {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.bucketFor(t.cfg.Now()).Starts++
@@ -111,6 +116,9 @@ func (t *Tracker) RecordStart() {
 
 // Record implements syncer.Recorder.
 func (t *Tracker) Record(o syncer.Outcome) {
+	if t == nil {
+		return
+	}
 	if errors.Is(o.Err, context.Canceled) || errors.Is(o.Err, syncer.ErrDanglingShortcut) {
 		return
 	}
@@ -123,7 +131,14 @@ func (t *Tracker) Record(o syncer.Outcome) {
 		t.recordBisync(o, at)
 	}
 	if o.Err != nil {
-		t.bucketFor(at).Errors++
+		b := t.bucketFor(at)
+		b.Errors++
+		switch errDirection(o) {
+		case syncer.DirUp:
+			b.ErrorsUp++
+		case syncer.DirDown:
+			b.ErrorsDn++
+		}
 		if o.Op == syncer.OutConflict {
 			t.bucketFor(at).Conflicts++
 		}
@@ -192,6 +207,9 @@ func (t *Tracker) RecordStartupError(err error) {
 
 // RecordLocalTree implements syncer.Recorder.
 func (t *Tracker) RecordLocalTree(files int, bytes int64, at time.Time) {
+	if t == nil {
+		return
+	}
 	at = t.at(at)
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -203,6 +221,9 @@ func (t *Tracker) RecordLocalTree(files int, bytes int64, at time.Time) {
 
 // Snapshot returns the windowed counts and last-* values as of now.
 func (t *Tracker) Snapshot(now time.Time) Snapshot {
+	if t == nil {
+		return Snapshot{Counts: sumWindows(nil, now)}
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	s := Snapshot{
@@ -244,4 +265,16 @@ func truncate(s string) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// errDirection classifies a failed outcome as push side (DirUp), pull
+// side (DirDown) or neither ("").
+func errDirection(o syncer.Outcome) string {
+	switch o.Op {
+	case syncer.OutPush, syncer.OutPushDelete, syncer.OutDirRename, syncer.OutBisyncPush:
+		return syncer.DirUp
+	case syncer.OutPull, syncer.OutPullDelete, syncer.OutBisyncPull, syncer.OutPoll:
+		return syncer.DirDown
+	}
+	return ""
 }

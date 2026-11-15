@@ -40,7 +40,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.log.Info("shutdown signal received, draining in-flight work")
 
 	a.shutdownHTTP(httpErrCh)
-	wg.Wait() // watcher, pump, push syncer, pull loop, bisync all drained
+	wg.Wait()      // watcher, pump, push syncer, pull loop, bisync all drained
+	a.flushStats() // final flush: nothing else writes counters now
 	a.shutdownMQTT()
 	a.shutdownStore()
 
@@ -75,6 +76,12 @@ func (a *Agent) startComponents(ctx context.Context, wg *sync.WaitGroup) {
 	go func() {
 		defer wg.Done()
 		a.runPullLoop(ctx)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.runStatusLoop(ctx)
 	}()
 
 	wg.Add(1)
@@ -201,7 +208,6 @@ func (a *Agent) pollOnceGuarded(ctx context.Context) {
 		a.log.Error("poll error", "error", err)
 		return
 	}
-	a.lastPullUnixNano.Store(time.Now().UnixNano())
 }
 
 // pumpWatcherEvents converts watcher.WatchEvent values into the syncer
@@ -238,7 +244,6 @@ func (a *Agent) dispatchWatchEvent(ctx context.Context, we watcher.WatchEvent) {
 		}
 		select {
 		case a.pushRenames <- dr:
-			a.lastPushUnixNano.Store(time.Now().UnixNano())
 		case <-ctx.Done():
 		}
 		return
@@ -247,7 +252,6 @@ func (a *Agent) dispatchWatchEvent(ctx context.Context, we watcher.WatchEvent) {
 		ev := syncer.Event{Path: relToRoot(a.cfg.LocalRoot, we.Event.Path), Op: toSyncerOp(we.Event.Op), At: we.Event.At}
 		select {
 		case a.pushEvents <- ev:
-			a.lastPushUnixNano.Store(time.Now().UnixNano())
 		case <-ctx.Done():
 		}
 	}

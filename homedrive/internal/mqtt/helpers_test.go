@@ -82,12 +82,23 @@ func TestWithDefaults(t *testing.T) {
 		want Config
 	}{
 		{
+			name: "ReconnectMaxCapped",
+			in:   Config{ReconnectMax: 10 * time.Minute},
+			want: Config{
+				QoS:            1,
+				KeepAlive:      30 * time.Second,
+				ReconnectMax:   2 * time.Minute,
+				BaseTopic:      "homedrive",
+				ClientIDPrefix: "homedrive",
+			},
+		},
+		{
 			name: "AllZeros",
 			in:   Config{},
 			want: Config{
 				QoS:            1,
 				KeepAlive:      30 * time.Second,
-				ReconnectMax:   5 * time.Minute,
+				ReconnectMax:   2 * time.Minute,
 				BaseTopic:      "homedrive",
 				ClientIDPrefix: "homedrive",
 			},

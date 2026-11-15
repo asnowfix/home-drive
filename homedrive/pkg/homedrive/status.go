@@ -65,9 +65,14 @@ type Counts struct {
 	FilesDown int64 `json:"files_down"`
 	BytesUp   int64 `json:"bytes_up"`
 	BytesDown int64 `json:"bytes_down"`
-	Errors    int64 `json:"errors"`
-	Conflicts int64 `json:"conflicts"`
-	Starts    int64 `json:"starts"`
+	Errors    int64 `json:"errors"` // all final failures, including the two below
+	// ErrorsUp / ErrorsDown split Errors by direction (push side vs pull
+	// side, poll failures counting as down). Ops with no direction (a
+	// failed bisync pass, conflict resolution) count in Errors only.
+	ErrorsUp   int64 `json:"errors_up"`
+	ErrorsDown int64 `json:"errors_down"`
+	Conflicts  int64 `json:"conflicts"`
+	Starts     int64 `json:"starts"`
 }
 
 // LastError is the last final failure (after retries), persisted across

@@ -37,6 +37,8 @@ type bucket struct {
 	BytesUp   int64 `json:"bu,omitempty"`
 	BytesDown int64 `json:"bd,omitempty"`
 	Errors    int64 `json:"er,omitempty"`
+	ErrorsUp  int64 `json:"eu,omitempty"`
+	ErrorsDn  int64 `json:"ed,omitempty"`
 	Conflicts int64 `json:"cf,omitempty"`
 	Starts    int64 `json:"st,omitempty"`
 }
@@ -48,6 +50,8 @@ func (b *bucket) addTo(c *homedrive.Counts) {
 	c.BytesUp += b.BytesUp
 	c.BytesDown += b.BytesDown
 	c.Errors += b.Errors
+	c.ErrorsUp += b.ErrorsUp
+	c.ErrorsDown += b.ErrorsDn
 	c.Conflicts += b.Conflicts
 	c.Starts += b.Starts
 }

@@ -23,7 +23,7 @@ const (
 // dirty state is kept so the next Flush retries; the error is returned
 // (callers log it with op=stats_flush).
 func (t *Tracker) Flush() error {
-	if t.cfg.Store == nil {
+	if t == nil || t.cfg.Store == nil {
 		return nil
 	}
 	t.mu.Lock()
@@ -100,7 +100,7 @@ func putJSON[T any](meta map[string]string, key string, p *T) error {
 // are skipped (a corrupt stats row must never stop the agent). Call once
 // at startup, before RecordStart.
 func (t *Tracker) Load() error {
-	if t.cfg.Store == nil {
+	if t == nil || t.cfg.Store == nil {
 		return nil
 	}
 	rows, meta, err := t.cfg.Store.LoadStats()
