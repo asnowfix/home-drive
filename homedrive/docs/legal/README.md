@@ -1,5 +1,12 @@
 # Legal documents and Google OAuth branding: research notes
 
+> **Published copies.** `privacy-policy.md` and `terms-of-service.md` are
+> published as HTML at <https://asnowfix.github.io/home-drive/legal/>
+> (repo `asnowfix/asnowfix.github.io`), and Google's OAuth consent screen
+> links there. Any merged change to this directory must be mirrored to that
+> repo with a matching PR. See "Legal documents" in the repo's agent
+> instructions.
+
 ## What was asked
 
 What Google requires for an External OAuth app that requests the restricted

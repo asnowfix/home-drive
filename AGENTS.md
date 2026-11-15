@@ -166,6 +166,21 @@ the user says so; brief dispatched agents the same way. To exercise a build
 against real Drive, run a separate, isolated instance. Procedure and
 pitfalls: `homedrive/docs/live-testing.md`.
 
+## Legal documents (published copy must stay in sync)
+
+`homedrive/docs/legal/privacy-policy.md` and `terms-of-service.md` are the
+source of truth for the pages published on the maintainer's GitHub Pages
+site (repo `asnowfix/asnowfix.github.io`, under `home-drive/legal/*.html`).
+Google's OAuth consent screen (Branding page) links to the published copies.
+
+Any change to `homedrive/docs/legal/` that is merged to `main` **MUST** be
+mirrored to the published HTML in the same session: open a PR on
+`asnowfix/asnowfix.github.io` with the matching edit (including the
+effective date) and link the two PRs to each other. Never merge one without
+the other, and never edit the published copy alone. If the change also
+alters what homedrive does with Google user data (scopes, destinations,
+storage), re-check the app home page `home-drive/index.html` too.
+
 ## Knowledge capture (must survive a change of machine)
 
 Anything learned that the next session needs must be written to one of
