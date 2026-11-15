@@ -1062,6 +1062,17 @@ two independent copies of one algorithm that could silently drift apart.
 - Issue: `[homedrive] Filter parity: honor excludes on pull path + rclone
   migration doc` (#54).
 
+### Phase 17 — Status v2: status topic, persistent counters (issue #141) [DONE]
+- [x] `internal/stats` tracker: 5-minute buckets in Bolt, 1h/24h/7d windows,
+  flushed per tick and on shutdown, restart-surviving.
+- [x] `syncer.Recorder` hook: one `Outcome` per final result (after retries) in
+  push, pull and bisync.
+- [x] `internal/mqtt` status publisher wired in `cmd/homedrive` (it never was).
+- [x] Fixes: zeroed `bytes_*_24h`/`conflicts_24h` in `/status`, push event
+  `ts` now UTC `Z`, `last_push`/`last_pull` advance on success only.
+- [x] MQTT reconnect gap capped at 2 min (paho defaults to 10 min).
+- [ ] #142: auth observer, non-fatal MQTT connect, `state:"error"` on failed start.
+
 ---
 
 ## 15. Packaging
@@ -1439,14 +1450,3 @@ Document all of the above in `docs/dev-environment.md`.
 | Binary size regression | CI gate < 25 MB and exactly 1 rclone backend |
 | macOS dev → Linux runtime divergence | OrbStack VM for tests, GOOS=linux gopls, build tags |
 | Future cross-device sync collision | Reserved MQTT namespaces documented in §8.3 |
-
-### Phase 17 — Status v2: status topic, persistent counters (issue #141) [DONE]
-- [x] `internal/stats` tracker: 5-minute buckets in Bolt, 1h/24h/7d windows,
-  flushed per tick and on shutdown, restart-surviving.
-- [x] `syncer.Recorder` hook: one `Outcome` per final result (after retries) in
-  push, pull and bisync.
-- [x] `internal/mqtt` status publisher wired in `cmd/homedrive` (it never was).
-- [x] Fixes: zeroed `bytes_*_24h`/`conflicts_24h` in `/status`, push event
-  `ts` now UTC `Z`, `last_push`/`last_pull` advance on success only.
-- [x] MQTT reconnect gap capped at 2 min (paho defaults to 10 min).
-- [ ] #142: auth observer, non-fatal MQTT connect, `state:"error"` on failed start.

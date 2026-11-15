@@ -216,10 +216,10 @@ alerting, **N** = nice to have and safe to cut.
 | `last_pull` | timestamp/null | Last **successful** pull-side local mutation (download, delete). Persisted. | P |
 | `last_activity` | timestamp/null | `max(last_push, last_pull)` | P |
 | `last_poll` | timestamp/null | Last successful Changes API poll, even with 0 changes. This is today's HTTP `last_pull`. | A |
-| `counts` | object | Keys `"1h"`, `"24h"`, `"7d"`. Each holds `files_up, files_down, bytes_up, bytes_down, errors, errors_up, errors_down, conflicts, starts` (ints; bytes in B). `errors` is the total of final failures; `errors_up` (push side: upload, delete, dir rename) and `errors_down` (pull side: download, delete, Changes API poll) split it by direction, so steady push failures are not masked by interleaved pull successes. A failure with no direction (a failed bisync pass, conflict resolution) counts in `errors` only. Windows are aligned to 5-min buckets, so they are accurate to 5 min. | P (files, bytes), A (errors, starts) |
+| `counts` | object | Keys `"1h"`, `"24h"`, `"7d"`. Each holds `files_up, files_down, bytes_up, bytes_down, errors, errors_up, errors_down, conflicts, starts` (ints; bytes in B). `errors` is the total of final failures; `errors_up` (push side: upload, delete, dir rename) and `errors_down` (pull side: download, delete, Changes API poll) split it by direction, so steady push failures are not masked by interleaved pull successes. A failure with no direction (a failed bisync pass, conflict resolution) counts in `errors` only. All three windows are always present. Conflict handling (pull or bisync) counts in `conflicts` only: a file transferred while resolving one is not added to `files_*` / `bytes_*`. Windows are aligned to 5-min buckets, so they are accurate to 5 min. | P (files, bytes), A (errors, starts) |
 | `last_error` | object/null | `{ts, op, message}`: the last final failure, persisted. `op` is one of the `Outcome.Op` values or `startup`. `message` is truncated to 256 bytes. | A |
 | `auth` | object | `{state, last_refresh_ok, last_refresh_error:{ts,message}\|null}`. `state` is one of `ok`, `unknown`, `client_missing`, `client_misconfigured`, `token_invalid`, `refresh_failing`. | A |
-| `bisync` | object/null | `{at, result:"ok"\|"error", duration_ms, files_changed, error}` for the last completed pass. Persisted. | P; A (safety net) |
+| `bisync` | object/null | `{at, result:"ok"\|"error", duration_ms, files_changed, error}` for the last completed pass. `error` is the one exception to "absent is null": the key is omitted when `result` is `ok`. Persisted. | P; A (safety net) |
 | `local` | object/null | `{files, bytes, scanned_at}` from the last bisync `walkLocal`. Excludes apply. Not real-time. | N |
 | `quota_used_pct` | number/null | Drive usage, cached and refreshed at most every 5 min. **Never** a live call per tick. Today's HTTP path makes a live call (agent_control.go:122-128). | P |
 
@@ -303,6 +303,9 @@ non-retained, and missed whenever the consumer is down.
    - `counts["1h"].errors >= 5` and `last_error.ts > last_activity` (failing with no success
      since);
    - `state == running` and `now - last_poll > 15 min` (the pull loop is stuck or backed off).
+
+   During an outage `errors_down` counts every failed poll (about 120 per hour at the default
+   30s interval), so thresholds on it must allow for that.
 
    Warn when `bisync.result == "error"` or `now - bisync.at > 3h`, given the default 1h
    interval.

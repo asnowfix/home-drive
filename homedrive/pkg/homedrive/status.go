@@ -47,7 +47,8 @@ func (t Timestamp) MarshalJSON() ([]byte, error) {
 	return json.Marshal(t.UTC().Format(time.RFC3339))
 }
 
-// UnmarshalJSON implements json.Unmarshaler.
+// UnmarshalJSON implements json.Unmarshaler. It rejects JSON null: use
+// *Timestamp for nullable fields (encoding/json then leaves it nil).
 func (t *Timestamp) UnmarshalJSON(b []byte) error {
 	var s string
 	if err := json.Unmarshal(b, &s); err != nil {
@@ -61,7 +62,8 @@ func (t *Timestamp) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Counts is one window of activity counters (bytes in B).
+// Counts is one window of activity counters (bytes in B). Conflict
+// handling counts in Conflicts only, never in Files*/Bytes*.
 type Counts struct {
 	FilesUp   int64 `json:"files_up"`
 	FilesDown int64 `json:"files_down"`
@@ -85,7 +87,9 @@ type LastError struct {
 	Message string    `json:"message"`
 }
 
-// BisyncInfo describes the last completed bisync pass, persisted.
+// BisyncInfo describes the last completed bisync pass, persisted. Error
+// is omitted (not null) when Result is "ok": the one exception to the
+// contract's "absent is null".
 type BisyncInfo struct {
 	At           Timestamp `json:"at"`
 	Result       string    `json:"result"` // "ok" | "error"
@@ -120,6 +124,7 @@ type StatusV2 struct {
 	LastActivity *Timestamp `json:"last_activity"`
 	LastPoll     *Timestamp `json:"last_poll"`
 
+	// Counts always holds all three windows (1h, 24h, 7d).
 	Counts       map[string]Counts `json:"counts"`
 	LastError    *LastError        `json:"last_error"`
 	Bisync       *BisyncInfo       `json:"bisync"`

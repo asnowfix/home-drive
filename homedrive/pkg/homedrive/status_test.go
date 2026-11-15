@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"testing"
 	"time"
@@ -84,12 +85,20 @@ func TestStatusV2_ExampleFixtures(t *testing.T) {
 					t.Errorf("%s = %q, want UTC Z", k, s)
 				}
 			}
-			// Re-marshalling must reproduce the same timestamps.
-			out, _ := json.Marshal(doc)
+			// Round trip: re-marshalling the parsed document must reproduce
+			// the fixture key by key, so a renamed or retagged JSON field
+			// fails here. "auth" is #142 and not yet part of StatusV2.
+			out, err := json.Marshal(doc)
+			if err != nil {
+				t.Fatal(err)
+			}
 			var back map[string]any
-			_ = json.Unmarshal(out, &back)
-			if back["ts"] != raw["ts"] {
-				t.Errorf("ts round trip = %v, want %v", back["ts"], raw["ts"])
+			if err := json.Unmarshal(out, &back); err != nil {
+				t.Fatal(err)
+			}
+			delete(raw, "auth")
+			if !reflect.DeepEqual(back, raw) {
+				t.Errorf("round trip differs:\n got  %v\n want %v", back, raw)
 			}
 		})
 	}
