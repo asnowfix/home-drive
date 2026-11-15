@@ -7,7 +7,6 @@ package syncer
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -63,6 +62,10 @@ type Bisync struct {
 	// pulling it back down. Only touched within execute(), which holds
 	// b.mu exclusively, so it needs no separate lock.
 	pendingPrune map[string]struct{}
+
+	// snapshot is the set of paths seen on either side by the current
+	// pass's diff(), so conflict-loser names avoid existing files.
+	snapshot map[string]struct{}
 }
 
 // markForPrune records base as needing a retention-GC pass once the
@@ -285,14 +288,14 @@ func (b *Bisync) syncDiffs(
 			break
 		}
 		switch d.Kind {
-		case DiffLocalOnly:
+		case DiffLocalOnly, DiffLocalChanged:
 			if err := b.syncLocalToRemote(ctx, d); err != nil {
 				b.log.Error("bisync push failed",
 					"path", d.Path, "error", err)
 				continue
 			}
 			pushed++
-		case DiffRemoteOnly:
+		case DiffRemoteOnly, DiffRemoteChanged:
 			if err := b.syncRemoteToLocal(ctx, d); err != nil {
 				if errors.Is(err, ErrDanglingShortcut) {
 					b.log.Warn("bisync skipping dangling Drive shortcut",
@@ -318,43 +321,6 @@ func (b *Bisync) syncDiffs(
 // ---------------------------------------------------------------------------
 // Audit and MQTT helpers
 // ---------------------------------------------------------------------------
-
-// writeAudit appends a JSONL line to the audit log.
-func (b *Bisync) writeAudit(
-	start time.Time,
-	pushed, pulled, conflicts int,
-	syncErr error,
-) {
-	if b.audit == nil {
-		return
-	}
-
-	elapsed := b.clock.Now().Sub(start)
-	entry := BisyncAuditEntry{
-		Timestamp:    start.UTC().Format(time.RFC3339),
-		Op:           "bisync",
-		Duration:     fmt.Sprintf("%d", elapsed.Milliseconds()),
-		FilesChanged: pushed + pulled,
-		FilesPushed:  pushed,
-		FilesPulled:  pulled,
-		Conflicts:    conflicts,
-		DryRun:       b.cfg.DryRun,
-	}
-	if syncErr != nil {
-		entry.Error = syncErr.Error()
-	}
-
-	data, err := json.Marshal(entry)
-	if err != nil {
-		b.log.Error("failed to marshal audit entry", "error", err)
-		return
-	}
-
-	line := string(data) + "\n"
-	if _, err := b.audit.Write([]byte(line)); err != nil {
-		b.log.Error("failed to write audit entry", "error", err)
-	}
-}
 
 // publishEvent publishes a bisync MQTT event. No-op if MQTT is nil.
 func (b *Bisync) publishEvent(event BisyncEvent) {

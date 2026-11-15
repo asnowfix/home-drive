@@ -166,6 +166,12 @@ const (
 	DiffRemoteOnly
 	// DiffConflict means both sides differ from journal expectations.
 	DiffConflict
+	// DiffLocalChanged means the file exists on both sides and only the
+	// local copy changed since the last sync: a plain push, no .old.<N>.
+	DiffLocalChanged
+	// DiffRemoteChanged means the file exists on both sides and only the
+	// remote copy changed since the last sync: a plain pull, no .old.<N>.
+	DiffRemoteChanged
 )
 
 // FileDiff represents one file that differs between local and remote.
