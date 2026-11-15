@@ -41,7 +41,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	a.shutdownHTTP(httpErrCh)
 	wg.Wait()      // watcher, pump, push syncer, pull loop, bisync all drained
-	a.flushStats() // final flush: nothing else writes counters now
+	a.finalPublish() // nothing else writes counters now; last retained doc is exact
 	a.shutdownMQTT()
 	a.shutdownStore()
 

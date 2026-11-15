@@ -17,6 +17,10 @@ import (
 // status document: never a live Drive call per publish tick.
 const quotaRefresh = 5 * time.Minute
 
+// quotaTimeout bounds the Drive quota call so a hung About request cannot
+// delay the flush and publish that follow it (the liveness signal).
+const quotaTimeout = 15 * time.Second
+
 // quotaCache holds the last quota percentage seen by the status loop.
 type quotaCache struct {
 	mu  sync.Mutex
@@ -51,8 +55,15 @@ func (a *Agent) refreshQuota(ctx context.Context, now time.Time) {
 	if a.rfs == nil || !a.quota.due(now) {
 		return
 	}
-	q, err := a.rfs.Quota(ctx)
-	if err != nil || q.Total <= 0 {
+	qctx, cancel := context.WithTimeout(ctx, quotaTimeout)
+	defer cancel()
+	q, err := a.rfs.Quota(qctx)
+	if err != nil {
+		a.log.Warn("quota refresh failed", "op", "quota_refresh", "error", err)
+		a.quota.set(now, nil)
+		return
+	}
+	if q.Total <= 0 {
 		a.quota.set(now, nil)
 		return
 	}
@@ -106,6 +117,15 @@ func (a *Agent) statusInterval() time.Duration {
 		return d
 	}
 	return mqtt.DefaultPublishInterval
+}
+
+// finalPublish flushes and publishes one last time on clean shutdown so the
+// last retained document reflects the final counters.
+func (a *Agent) finalPublish() {
+	a.flushStats()
+	if a.statePub != nil {
+		a.statePub.PublishOnce()
+	}
 }
 
 // flushStats persists the tracker, logging failures (kept in memory and

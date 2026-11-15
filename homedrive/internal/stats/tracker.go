@@ -199,12 +199,6 @@ func (t *Tracker) setLastError(o syncer.Outcome, at time.Time) {
 	t.metaDirty = true
 }
 
-// RecordStartupError records a failure that happened before the sync
-// paths were running (op "startup").
-func (t *Tracker) RecordStartupError(err error) {
-	t.Record(syncer.Outcome{Op: "startup", Err: err})
-}
-
 // RecordLocalTree implements syncer.Recorder.
 func (t *Tracker) RecordLocalTree(files int, bytes int64, at time.Time) {
 	if t == nil {

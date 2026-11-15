@@ -13,6 +13,8 @@ const StatusSchema = "2.0"
 
 // Status document "state" values. Consumers must treat unknown values as
 // "degraded: show raw", so new values may be added in a minor release.
+// StateStarting and StateError are contract values only: nothing emits
+// them until #142 (startup reorder).
 const (
 	StateStarting = "starting"
 	StateRunning  = "running"

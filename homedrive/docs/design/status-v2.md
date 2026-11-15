@@ -193,7 +193,7 @@ OAuth rejection exits before MQTT even connects.
 ### 5.3 Topic and payload: status schema 2.0
 
 Topic `homedrive/<host>/<user>/status`, QoS 1, **retain=true**, every `mqtt.publish_interval`
-(default 30s). It is also published immediately on start, on error exit, and on `/reload`.
+(default 30s). It is also published immediately on start, on clean shutdown (after the final stats flush), and on `/reload`; the error-exit publish is #142.
 `<host>` is `os.Hostname()` and `<user>` is the OS user of the unit (agent.go:237-247). Neither
 can be configured *(observed 2026-11-15)*.
 
