@@ -576,16 +576,31 @@ Answered by the maintainer on 2026-11-15:
 - **Alerting:** homedrive only publishes over MQTT; home-automation does any
   alerting.
 
+Answered on 2026-11-15 (second round):
+
+- **Pinning guarantee:** best effort is acceptable (O1: pinned set within 80% of
+  the cap, re-warmed after changes). The upstream keep-set patch (O2) is not
+  needed: neither pinning nor eviction requires it.
+- **This host:** the homedrive agent running here is a **development instance**,
+  kept for testing parts of the system; the production agent is on the NAS, in
+  NAS mode. Desktop mode is the main agent on this host and runs beside the
+  development instance.
+- **rclone.conf:** the token store must be private to homedrive, hidden, and
+  never shared between two processes. Desktop mode (the main agent on a
+  desktop) owns the default location; a development instance must be pointed at
+  a different, explicitly configured path. Startup refuses to share one file
+  with another running instance. Longer term, #86 (homedrive holds the OAuth
+  token itself, no `rclone.conf`) is the intended end state.
+- **Conflict side:** both versions on Drive is accepted, **provided it cannot
+  create conflict chains**: never conflict on a file that is itself a
+  `.old.<N>` copy, apply the suffix collapse of #66, take `.old.<N>` numbers
+  that are free on both the cache and Drive (as fixed for NAS mode in #151),
+  and only declare a conflict when both sides changed since the journal
+  fingerprint.
+- **Defaults:** mount point `~/GoogleDrive`, 5 GiB minimum free space.
+
 Still open:
 
-1. **Go/no-go and depth:** O0 only (unit + docs), O1 (D0–D5), or O1 plus the
-   upstream rclone patch (O2)?
-2. **Pinning guarantee:** is "pinned set must fit in 80% of the cap, best-effort
-   re-warm" acceptable for a first version, or is a hard keep-set required (O2)?
-3. **This host:** does desktop mode **replace** the NAS-mode agent on this
-   desktop, or run **beside** it? If beside: mount the whole Drive, or exclude
-   `Brain` (already synced to `~/gdrive`)?
-4. **rclone.conf:** a separate `rclone.conf` for desktop mode, or wait for #86?
-5. **Conflict side:** in desktop mode both versions end up on Drive (section
-   8.5). Is that the intended reading of `newer_wins` here?
-6. **Mount point and min free space:** `~/GoogleDrive` and 5 GiB?
+1. **Go/no-go and depth:** O0 (a supported plain `rclone mount` unit and docs,
+   no homedrive code, keeping rclone's limits) or O1 (desktop mode in homedrive,
+   phases D0–D5)?
