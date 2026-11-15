@@ -570,7 +570,7 @@ import (
 
 Verify after build:
 - `grep -rn '"github.com/rclone/rclone/backend/' homedrive/ --include='*.go' | grep -v _test.go | grep -v rclone/backend/drive` → must print nothing (only `drive` may be explicitly imported; `crypt` is a transitive dependency of `drive` itself, so a raw `go tool nm` binary symbol count over-counts and is not used).
-- `du -h homedrive` → target < 25 MB stripped.
+- `du -h homedrive` → reported, no limit (superseded 2026-11-15: the original < 25 MB target was replaced by "must run on a Raspberry Pi 3B+ alongside other workloads").
 - Use `-trimpath -ldflags="-s -w"` in Makefile and CI.
 
 API to wrap inside `internal/rcloneclient/`:
@@ -1417,7 +1417,7 @@ Document all of the above in `docs/dev-environment.md`.
 | System clock drift | Use mtimes returned by each side; never use local clock as reference |
 | Google native files (Docs/Sheets/Slides) | Skip + warn (out of scope v0.1) |
 | Symlinks | Document behavior: follow files, skip directory symlinks |
-| Binary size regression | CI gate < 25 MB and exactly 1 rclone backend |
+| Footprint regression | Must run on a Raspberry Pi 3B+ alongside other workloads; CI reports binary size and gates on exactly 1 rclone backend |
 | macOS dev → Linux runtime divergence | OrbStack VM for tests, GOOS=linux gopls, build tags |
 | Future cross-device sync collision | Reserved MQTT namespaces documented in §8.3 |
 

@@ -28,7 +28,7 @@ Key properties:
 - **Home Assistant integration**: MQTT auto-discovery publishes sync
   status, queue depth, quota usage, and conflict events.
 - **Minimal binary**: only the `drive` rclone backend is linked,
-  keeping the stripped binary under 25 MB.
+  keeping the build lean enough for a Raspberry Pi 3B+.
 
 ## Features
 
@@ -477,7 +477,7 @@ orb run -m dev -- go test -race ./homedrive/internal/watcher/...
 
 Every PR must pass these checks:
 
-- Binary size < 25 MB (stripped)
+- Runs on a Raspberry Pi 3B+ alongside other workloads (binary size reported, not gated)
 - Exactly 1 rclone backend registered (`drive`)
 - Test coverage > 70%
 - No `panic` outside `main`

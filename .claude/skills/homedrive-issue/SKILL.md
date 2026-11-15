@@ -74,7 +74,7 @@ Phase N from `homedrive/PLAN.md` §14: <title>.
 - All acceptance criteria checked.
 - Tests pass on `linux/amd64` and `linux/arm64` (CI green).
 - Coverage > 70% for the package.
-- Binary < 25 MB stripped.
+- Runs on a Raspberry Pi 3B+ alongside other workloads; arm64 binary size noted.
 - Exactly 1 rclone backend in the binary.
 - `homedrive/PLAN.md` updated to mark phase complete.
 ```

@@ -48,11 +48,14 @@ jobs:
         run: |
           go build -trimpath -ldflags="-s -w" -o homedrive-bin ./homedrive/cmd/homedrive
 
-      - name: Verify binary size (< 25 MB)
+      - name: Report binary size
+        # Informational only: there is no size limit. The constraint is that
+        # homedrive must run on a Raspberry Pi 3B+ alongside other workloads
+        # (see AGENTS.md "Target hardware").
         run: |
           size=$(stat -c%s homedrive-bin)
           echo "Binary size: $size bytes ($(numfmt --to=iec $size))"
-          test "$size" -lt 26214400
+          echo "### homedrive linux/${{ matrix.goarch }}: $(numfmt --to=iec $size)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify rclone backend imports
         run: |
