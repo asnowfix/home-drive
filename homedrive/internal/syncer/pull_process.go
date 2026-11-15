@@ -53,12 +53,17 @@ func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) 
 			"op", "pull_delete",
 			"error", err,
 		)
-		return fmt.Errorf("deleting local file %s: %w", ch.Path, err)
+		err = fmt.Errorf("deleting local file %s: %w", ch.Path, err)
+		p.recordOutcome(Outcome{Op: OutPullDelete, Path: ch.Path, Err: err})
+		return err
 	}
 
 	if err := p.store.Delete(ctx, ch.Path); err != nil {
-		return fmt.Errorf("removing journal entry for %s: %w", ch.Path, err)
+		err = fmt.Errorf("removing journal entry for %s: %w", ch.Path, err)
+		p.recordOutcome(Outcome{Op: OutPullDelete, Path: ch.Path, Err: err})
+		return err
 	}
+	p.recordOutcome(Outcome{Op: OutPullDelete, Path: ch.Path})
 
 	p.logAudit(AuditEntry{
 		Timestamp:  start,
@@ -170,7 +175,9 @@ func (p *Puller) handleConflict(
 			DurationMs: p.clock().Sub(start).Milliseconds(),
 			Error:      err.Error(),
 		})
-		return fmt.Errorf("resolving conflict for %s: %w", ch.Path, err)
+		err = fmt.Errorf("resolving conflict for %s: %w", ch.Path, err)
+		p.recordOutcome(Outcome{Op: OutConflict, Path: ch.Path, Err: err})
+		return err
 	}
 
 	if !p.cfg.DryRun {
@@ -191,6 +198,9 @@ func (p *Puller) handleConflict(
 		DryRun:     p.cfg.DryRun,
 	})
 
+	if !p.cfg.DryRun {
+		p.recordOutcome(Outcome{Op: OutConflict, Path: ch.Path})
+	}
 	p.emitPullSuccess(ch.Path, ch.Object.Size)
 	return nil
 }
@@ -259,7 +269,9 @@ func (p *Puller) downloadFile(ctx context.Context, ch Change, start time.Time) e
 			DurationMs: p.clock().Sub(start).Milliseconds(),
 			Error:      err.Error(),
 		})
-		return fmt.Errorf("downloading %s: %w", ch.Path, err)
+		err = fmt.Errorf("downloading %s: %w", ch.Path, err)
+		p.recordOutcome(Outcome{Op: OutPull, Dir: DirDown, Path: ch.Path, Err: err})
+		return err
 	}
 
 	return p.recordDownload(ctx, ch, localPath, start)
@@ -295,7 +307,9 @@ func (p *Puller) recordDownload(
 ) error {
 	info, err := os.Stat(localPath)
 	if err != nil {
-		return fmt.Errorf("stat after download %s: %w", ch.Path, err)
+		err = fmt.Errorf("stat after download %s: %w", ch.Path, err)
+		p.recordOutcome(Outcome{Op: OutPull, Dir: DirDown, Path: ch.Path, Err: err})
+		return err
 	}
 
 	now := p.clock()
@@ -309,8 +323,11 @@ func (p *Puller) recordDownload(
 		LastOrigin:   "remote",
 	}
 	if err := p.store.Put(ctx, entry); err != nil {
-		return fmt.Errorf("updating journal for %s: %w", ch.Path, err)
+		err = fmt.Errorf("updating journal for %s: %w", ch.Path, err)
+		p.recordOutcome(Outcome{Op: OutPull, Dir: DirDown, Path: ch.Path, Err: err})
+		return err
 	}
+	p.recordOutcome(Outcome{Op: OutPull, Dir: DirDown, Path: ch.Path, Bytes: ch.Object.Size})
 
 	elapsed := p.clock().Sub(start)
 	p.logAudit(AuditEntry{

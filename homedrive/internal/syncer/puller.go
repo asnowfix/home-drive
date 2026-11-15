@@ -54,6 +54,11 @@ type PullerConfig struct {
 
 	// DryRun when true logs intended actions without writing.
 	DryRun bool
+
+	// Recorder, if non-nil, receives one Outcome per final pull result
+	// (download, delete, conflict, Changes API poll). Dry-run records
+	// nothing.
+	Recorder Recorder
 }
 
 // Puller polls the Drive Changes API and downloads remote modifications.
@@ -214,10 +219,12 @@ func (p *Puller) poll(ctx context.Context) error {
 			"op", "pull",
 			"error", err,
 		)
+		p.recordOutcome(Outcome{Op: OutPoll, Err: err})
 		return fmt.Errorf("getting page token: %w", err)
 	}
 
 	changes, err := p.fetchChanges(ctx, token)
+	p.recordOutcome(Outcome{Op: OutPoll, Err: err})
 	if err != nil {
 		return err
 	}
@@ -370,6 +377,13 @@ func (p *Puller) persistToken(ctx context.Context, token string) error {
 		return fmt.Errorf("persisting page token: %w", err)
 	}
 	return nil
+}
+
+// recordOutcome forwards o to the configured Recorder (if any),
+// stamping At with the puller clock.
+func (p *Puller) recordOutcome(o Outcome) {
+	o.At = p.clock()
+	emitOutcome(p.cfg.Recorder, o)
 }
 
 // emitPullSuccess publishes a pull.success MQTT event.

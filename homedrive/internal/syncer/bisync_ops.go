@@ -23,6 +23,8 @@ func (b *Bisync) diff(ctx context.Context) ([]FileDiff, error) {
 		return nil, fmt.Errorf("walk local: %w", err)
 	}
 
+	b.recordLocalTree(localFiles)
+
 	remoteFiles, err := b.listRemote(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list remote: %w", err)
@@ -42,6 +44,19 @@ func (b *Bisync) diff(ctx context.Context) ([]FileDiff, error) {
 	diffs = b.diffLocalAgainstRemote(localMap, remoteMap, diffs)
 	diffs = b.diffRemoteAgainstLocal(localMap, remoteMap, diffs)
 	return diffs, nil
+}
+
+// recordLocalTree reports the local file count and total size seen by the
+// walk, for the status "local" object.
+func (b *Bisync) recordLocalTree(files []LocalFileInfo) {
+	if b.rec == nil {
+		return
+	}
+	var total int64
+	for _, f := range files {
+		total += f.Size
+	}
+	b.rec.RecordLocalTree(len(files), total, b.clock.Now())
 }
 
 // diffLocalAgainstRemote finds files that exist locally but not
