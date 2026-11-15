@@ -58,7 +58,10 @@ func TestBisync_NestedFiles_Recursive(t *testing.T) {
 		{
 			name: "both sides, remote newer: remote wins, local kept as .old",
 			setup: func(t *testing.T, root string, r *rcloneclient.MemFS, j *mockJournal) {
-				createLocalFile(t, root, "a/f.txt", t0)
+				// Local edited too (mtime moved off the journal's), so this
+				// is a real conflict; a local file still at the journal's
+				// mtime would be a plain pull (issue #146).
+				createLocalFile(t, root, "a/f.txt", t0.Add(30*time.Minute))
 				r.Seed("a/f.txt", t1, "m2")
 				j.Seed(JournalEntry{Path: "a/f.txt", LocalMtime: t0, RemoteMtime: t0, RemoteMD5: "m1"})
 			},
