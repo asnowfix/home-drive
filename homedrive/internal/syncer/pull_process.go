@@ -14,13 +14,46 @@ func (p *Puller) processChange(ctx context.Context, ch Change) error {
 	start := p.clock()
 
 	if ch.Deleted {
-		return p.processDelete(ctx, ch, start)
+		return p.recordUnrecordedDelete(ch, p.processDelete(ctx, ch, start))
 	}
 	if ch.Object != nil && ch.Object.IsDir {
 		p.skipDirChange(ch)
 		return nil
 	}
-	return p.processFileChange(ctx, ch, start)
+	return p.recordUnrecorded(ch, p.processFileChange(ctx, ch, start))
+}
+
+// recordedErr marks an error whose final outcome a leaf already recorded,
+// so processChange does not record it a second time.
+type recordedErr struct{ error }
+
+func (e recordedErr) Unwrap() error { return e.error }
+
+// recordUnrecordedDelete is recordUnrecorded for the delete path.
+func (p *Puller) recordUnrecordedDelete(ch Change, err error) error {
+	var rec recordedErr
+	if err == nil || errors.As(err, &rec) {
+		return err
+	}
+	return p.recordFail(Outcome{Op: OutPullDelete, Path: ch.Path, Err: err})
+}
+
+// recordFail records a failed outcome and returns its error marked as
+// recorded.
+func (p *Puller) recordFail(o Outcome) error {
+	p.recordOutcome(o)
+	return recordedErr{o.Err}
+}
+
+// recordUnrecorded records a pull-side failure for any error a leaf did
+// not record itself (journal reads, stat, mkdir, ...), so every final
+// failure reaches errors / errors_down / last_error.
+func (p *Puller) recordUnrecorded(ch Change, err error) error {
+	var rec recordedErr
+	if err == nil || errors.As(err, &rec) {
+		return err
+	}
+	return p.recordFail(Outcome{Op: OutPull, Dir: DirDown, Path: ch.Path, Err: err})
 }
 
 // processDelete handles a remote deletion.
@@ -54,14 +87,12 @@ func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) 
 			"error", err,
 		)
 		err = fmt.Errorf("deleting local file %s: %w", ch.Path, err)
-		p.recordOutcome(Outcome{Op: OutPullDelete, Path: ch.Path, Err: err})
-		return err
+		return p.recordFail(Outcome{Op: OutPullDelete, Path: ch.Path, Err: err})
 	}
 
 	if err := p.store.Delete(ctx, ch.Path); err != nil {
 		err = fmt.Errorf("removing journal entry for %s: %w", ch.Path, err)
-		p.recordOutcome(Outcome{Op: OutPullDelete, Path: ch.Path, Err: err})
-		return err
+		return p.recordFail(Outcome{Op: OutPullDelete, Path: ch.Path, Err: err})
 	}
 	p.recordOutcome(Outcome{Op: OutPullDelete, Path: ch.Path})
 
@@ -176,14 +207,14 @@ func (p *Puller) handleConflict(
 			Error:      err.Error(),
 		})
 		err = fmt.Errorf("resolving conflict for %s: %w", ch.Path, err)
-		p.recordOutcome(Outcome{Op: OutConflict, Path: ch.Path, Err: err})
-		return err
+		return p.recordFail(Outcome{Op: OutConflict, Path: ch.Path, Err: err})
 	}
 
 	if !p.cfg.DryRun {
 		entry := p.buildConflictEntry(ch, result, localMtime)
 		if err := p.store.Put(ctx, entry); err != nil {
-			return fmt.Errorf("updating journal after conflict for %s: %w", ch.Path, err)
+			return p.recordFail(Outcome{Op: OutConflict, Path: ch.Path,
+				Err: fmt.Errorf("updating journal after conflict for %s: %w", ch.Path, err)})
 		}
 	}
 
@@ -270,8 +301,7 @@ func (p *Puller) downloadFile(ctx context.Context, ch Change, start time.Time) e
 			Error:      err.Error(),
 		})
 		err = fmt.Errorf("downloading %s: %w", ch.Path, err)
-		p.recordOutcome(Outcome{Op: OutPull, Dir: DirDown, Path: ch.Path, Err: err})
-		return err
+		return p.recordFail(Outcome{Op: OutPull, Dir: DirDown, Path: ch.Path, Err: err})
 	}
 
 	return p.recordDownload(ctx, ch, localPath, start)
@@ -308,8 +338,7 @@ func (p *Puller) recordDownload(
 	info, err := os.Stat(localPath)
 	if err != nil {
 		err = fmt.Errorf("stat after download %s: %w", ch.Path, err)
-		p.recordOutcome(Outcome{Op: OutPull, Dir: DirDown, Path: ch.Path, Err: err})
-		return err
+		return p.recordFail(Outcome{Op: OutPull, Dir: DirDown, Path: ch.Path, Err: err})
 	}
 
 	now := p.clock()
@@ -324,8 +353,7 @@ func (p *Puller) recordDownload(
 	}
 	if err := p.store.Put(ctx, entry); err != nil {
 		err = fmt.Errorf("updating journal for %s: %w", ch.Path, err)
-		p.recordOutcome(Outcome{Op: OutPull, Dir: DirDown, Path: ch.Path, Err: err})
-		return err
+		return p.recordFail(Outcome{Op: OutPull, Dir: DirDown, Path: ch.Path, Err: err})
 	}
 	p.recordOutcome(Outcome{Op: OutPull, Dir: DirDown, Path: ch.Path, Bytes: ch.Object.Size})
 

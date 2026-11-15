@@ -224,8 +224,8 @@ func (p *Puller) poll(ctx context.Context) error {
 	}
 
 	changes, err := p.fetchChanges(ctx, token)
-	p.recordOutcome(Outcome{Op: OutPoll, Err: err})
 	if err != nil {
+		p.recordOutcome(Outcome{Op: OutPoll, Err: err})
 		return err
 	}
 
@@ -234,8 +234,12 @@ func (p *Puller) poll(ctx context.Context) error {
 			"op", "pull",
 			"page_token", token,
 		)
-		// Still persist the next token even if no changes.
-		return p.persistToken(ctx, changes.NextPageToken)
+		// Still persist the next token even if no changes. The poll only
+		// counts as successful once the token is persisted, else the same
+		// page would replay forever while last_poll kept advancing.
+		err := p.persistToken(ctx, changes.NextPageToken)
+		p.recordOutcome(Outcome{Op: OutPoll, Err: err})
+		return err
 	}
 
 	p.log.Info("processing remote changes",
@@ -258,8 +262,10 @@ func (p *Puller) poll(ctx context.Context) error {
 
 	// Persist the new token only after processing all changes.
 	if err := p.persistToken(ctx, changes.NextPageToken); err != nil {
+		p.recordOutcome(Outcome{Op: OutPoll, Err: err})
 		return err
 	}
+	p.recordOutcome(Outcome{Op: OutPoll})
 
 	return lastErr
 }

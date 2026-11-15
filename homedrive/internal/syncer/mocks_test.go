@@ -313,6 +313,9 @@ type mockStore struct {
 	// matcher controls NextOldN's suffix parsing/formatting. Defaults to
 	// the default ".old.%d" format when nil (see newMockStore).
 	matcher *oldsuffix.Matcher
+
+	// error injection hooks (nil = succeed)
+	getErr, putErr, setTokenErr error
 }
 
 func newMockStore() *mockStore {
@@ -333,6 +336,9 @@ func (s *mockStore) GetPageToken(_ context.Context) (string, error) {
 func (s *mockStore) SetPageToken(_ context.Context, token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.setTokenErr != nil {
+		return s.setTokenErr
+	}
 	s.pageToken = token
 	return nil
 }
@@ -340,6 +346,9 @@ func (s *mockStore) SetPageToken(_ context.Context, token string) error {
 func (s *mockStore) Get(_ context.Context, path string) (JournalEntry, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.getErr != nil {
+		return JournalEntry{}, false, s.getErr
+	}
 	e, ok := s.entries[path]
 	return e, ok, nil
 }
@@ -347,6 +356,9 @@ func (s *mockStore) Get(_ context.Context, path string) (JournalEntry, bool, err
 func (s *mockStore) Put(_ context.Context, entry JournalEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.putErr != nil {
+		return s.putErr
+	}
 	s.entries[entry.Path] = entry
 	return nil
 }
