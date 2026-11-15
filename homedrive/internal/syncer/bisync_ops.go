@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
+	"github.com/asnowfix/home-drive/homedrive/internal/pathfilter"
 )
 
 // ---------------------------------------------------------------------------
@@ -125,18 +126,24 @@ func (b *Bisync) walkLocal(ctx context.Context) ([]LocalFileInfo, error) {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		relPath, err := filepath.Rel(root, path)
+		if err != nil {
+			return fmt.Errorf("rel path %s: %w", path, err)
+		}
+		relPath = filepath.ToSlash(relPath)
 		if d.IsDir() {
+			if relPath != "." && pathfilter.Excluded(b.cfg.Exclude, relPath) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if pathfilter.Excluded(b.cfg.Exclude, relPath) {
 			return nil
 		}
 		info, err := d.Info()
 		if err != nil {
 			return fmt.Errorf("stat %s: %w", path, err)
 		}
-		relPath, err := filepath.Rel(root, path)
-		if err != nil {
-			return fmt.Errorf("rel path %s: %w", path, err)
-		}
-		relPath = filepath.ToSlash(relPath)
 		files = append(files, LocalFileInfo{
 			Path:    relPath,
 			Size:    info.Size(),
@@ -150,13 +157,20 @@ func (b *Bisync) walkLocal(ctx context.Context) ([]LocalFileInfo, error) {
 	return files, nil
 }
 
-// listRemote returns all files from the remote via RemoteFS.List.
+// listRemote returns all non-excluded files from the remote via
+// RemoteFS.List (recursive, unfiltered); watcher.exclude is applied here.
 func (b *Bisync) listRemote(ctx context.Context) ([]RemoteObject, error) {
 	objects, err := b.remote.List(ctx, "")
 	if err != nil {
 		return nil, fmt.Errorf("remote list: %w", err)
 	}
-	return objects, nil
+	kept := objects[:0:0]
+	for _, o := range objects {
+		if !pathfilter.Excluded(b.cfg.Exclude, o.Path) {
+			kept = append(kept, o)
+		}
+	}
+	return kept, nil
 }
 
 // ---------------------------------------------------------------------------

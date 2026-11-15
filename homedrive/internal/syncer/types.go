@@ -112,6 +112,12 @@ type BisyncConfig struct {
 	// collapses any pre-existing nested .old.<N> chains, on the first
 	// bisync pass after upgrade. See keyChainRepair in bisync.go.
 	RepairChains bool
+
+	// Exclude is the watcher.exclude doublestar pattern list
+	// (config.WatcherConfig.Exclude). Bisync applies it to both the local
+	// walk and the remote listing via pathfilter.Excluded, so it never
+	// uploads or downloads a path the watcher and the pull path skip.
+	Exclude []string
 }
 
 // ---------------------------------------------------------------------------

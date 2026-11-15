@@ -454,17 +454,22 @@ func TestMemFS_List(t *testing.T) {
 		{
 			name:      "RootDirectory",
 			dir:       "",
-			wantPaths: []string{"root.txt"},
+			wantPaths: []string{"root.txt", "dir/child.txt", "dir/sibling.txt", "dir/sub/grandchild.txt"},
 		},
 		{
 			name:      "SubDirectory",
 			dir:       "dir",
-			wantPaths: []string{"dir/child.txt", "dir/sibling.txt"},
+			wantPaths: []string{"dir/child.txt", "dir/sibling.txt", "dir/sub/grandchild.txt"},
 		},
 		{
 			name:      "NestedSubDirectory",
 			dir:       "dir/sub",
 			wantPaths: []string{"dir/sub/grandchild.txt"},
+		},
+		{
+			name:      "PrefixIsNotAParent",
+			dir:       "di",
+			wantPaths: nil,
 		},
 		{
 			name:      "EmptyDirectory",
