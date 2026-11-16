@@ -231,7 +231,6 @@ func (b *Bisync) execute(ctx context.Context) {
 		}
 	}
 
-	// Perform the diff.
 	diffs, err := b.diff(ctx)
 	if err != nil {
 		b.log.Error("bisync diff failed", "error", err)
@@ -248,7 +247,6 @@ func (b *Bisync) execute(ctx context.Context) {
 	b.logPlannedDeletions(diffs)
 	pushed, pulled, conflicts := b.syncDiffs(ctx, diffs)
 	b.runRetention(ctx)
-
 	elapsed := b.clock.Now().Sub(start)
 
 	b.log.Info("bisync completed",
