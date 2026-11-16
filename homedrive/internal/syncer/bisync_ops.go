@@ -62,11 +62,7 @@ func (b *Bisync) diffLocalAgainstRemote(
 	for path, local := range localMap {
 		remote, exists := remoteMap[path]
 		if !exists {
-			diffs = append(diffs, FileDiff{
-				Path:      path,
-				Kind:      DiffLocalOnly,
-				LocalInfo: &local,
-			})
+			diffs = append(diffs, b.localOnlyDiff(path, local))
 			continue
 		}
 		if kind, differs := b.classify(path, local, remote); differs {
@@ -90,12 +86,7 @@ func (b *Bisync) diffRemoteAgainstLocal(
 ) []FileDiff {
 	for path, remote := range remoteMap {
 		if _, exists := localMap[path]; !exists {
-			remoteCopy := remote
-			diffs = append(diffs, FileDiff{
-				Path:       path,
-				Kind:       DiffRemoteOnly,
-				RemoteInfo: &remoteCopy,
-			})
+			diffs = append(diffs, b.remoteOnlyDiff(path, remote))
 		}
 	}
 	return diffs

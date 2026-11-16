@@ -13,6 +13,7 @@ import (
 	// Test-only: a real local Fs to exercise CopyFile; not linked into the binary.
 	_ "github.com/rclone/rclone/backend/local"
 	rclonefs "github.com/rclone/rclone/fs"
+	drivev3 "google.golang.org/api/drive/v3"
 )
 
 func TestRemoteObjectFromRclone_MapsFields(t *testing.T) {
@@ -42,8 +43,9 @@ func TestRcloneFS_Stat_Cases(t *testing.T) {
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		if _, err := r.Stat(context.Background(), "missing.txt"); err == nil {
-			t.Fatal("expected an error for a missing object")
+		_, err := r.Stat(context.Background(), "missing.txt")
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Stat error = %v, want ErrNotFound (issue #152: bisync confirms deletions with it)", err)
 		}
 	})
 }
@@ -58,7 +60,7 @@ func TestRcloneFS_List(t *testing.T) {
 			fakeObject{remote: "sub/b.txt", size: 2, id: "id-b"},
 		},
 	}}
-	r := &RcloneFS{log: slog.Default(), fsObj: fsys}
+	r := &RcloneFS{log: slog.Default(), fsObj: fsys, pathCache: newIDPathCache()}
 
 	objs, err := r.List(context.Background(), "")
 	if err != nil {
@@ -70,6 +72,26 @@ func TestRcloneFS_List(t *testing.T) {
 	got := map[string]bool{objs[0].Path: true, objs[1].Path: true}
 	if !got["a.txt"] || !got["sub/b.txt"] {
 		t.Errorf("List = %+v, want a.txt and sub/b.txt", objs)
+	}
+}
+
+// TestRcloneFS_List_SeedsPathCache covers issue #152: a Removed Drive change
+// carries only a file ID, so IDs seen by bisync's List must resolve to paths
+// (files and folders), or the deletion is dropped as "unknown path".
+func TestRcloneFS_List_SeedsPathCache(t *testing.T) {
+	fsys := &fakeListingFS{tree: map[string][]rclonefs.DirEntry{
+		"":    {fakeDirectory{remote: "sub", id: "sub-id"}},
+		"sub": {fakeObject{remote: "sub/b.txt", size: 2, id: "id-b"}},
+	}}
+	r := &RcloneFS{log: slog.Default(), fsObj: fsys, pathCache: newIDPathCache()}
+	if _, err := r.List(context.Background(), ""); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for id, want := range map[string]string{"id-b": "sub/b.txt", "sub-id": "sub"} {
+		ch, ok := r.translateChange(&drivev3.Change{FileId: id, Removed: true})
+		if !ok || !ch.Deleted || ch.Path != want {
+			t.Errorf("removed %s = (%+v, %v), want deleted %q", id, ch, ok, want)
+		}
 	}
 }
 

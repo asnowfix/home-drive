@@ -1,6 +1,10 @@
 package syncer
 
-import "os"
+import (
+	"context"
+	"os"
+	"time"
+)
 
 // skipDirChange handles a remote folder create or update by ignoring it
 // (issue #105). Only files are synced: local directories come into
@@ -18,11 +22,25 @@ func (p *Puller) skipDirChange(ch Change) {
 
 // removeLocal removes localPath for a remote delete. A missing path is
 // not an error. A deleted change carries no Object, so a remote folder
-// delete arrives here too (issue #114): a directory that still holds
-// entries is left in place, since its synced children are removed by
-// their own change entries and anything else in it is unsynced local
+// delete arrives here too (issue #114).
+//
+// Drive is not known to report an entry per descendant of a deleted
+// folder, and the ID-to-path cache that resolves such entries is lost on
+// restart, so the folder entry alone must be enough (issue #152): when
+// relPath is not a regular file, every journaled descendant is removed
+// via removeSyncedDescendants. A directory that still holds entries after
+// that is left in place: whatever remains is unsynced or locally modified
 // data that must not be deleted. File removal failures stay errors.
-func (p *Puller) removeLocal(relPath, localPath string) error {
+func (p *Puller) removeLocal(
+	ctx context.Context, relPath, localPath string, start time.Time,
+) error {
+	info, statErr := os.Lstat(localPath)
+	if statErr == nil && !info.IsDir() {
+		return removeIgnoringMissing(localPath)
+	}
+	if err := p.removeSyncedDescendants(ctx, relPath, localPath, start, false); err != nil {
+		return err
+	}
 	err := os.Remove(localPath)
 	if err == nil || os.IsNotExist(err) {
 		return nil
@@ -34,6 +52,14 @@ func (p *Puller) removeLocal(relPath, localPath string) error {
 			"origin", "remote",
 			"error", err,
 		)
+		return nil
+	}
+	return err
+}
+
+func removeIgnoringMissing(localPath string) error {
+	err := os.Remove(localPath)
+	if err == nil || os.IsNotExist(err) {
 		return nil
 	}
 	return err

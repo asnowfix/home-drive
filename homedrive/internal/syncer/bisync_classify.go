@@ -24,6 +24,25 @@ func mtimeClose(a, b time.Time) bool {
 	return d <= mtimeTolerance
 }
 
+// hasBaseline reports whether a journal entry records both what the local
+// file looked like and what Drive held at the last sync. Without both,
+// nothing can say which side moved, so such an entry (nil, or a
+// conflict-loser entry) is treated as no baseline at all.
+func hasBaseline(e *JournalEntry) bool {
+	return e != nil && !e.LocalMtime.IsZero() &&
+		(e.RemoteMD5 != "" || !e.RemoteMtime.IsZero())
+}
+
+// remoteChangedSince reports whether the remote copy moved since the
+// journal entry: by MD5 when both sides have one (a touch-only mtime change
+// is not a content change), else by mtime.
+func remoteChangedSince(entry JournalEntry, remote RemoteObject) bool {
+	if remote.MD5 != "" && entry.RemoteMD5 != "" {
+		return remote.MD5 != entry.RemoteMD5
+	}
+	return !mtimeClose(remote.ModTime, entry.RemoteMtime)
+}
+
 // classify reports what to do with a file that exists on both sides.
 // differs=false means the two sides are already in sync.
 //
@@ -40,8 +59,7 @@ func (b *Bisync) classify(
 	path string, local LocalFileInfo, remote RemoteObject,
 ) (kind DiffKind, differs bool) {
 	entry, err := b.journal.Get(path)
-	if err != nil || entry == nil || entry.LocalMtime.IsZero() ||
-		(entry.RemoteMD5 == "" && entry.RemoteMtime.IsZero()) {
+	if err != nil || !hasBaseline(entry) {
 		if mtimeClose(local.ModTime, remote.ModTime) || b.sameContent(path, remote) {
 			return 0, false
 		}
@@ -49,12 +67,7 @@ func (b *Bisync) classify(
 	}
 
 	localChanged := !mtimeClose(local.ModTime, entry.LocalMtime)
-	var remoteChanged bool
-	if remote.MD5 != "" && entry.RemoteMD5 != "" {
-		remoteChanged = remote.MD5 != entry.RemoteMD5
-	} else {
-		remoteChanged = !mtimeClose(remote.ModTime, entry.RemoteMtime)
-	}
+	remoteChanged := remoteChangedSince(*entry, remote)
 
 	switch {
 	case localChanged && remoteChanged:

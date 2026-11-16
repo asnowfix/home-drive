@@ -133,6 +133,7 @@ type BisyncAuditEntry struct {
 	FilesPushed  int    `json:"files_pushed"`
 	FilesPulled  int    `json:"files_pulled"`
 	Conflicts    int    `json:"conflicts"`
+	FilesDeleted int    `json:"files_deleted,omitempty"`
 	DryRun       bool   `json:"dry_run,omitempty"`
 	Error        string `json:"error,omitempty"`
 }
@@ -172,6 +173,12 @@ const (
 	// DiffRemoteChanged means the file exists on both sides and only the
 	// remote copy changed since the last sync: a plain pull, no .old.<N>.
 	DiffRemoteChanged
+	// DiffRemoteDeleted means a journaled file, unchanged locally, is gone
+	// from Drive: delete the local copy (issue #152).
+	DiffRemoteDeleted
+	// DiffLocalDeleted means a journaled file, unchanged on Drive, is gone
+	// locally: delete the Drive copy (issue #152).
+	DiffLocalDeleted
 )
 
 // FileDiff represents one file that differs between local and remote.
@@ -180,6 +187,10 @@ type FileDiff struct {
 	Kind       DiffKind
 	LocalInfo  *LocalFileInfo // nil if DiffRemoteOnly
 	RemoteInfo *RemoteObject  // nil if DiffLocalOnly
+	// DeleteConflict marks a DiffLocalOnly or DiffRemoteOnly whose other
+	// side deleted the file: the surviving copy changed since the journal
+	// fingerprint, so it is kept and propagated, with a conflict event.
+	DeleteConflict bool
 }
 
 // LocalFileInfo holds local file metadata.

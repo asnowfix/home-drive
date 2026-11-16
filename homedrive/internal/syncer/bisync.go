@@ -66,6 +66,10 @@ type Bisync struct {
 	// snapshot is the set of paths seen on either side by the current
 	// pass's diff(), so conflict-loser names avoid existing files.
 	snapshot map[string]struct{}
+
+	// deleted counts deletions propagated by the current pass (issue
+	// #152). Reset at the start of syncDiffs; same locking as snapshot.
+	deleted int
 }
 
 // markForPrune records base as needing a retention-GC pass once the
@@ -265,6 +269,7 @@ func (b *Bisync) execute(ctx context.Context) {
 		"files_pushed", pushed,
 		"files_pulled", pulled,
 		"conflicts", conflicts,
+		"files_deleted", b.deleted,
 		"dry_run", b.cfg.DryRun,
 	)
 
@@ -273,7 +278,7 @@ func (b *Bisync) execute(ctx context.Context) {
 		Timestamp:    b.clock.Now().UTC().Format(time.RFC3339),
 		Type:         "bisync.completed",
 		DurationMs:   elapsed.Milliseconds(),
-		FilesChanged: pushed + pulled,
+		FilesChanged: pushed + pulled + b.deleted,
 		Conflicts:    conflicts,
 		DryRun:       b.cfg.DryRun,
 	})
@@ -283,11 +288,20 @@ func (b *Bisync) execute(ctx context.Context) {
 func (b *Bisync) syncDiffs(
 	ctx context.Context, diffs []FileDiff,
 ) (pushed, pulled, conflicts int) {
+	b.deleted = 0
 	for _, d := range diffs {
 		if ctx.Err() != nil {
 			break
 		}
+		if d.DeleteConflict {
+			b.reportDeleteConflict(d)
+			conflicts++
+		}
 		switch d.Kind {
+		case DiffRemoteDeleted, DiffLocalDeleted:
+			if b.syncDelete(ctx, d) {
+				b.deleted++
+			}
 		case DiffLocalOnly, DiffLocalChanged:
 			if err := b.syncLocalToRemote(ctx, d); err != nil {
 				b.log.Error("bisync push failed",
@@ -316,6 +330,25 @@ func (b *Bisync) syncDiffs(
 		}
 	}
 	return pushed, pulled, conflicts
+}
+
+// syncDelete propagates one deletion and reports whether it was applied
+// (a skipped or failed deletion is logged and leaves everything in place).
+func (b *Bisync) syncDelete(ctx context.Context, d FileDiff) bool {
+	var (
+		applied bool
+		err     error
+	)
+	if d.Kind == DiffRemoteDeleted {
+		applied, err = b.deleteLocal(ctx, d)
+	} else {
+		applied, err = b.deleteRemote(ctx, d)
+	}
+	if err != nil {
+		b.log.Error("bisync delete failed", "path", d.Path, "error", err)
+		return false
+	}
+	return applied
 }
 
 // ---------------------------------------------------------------------------

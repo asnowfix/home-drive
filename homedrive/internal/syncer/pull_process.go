@@ -43,11 +43,12 @@ func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) 
 			Origin:    "remote",
 			DryRun:    true,
 		})
-		return nil
+		return p.removeSyncedDescendants(ctx, ch.Path,
+			filepath.Join(p.cfg.LocalRoot, ch.Path), start, true)
 	}
 
 	localPath := filepath.Join(p.cfg.LocalRoot, ch.Path)
-	if err := p.removeLocal(ch.Path, localPath); err != nil {
+	if err := p.removeLocal(ctx, ch.Path, localPath, start); err != nil {
 		p.log.Error("failed to delete local file",
 			"path", ch.Path,
 			"op", "pull_delete",

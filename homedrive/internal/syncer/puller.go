@@ -52,6 +52,11 @@ type PullerConfig struct {
 	// reaches the log.
 	Auditor *Auditor
 
+	// Exclude is the watcher.exclude doublestar pattern list. A journaled
+	// descendant of a deleted Drive folder that matches it is never
+	// removed locally (issue #152), the same filter push and bisync use.
+	Exclude []string
+
 	// DryRun when true logs intended actions without writing.
 	DryRun bool
 }
