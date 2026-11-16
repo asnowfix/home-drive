@@ -185,8 +185,8 @@ const (
 type FileDiff struct {
 	Path       string
 	Kind       DiffKind
-	LocalInfo  *LocalFileInfo // nil if DiffRemoteOnly
-	RemoteInfo *RemoteObject  // nil if DiffLocalOnly
+	LocalInfo  *LocalFileInfo // nil for DiffRemoteOnly and DiffLocalDeleted
+	RemoteInfo *RemoteObject  // nil for DiffLocalOnly and DiffRemoteDeleted
 	// DeleteConflict marks a DiffLocalOnly or DiffRemoteOnly whose other
 	// side deleted the file: the surviving copy changed since the journal
 	// fingerprint, so it is kept and propagated, with a conflict event.

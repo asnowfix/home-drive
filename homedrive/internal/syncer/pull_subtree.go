@@ -7,21 +7,22 @@ package syncer
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/asnowfix/home-drive/homedrive/internal/pathfilter"
 )
 
 // removeSyncedDescendants removes every journaled, locally unchanged file
-// beneath relPath, then the empty directories left behind. Never deleted:
-// a file without a journal entry or with an incomplete baseline (not known
-// to be on Drive), an excluded path, a non-regular file, and a file whose
-// mtime moved since its journal fingerprint (delete-vs-modify: kept, with
-// a conflict event, its journal entry dropped so bisync pushes it back as
-// a new file). With dryRun it only audits what it would remove.
+// beneath relPath, then the directories that held them if they are empty.
+// Never deleted: a file without a journal entry or with an incomplete
+// baseline (not known to be on Drive), an excluded path, a non-regular file,
+// and a file whose mtime moved since its journal fingerprint
+// (delete-vs-modify: kept, with a conflict event; its journal entry is
+// dropped so that bisync pushes it back as a new file). With dryRun it only
+// audits what it would remove.
 func (p *Puller) removeSyncedDescendants(
 	ctx context.Context, relPath, localPath string, start time.Time, dryRun bool,
 ) error {
@@ -29,36 +30,43 @@ func (p *Puller) removeSyncedDescendants(
 	if err != nil {
 		return fmt.Errorf("listing journal under %s: %w", relPath, err)
 	}
+	touched := make(map[string]struct{})
 	for _, e := range entries {
 		if pathfilter.Excluded(p.cfg.Exclude, e.Path) {
 			continue
 		}
-		if err := p.removeSyncedFile(ctx, e, start, dryRun); err != nil {
+		gone, err := p.removeSyncedFile(ctx, e, start, dryRun)
+		if err != nil {
 			return err
+		}
+		if gone {
+			dir := filepath.Dir(filepath.Join(p.cfg.LocalRoot, filepath.FromSlash(e.Path)))
+			touched[dir] = struct{}{}
 		}
 	}
 	if !dryRun {
-		removeEmptyDirs(localPath)
+		p.pruneEmptyDirs(touched, localPath)
 	}
 	return nil
 }
 
 // removeSyncedFile applies the delete-or-keep decision to one journaled
-// descendant.
+// descendant. gone reports that the local file no longer exists because of
+// this call (removed, or already missing with its stale entry dropped).
 func (p *Puller) removeSyncedFile(
 	ctx context.Context, e JournalEntry, start time.Time, dryRun bool,
-) error {
+) (gone bool, err error) {
 	localPath := filepath.Join(p.cfg.LocalRoot, filepath.FromSlash(e.Path))
 	info, err := os.Lstat(localPath)
 	switch {
 	case os.IsNotExist(err):
-		return p.dropStaleEntry(ctx, e.Path, dryRun)
+		return !dryRun, p.dropStaleEntry(ctx, e.Path, dryRun)
 	case err != nil:
-		return fmt.Errorf("stat %s: %w", e.Path, err)
+		return false, fmt.Errorf("stat %s: %w", e.Path, err)
 	case !info.Mode().IsRegular() || !hasBaseline(&e):
-		return nil
+		return false, nil
 	case !mtimeClose(info.ModTime(), e.LocalMtime):
-		return p.keepModifiedDescendant(ctx, e, info.ModTime(), start, dryRun)
+		return false, p.keepModifiedDescendant(ctx, e, info.ModTime(), start, dryRun)
 	}
 
 	audit := AuditEntry{
@@ -67,19 +75,19 @@ func (p *Puller) removeSyncedFile(
 	}
 	if dryRun {
 		p.logAudit(audit)
-		return nil
+		return false, nil
 	}
 	if err := removeLocalPath(localPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("deleting local file %s: %w", e.Path, err)
+		return false, fmt.Errorf("deleting local file %s: %w", e.Path, err)
 	}
 	if err := p.store.Delete(ctx, e.Path); err != nil {
-		return fmt.Errorf("removing journal entry for %s: %w", e.Path, err)
+		return true, fmt.Errorf("removing journal entry for %s: %w", e.Path, err)
 	}
 	p.log.Info("remote folder deleted: removed synced local file",
 		"path", e.Path, "op", "pull_delete", "origin", "remote")
 	audit.DurationMs = p.clock().Sub(start).Milliseconds()
 	p.logAudit(audit)
-	return nil
+	return true, nil
 }
 
 // dropStaleEntry forgets a journal entry whose local file is already gone.
@@ -94,26 +102,20 @@ func (p *Puller) dropStaleEntry(ctx context.Context, path string, dryRun bool) e
 }
 
 // keepModifiedDescendant keeps a locally modified file whose Drive copy was
-// deleted along with its folder, and reports the delete-vs-modify conflict.
+// deleted, and reports the delete-vs-modify conflict. Its journal entry is
+// dropped (not re-baselined, unlike bisync which pushes in the same step):
+// the pull path has no upload to baseline against, and an entry-less local
+// file is exactly what the next bisync pass pushes back to Drive.
 func (p *Puller) keepModifiedDescendant(
 	ctx context.Context, e JournalEntry, localMtime, start time.Time, dryRun bool,
 ) error {
-	const resolution = "delete_vs_modify:keep_local"
-	p.log.Warn("remote folder deleted but local file modified: keeping it",
+	p.log.Warn("remote file deleted but local file modified: keeping it",
 		"path", e.Path, "op", "conflict", "origin", "remote",
-		"resolution", resolution)
-	if p.pub != nil {
-		_ = p.pub.PublishJSON(p.pub.Topic("events", "conflict.detected"), map[string]any{
-			"ts":          p.clock().UTC().Format(time.RFC3339),
-			"type":        "conflict.detected",
-			"path":        e.Path,
-			"local_mtime": localMtime.UTC().Format(time.RFC3339),
-			"resolution":  resolution,
-		})
-	}
+		"resolution", deleteConflictResolution, "dry_run", dryRun)
+	publishDeleteConflict(p.pub, p.log, p.clock(), e.Path, dryRun)
 	p.logAudit(AuditEntry{
 		Timestamp: start, Op: "conflict", Path: e.Path, Origin: "remote",
-		Resolution: resolution, DryRun: dryRun,
+		Resolution: deleteConflictResolution, DryRun: dryRun,
 	})
 	if dryRun {
 		return nil
@@ -124,18 +126,22 @@ func (p *Puller) keepModifiedDescendant(
 	return nil
 }
 
-// removeEmptyDirs removes root and every directory beneath it that is
-// empty, deepest first. os.Remove refuses a non-empty directory, so
-// anything still holding a file stays.
-func removeEmptyDirs(root string) {
-	var dirs []string
-	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err == nil && d.IsDir() {
-			dirs = append(dirs, p)
+// pruneEmptyDirs removes, from each directory in dirs upward to and
+// including folder, the directories that are empty. Only directories that
+// held a file removed by this operation are visited, and excluded ones are
+// skipped, so an empty directory the user created (or one under an excluded
+// tree such as .git) is never touched. os.Remove refuses a non-empty
+// directory, which ends the climb.
+func (p *Puller) pruneEmptyDirs(dirs map[string]struct{}, folder string) {
+	for dir := range dirs {
+		for d := dir; d == folder || strings.HasPrefix(d, folder+string(filepath.Separator)); d = filepath.Dir(d) {
+			rel, err := filepath.Rel(p.cfg.LocalRoot, d)
+			if err != nil || pathfilter.Excluded(p.cfg.Exclude, filepath.ToSlash(rel)) {
+				break
+			}
+			if err := removeLocalPath(d); err != nil && !os.IsNotExist(err) {
+				break
+			}
 		}
-		return nil
-	})
-	for i := len(dirs) - 1; i >= 0; i-- {
-		_ = removeLocalPath(dirs[i])
 	}
 }

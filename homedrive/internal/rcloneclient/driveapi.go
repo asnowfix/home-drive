@@ -297,7 +297,8 @@ func (r *RcloneFS) translateChange(c *drivev3.Change) (Change, bool) {
 				"op", "ListChanges", "file_id", c.FileId)
 			return Change{}, false
 		}
-		return Change{Path: p, Deleted: true}, !r.excluded(p)
+		r.pathCache.delete(c.FileId)
+		return Change{Path: p, Deleted: true, ID: c.FileId}, !r.excluded(p)
 	}
 
 	p, ok := r.resolveChangePath(c.File)
@@ -311,7 +312,8 @@ func (r *RcloneFS) translateChange(c *drivev3.Change) (Change, bool) {
 	}
 
 	if c.File.Trashed {
-		return Change{Path: p, Deleted: true}, true
+		r.pathCache.delete(c.FileId)
+		return Change{Path: p, Deleted: true, ID: c.FileId}, true
 	}
 
 	r.pathCache.put(c.FileId, p)

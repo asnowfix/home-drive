@@ -186,6 +186,7 @@ Every modification to conflict resolution must keep these passing:
 | Loser rename fails | mock returns error | conflict left in journal as pending |
 | Missing journal entry | first sync ever | not a conflict, just a sync |
 | Both sides deleted | local + remote gone | journal entry removed, no conflict |
+| Delete vs modify (#152) | one side deleted a journaled file, the other changed it | modified copy kept and propagated, `conflict` audit line + `conflict.detected` (resolution `delete_vs_modify:keep_modified`), no `.old.<N>` and no `conflict.resolved` (nothing is renamed, there is no loser) |
 
 Tests live in `internal/syncer/conflict_test.go` and use `MemFS`.
 

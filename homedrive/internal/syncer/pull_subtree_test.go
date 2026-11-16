@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -36,12 +37,15 @@ func TestPuller_FolderDelete_RemovesSyncedDescendants(t *testing.T) {
 		// wantJournal lists paths whose journal entry must remain.
 		wantJournal []string
 		wantConfl   []string
+		// wantAudit, when non-nil, is the exact set of pull_delete audit paths.
+		wantAudit []string
 	}{
 		{
-			name:     "depth1",
-			files:    []subtreeFile{{path: "d/a.txt", journaled: true}},
-			change:   "d",
-			wantGone: []string{"d/a.txt", "d"},
+			name:      "depth1",
+			files:     []subtreeFile{{path: "d/a.txt", journaled: true}},
+			change:    "d",
+			wantGone:  []string{"d/a.txt", "d"},
+			wantAudit: []string{"d/a.txt", "d"},
 		},
 		{
 			name: "depth2",
@@ -113,12 +117,24 @@ func TestPuller_FolderDelete_RemovesSyncedDescendants(t *testing.T) {
 			wantJournal: []string{"d/.git/HEAD"},
 		},
 		{
-			name:        "empty_subdirs_removed",
-			files:       []subtreeFile{{path: "d/a.txt", journaled: true}},
-			dirs:        []string{"d/empty/deeper"},
-			change:      "d",
-			wantGone:    []string{"d/empty/deeper", "d/empty", "d"},
-			wantJournal: nil,
+			// A directory the user created, that never held a synced file,
+			// is not ours to prune; the folder holding it therefore stays.
+			name:     "user_empty_dir_kept",
+			files:    []subtreeFile{{path: "d/a.txt", journaled: true}},
+			dirs:     []string{"d/empty/deeper"},
+			change:   "d",
+			wantGone: []string{"d/a.txt"},
+			wantKept: []string{"d/empty/deeper", "d/empty", "d"},
+		},
+		{
+			// An empty directory under an excluded tree is never pruned.
+			name:     "excluded_empty_dir_kept",
+			files:    []subtreeFile{{path: "d/a.txt", journaled: true}},
+			dirs:     []string{"d/.git/objects"},
+			exclude:  []string{"**/.git/**", "**/.git"},
+			change:   "d",
+			wantGone: []string{"d/a.txt"},
+			wantKept: []string{"d/.git/objects", "d"},
 		},
 		{
 			name:        "dry_run_deletes_nothing",
@@ -127,6 +143,7 @@ func TestPuller_FolderDelete_RemovesSyncedDescendants(t *testing.T) {
 			dryRun:      true,
 			wantKept:    []string{"d/a.txt", "d"},
 			wantJournal: []string{"d/a.txt"},
+			wantAudit:   []string{"d/a.txt", "d"},
 		},
 		{
 			name:     "sibling_with_common_name_prefix_untouched",
@@ -205,33 +222,45 @@ func TestPuller_FolderDelete_RemovesSyncedDescendants(t *testing.T) {
 					t.Errorf("journal entry %s present = %v, want %v", f.path, has, want)
 				}
 			}
-			checkSubtreeAudit(t, tt.dryRun, tt.wantConfl, audit, pub)
+			checkSubtreeAudit(t, tt.dryRun, tt.wantConfl, tt.wantAudit, audit, pub)
 		})
 	}
 }
 
-// checkSubtreeAudit asserts the conflict events and that every pull_delete
-// audit line carries the dry_run flag of the run.
+// checkSubtreeAudit asserts the conflict audit paths and events, that every
+// pull_delete audit line carries the dry_run flag of the run, and, when
+// wantAudit is non-nil, the exact set of pull_delete paths (one line each).
 func checkSubtreeAudit(
-	t *testing.T, dryRun bool, wantConfl []string, audit *mockAuditLogger, pub *mockPublisher,
+	t *testing.T, dryRun bool, wantConfl, wantAudit []string,
+	audit *mockAuditLogger, pub *mockPublisher,
 ) {
 	t.Helper()
-	var confl []string
+	var confl, deletes []string
 	for _, e := range audit.getEntries() {
 		switch e.Op {
 		case "conflict":
 			confl = append(confl, e.Path)
-			if e.Resolution != "delete_vs_modify:keep_local" {
+			if e.Resolution != deleteConflictResolution {
 				t.Errorf("conflict resolution = %q", e.Resolution)
 			}
 		case "pull_delete":
+			deletes = append(deletes, e.Path)
 			if e.DryRun != dryRun {
 				t.Errorf("pull_delete %s dry_run = %v, want %v", e.Path, e.DryRun, dryRun)
 			}
 		}
 	}
-	if len(confl) != len(wantConfl) {
+	slices.Sort(confl)
+	slices.Sort(wantConfl)
+	if !slices.Equal(confl, wantConfl) {
 		t.Errorf("conflict audit paths = %v, want %v", confl, wantConfl)
+	}
+	if wantAudit != nil {
+		slices.Sort(deletes)
+		slices.Sort(wantAudit)
+		if !slices.Equal(deletes, wantAudit) {
+			t.Errorf("pull_delete audit paths = %v, want %v", deletes, wantAudit)
+		}
 	}
 	if got := len(pub.getMessagesByTopic(pub.Topic("events", "conflict.detected"))); got != len(wantConfl) {
 		t.Errorf("conflict.detected events = %d, want %d", got, len(wantConfl))

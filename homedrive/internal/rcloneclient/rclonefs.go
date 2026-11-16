@@ -407,7 +407,9 @@ func (r *RcloneFS) DownloadFile(ctx context.Context, remotePath, localPath strin
 // watcher.exclude filtering: it feeds the bisync diff, which compares against
 // an unfiltered local walk (issue #135). It does seed the id-path cache, so a
 // later Removed change (which carries only an ID) for anything bisync has seen
-// resolves to a path, including after a restart (issue #152).
+// resolves to a path. The cache is memory only: after a restart it is empty
+// until the first bisync pass (or the Changes full walk) has run, and a
+// Removed change for an unknown ID is dropped until then (issue #152).
 func (r *RcloneFS) List(ctx context.Context, dir string) ([]RemoteObject, error) {
 	var objs []RemoteObject
 	if err := r.listObjects(ctx, dir, &objs); err != nil {

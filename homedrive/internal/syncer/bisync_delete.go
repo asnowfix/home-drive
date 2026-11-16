@@ -20,14 +20,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/asnowfix/home-drive/homedrive/internal/pathfilter"
 )
-
-// deleteConflictResolution is the audit/event resolution for a
-// delete-vs-modify conflict: the modified copy is kept.
-const deleteConflictResolution = "delete_vs_modify:keep_modified"
 
 // localOnlyDiff classifies a file present locally and absent from the
 // remote listing.
@@ -74,11 +69,14 @@ func plannedDeletions(diffs []FileDiff) []FileDiff {
 	return out
 }
 
-// deleteLocal removes a local file whose Drive copy was deleted. Before
-// deleting it confirms with a direct lookup that Drive really has no such
-// object: the recursive listing cannot return everything (filtered or
-// dangling objects), and absence from it alone must never delete data. Any
-// lookup outcome other than a definite not-found skips the deletion.
+// deleteLocal removes a local file whose Drive copy was deleted. The diff
+// was computed before anything ran, so everything it decided on is
+// re-verified first, and any doubt keeps the file (the next pass re-judges):
+//   - a direct lookup must say not-found: the recursive listing cannot
+//     return everything (filtered or dangling objects), and absence from it
+//     alone must never delete data;
+//   - the local file must still be a regular file whose mtime matches the
+//     journal, i.e. not edited since the diff.
 func (b *Bisync) deleteLocal(ctx context.Context, d FileDiff) (bool, error) {
 	if pathfilter.Excluded(b.cfg.Exclude, d.Path) {
 		return false, nil
@@ -90,6 +88,12 @@ func (b *Bisync) deleteLocal(ctx context.Context, d FileDiff) (bool, error) {
 	} else if !errors.Is(err, ErrRemoteNotFound) {
 		return false, fmt.Errorf("confirm %s absent on remote: %w", d.Path, err)
 	}
+	localPath := filepath.Join(b.cfg.LocalRoot, filepath.FromSlash(d.Path))
+	if !b.localUnchanged(d.Path, localPath) {
+		b.log.Warn("bisync: local file changed since the diff, keeping it",
+			"path", d.Path, "op", "pull_delete")
+		return false, nil
+	}
 
 	b.log.Info("bisync deleting local file removed on Drive",
 		"path", d.Path, "op", "pull_delete", "origin", "remote",
@@ -98,7 +102,6 @@ func (b *Bisync) deleteLocal(ctx context.Context, d FileDiff) (bool, error) {
 		b.auditFile("pull_delete", d.Path, "", "")
 		return true, nil
 	}
-	localPath := filepath.Join(b.cfg.LocalRoot, filepath.FromSlash(d.Path))
 	if err := removeLocalPath(localPath); err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("delete local %s: %w", d.Path, err)
 	}
@@ -110,8 +113,24 @@ func (b *Bisync) deleteLocal(ctx context.Context, d FileDiff) (bool, error) {
 	return true, nil
 }
 
+// localUnchanged reports whether localPath is a regular file whose mtime
+// still matches the journal baseline for path.
+func (b *Bisync) localUnchanged(path, localPath string) bool {
+	info, err := os.Lstat(localPath)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	entry, err := b.journal.Get(path)
+	if err != nil || !hasBaseline(entry) {
+		return false
+	}
+	return mtimeClose(info.ModTime(), entry.LocalMtime)
+}
+
 // deleteRemote deletes, on Drive, a file that was deleted locally. Before
-// deleting it confirms the local file is really gone.
+// trashing it re-verifies, like deleteLocal: the local file must really be
+// gone, and Drive's copy must still match the journal (an edit made on Drive
+// after the listing is kept and pulled back as a delete-vs-modify conflict).
 func (b *Bisync) deleteRemote(ctx context.Context, d FileDiff) (bool, error) {
 	if pathfilter.Excluded(b.cfg.Exclude, d.Path) {
 		return false, nil
@@ -123,6 +142,19 @@ func (b *Bisync) deleteRemote(ctx context.Context, d FileDiff) (bool, error) {
 		return false, nil
 	} else if !os.IsNotExist(err) {
 		return false, fmt.Errorf("confirm %s absent locally: %w", d.Path, err)
+	}
+	obj, err := b.remote.Stat(ctx, d.Path)
+	switch {
+	case errors.Is(err, ErrRemoteNotFound):
+		return false, b.journal.Delete(d.Path) // already gone on Drive
+	case err != nil:
+		return false, fmt.Errorf("re-check %s on remote: %w", d.Path, err)
+	}
+	if entry, jerr := b.journal.Get(d.Path); jerr != nil || !hasBaseline(entry) ||
+		remoteChangedSince(*entry, obj) {
+		pull := FileDiff{Path: d.Path, Kind: DiffRemoteOnly, RemoteInfo: &obj, DeleteConflict: true}
+		b.reportDeleteConflict(pull)
+		return false, b.syncRemoteToLocal(ctx, pull)
 	}
 
 	b.log.Info("bisync deleting Drive file removed locally",
@@ -151,15 +183,7 @@ func (b *Bisync) reportDeleteConflict(d FileDiff) {
 		"path", d.Path, "op", "conflict", "resolution", deleteConflictResolution,
 		"dry_run", b.cfg.DryRun)
 	b.auditFile("conflict", d.Path, deleteConflictResolution, "")
-	if b.mqtt == nil {
-		return
-	}
-	_ = b.mqtt.PublishJSON(b.mqtt.Topic("events", "conflict.detected"), map[string]any{
-		"ts":         b.clock.Now().UTC().Format(time.RFC3339),
-		"type":       "conflict.detected",
-		"path":       d.Path,
-		"resolution": deleteConflictResolution,
-	})
+	publishDeleteConflict(b.mqtt, b.log, b.clock.Now(), d.Path, b.cfg.DryRun)
 }
 
 // removeEmptyParents removes now-empty directories above localPath, up to
@@ -170,5 +194,33 @@ func (b *Bisync) removeEmptyParents(localPath string) {
 		if removeLocalPath(dir) != nil {
 			return
 		}
+	}
+}
+
+// syncDelete propagates one deletion and reports whether it was applied
+// (a skipped or failed deletion is logged and leaves everything in place).
+func (b *Bisync) syncDelete(ctx context.Context, d FileDiff) bool {
+	var (
+		applied bool
+		err     error
+	)
+	if d.Kind == DiffRemoteDeleted {
+		applied, err = b.deleteLocal(ctx, d)
+	} else {
+		applied, err = b.deleteRemote(ctx, d)
+	}
+	if err != nil {
+		b.log.Error("bisync delete failed", "path", d.Path, "error", err)
+		return false
+	}
+	return applied
+}
+
+// logPlannedDeletions logs how many deletions the diff holds, before any
+// of them executes.
+func (b *Bisync) logPlannedDeletions(diffs []FileDiff) {
+	if planned := plannedDeletions(diffs); len(planned) > 0 {
+		b.log.Info("bisync planned deletions", "count", len(planned),
+			"of_diffs", len(diffs), "dry_run", b.cfg.DryRun)
 	}
 }

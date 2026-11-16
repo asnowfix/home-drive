@@ -189,6 +189,7 @@ func (b *Bisync) syncLocalToRemote(ctx context.Context, d FileDiff) error {
 		LocalMtime:   d.LocalInfo.ModTime,
 		RemoteMtime:  obj.ModTime,
 		RemoteMD5:    obj.MD5,
+		RemoteID:     obj.RemoteID,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "local",
 	})
@@ -224,6 +225,7 @@ func (b *Bisync) syncRemoteToLocal(ctx context.Context, d FileDiff) error {
 		LocalMtime:   d.RemoteInfo.ModTime,
 		RemoteMtime:  d.RemoteInfo.ModTime,
 		RemoteMD5:    d.RemoteInfo.MD5,
+		RemoteID:     d.RemoteInfo.RemoteID,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "remote",
 	})
@@ -297,6 +299,7 @@ func (b *Bisync) resolveLocalWins(ctx context.Context, d FileDiff) error {
 		LocalMtime:   d.LocalInfo.ModTime,
 		RemoteMtime:  obj.ModTime,
 		RemoteMD5:    obj.MD5,
+		RemoteID:     obj.RemoteID,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "local",
 	}); err != nil {
@@ -352,6 +355,7 @@ func (b *Bisync) resolveRemoteWins(ctx context.Context, d FileDiff) error {
 		LocalMtime:   d.RemoteInfo.ModTime,
 		RemoteMtime:  d.RemoteInfo.ModTime,
 		RemoteMD5:    d.RemoteInfo.MD5,
+		RemoteID:     d.RemoteInfo.RemoteID,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "remote",
 	}); err != nil {

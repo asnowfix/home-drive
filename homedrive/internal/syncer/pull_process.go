@@ -25,6 +25,13 @@ func (p *Puller) processChange(ctx context.Context, ch Change) error {
 
 // processDelete handles a remote deletion.
 func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) error {
+	if ch.Path == "" || ch.Path == "." {
+		// The sync root's own ID resolves to "": a delete of it must never
+		// reach the local-root sweep.
+		p.log.Warn("ignoring remote delete of the sync root",
+			"op", "pull_delete", "origin", "remote")
+		return nil
+	}
 	p.log.Info("remote file deleted",
 		"path", ch.Path,
 		"op", "pull_delete",
@@ -48,7 +55,8 @@ func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) 
 	}
 
 	localPath := filepath.Join(p.cfg.LocalRoot, ch.Path)
-	if err := p.removeLocal(ctx, ch.Path, localPath, start); err != nil {
+	outcome, err := p.removeLocal(ctx, ch, localPath, start)
+	if err != nil {
 		p.log.Error("failed to delete local file",
 			"path", ch.Path,
 			"op", "pull_delete",
@@ -56,19 +64,25 @@ func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) 
 		)
 		return fmt.Errorf("deleting local file %s: %w", ch.Path, err)
 	}
+	if outcome == deleteStale {
+		return nil
+	}
 
 	if err := p.store.Delete(ctx, ch.Path); err != nil {
 		return fmt.Errorf("removing journal entry for %s: %w", ch.Path, err)
 	}
 
-	p.logAudit(AuditEntry{
-		Timestamp:  start,
-		Op:         "pull_delete",
-		Path:       ch.Path,
-		Origin:     "remote",
-		DurationMs: p.clock().Sub(start).Milliseconds(),
-	})
-
+	// One audit line per deletion actually made: a path already removed by
+	// an earlier sweep or change, or kept, is not audited as deleted.
+	if outcome == deleteRemoved {
+		p.logAudit(AuditEntry{
+			Timestamp:  start,
+			Op:         "pull_delete",
+			Path:       ch.Path,
+			Origin:     "remote",
+			DurationMs: p.clock().Sub(start).Milliseconds(),
+		})
+	}
 	return nil
 }
 

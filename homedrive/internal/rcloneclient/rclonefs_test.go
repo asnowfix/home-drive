@@ -401,3 +401,32 @@ func TestRcloneFS_DeleteFile_Cases(t *testing.T) {
 		})
 	}
 }
+
+// R2 (#152 review): a trashed or removed ID must stop resolving, or a later
+// Removed change for the old ID resolves to a path that now belongs to a new,
+// live file and deletes it locally.
+func TestTranslateChange_EvictsTrashedAndRemovedIDs(t *testing.T) {
+	r := &RcloneFS{log: slog.Default(), pathCache: newIDPathCache()}
+	r.pathCache.put("old-A", "A")
+
+	trashed, ok := r.translateChange(&drivev3.Change{
+		FileId: "old-A", File: &drivev3.File{Name: "A", Trashed: true},
+	})
+	if !ok || !trashed.Deleted || trashed.ID != "old-A" {
+		t.Fatalf("trashed change = %+v, %v; want Deleted with ID old-A", trashed, ok)
+	}
+	// a new folder A is created under a new ID
+	r.pathCache.put("new-A", "A")
+
+	if ch, ok := r.translateChange(&drivev3.Change{FileId: "old-A", Removed: true}); ok {
+		t.Errorf("Removed for the evicted old ID resolved to %q; want it dropped", ch.Path)
+	}
+	// the live ID is untouched until it is itself removed, and carries its ID
+	ch, ok := r.translateChange(&drivev3.Change{FileId: "new-A", Removed: true})
+	if !ok || ch.Path != "A" || ch.ID != "new-A" {
+		t.Errorf("Removed for the live ID = %+v, %v; want path A, ID new-A", ch, ok)
+	}
+	if _, still := r.pathCache.get("new-A"); still {
+		t.Error("removed ID still cached")
+	}
+}

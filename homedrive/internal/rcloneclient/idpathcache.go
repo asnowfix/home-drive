@@ -9,9 +9,10 @@ import "sync"
 //
 // The cache is seeded during the full recursive walk (every file and
 // directory visited has a known ID and path) and kept warm as subsequent
-// incremental changes are translated. It intentionally never evicts: at
+// incremental changes are translated. It does not otherwise evict: at
 // home-NAS scale (tens of thousands of files at most) the memory cost is
-// negligible, and staleness only affects the ability to resolve a path for
+// negligible (entries are evicted only when Drive reports the ID trashed or
+// removed), and staleness only affects the ability to resolve a path for
 // very recently created parents (see resolvePath's fallback to the bisync
 // safety net, PLAN.md §7.2).
 type idPathCache struct {
@@ -43,6 +44,14 @@ func (c *idPathCache) put(id, path string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.m[id] = path
+}
+
+// delete forgets id. A trashed or removed file's ID must not keep resolving
+// to its old path: the path may since belong to a different, live file.
+func (c *idPathCache) delete(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.m, id)
 }
 
 // len returns the number of cached entries. Used by tests.
