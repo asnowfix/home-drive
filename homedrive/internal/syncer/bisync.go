@@ -246,6 +246,11 @@ func (b *Bisync) execute(ctx context.Context) {
 		return
 	}
 
+	if planned := plannedDeletions(diffs); len(planned) > 0 {
+		b.log.Info("bisync planned deletions", "count", len(planned),
+			"of_diffs", len(diffs), "dry_run", b.cfg.DryRun)
+	}
+
 	pushed, pulled, conflicts := b.syncDiffs(ctx, diffs)
 
 	for base := range b.pendingPrune {

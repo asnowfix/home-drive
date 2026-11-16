@@ -61,6 +61,19 @@ func (b *Bisync) remoteOnlyDiff(path string, remote RemoteObject) FileDiff {
 	return d
 }
 
+// plannedDeletions returns the deletions diff() decided on, computed from
+// the complete diff before syncDiffs executes any of it, so the set can be
+// counted (and, by a future guard, vetoed) as a whole.
+func plannedDeletions(diffs []FileDiff) []FileDiff {
+	var out []FileDiff
+	for _, d := range diffs {
+		if d.Kind == DiffRemoteDeleted || d.Kind == DiffLocalDeleted {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // deleteLocal removes a local file whose Drive copy was deleted. Before
 // deleting it confirms with a direct lookup that Drive really has no such
 // object: the recursive listing cannot return everything (filtered or
@@ -86,7 +99,7 @@ func (b *Bisync) deleteLocal(ctx context.Context, d FileDiff) (bool, error) {
 		return true, nil
 	}
 	localPath := filepath.Join(b.cfg.LocalRoot, filepath.FromSlash(d.Path))
-	if err := os.Remove(localPath); err != nil && !os.IsNotExist(err) {
+	if err := removeLocalPath(localPath); err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("delete local %s: %w", d.Path, err)
 	}
 	b.removeEmptyParents(localPath)
@@ -154,7 +167,7 @@ func (b *Bisync) reportDeleteConflict(d FileDiff) {
 func (b *Bisync) removeEmptyParents(localPath string) {
 	root := filepath.Clean(b.cfg.LocalRoot)
 	for dir := filepath.Dir(localPath); dir != root && len(dir) > len(root); dir = filepath.Dir(dir) {
-		if os.Remove(dir) != nil {
+		if removeLocalPath(dir) != nil {
 			return
 		}
 	}

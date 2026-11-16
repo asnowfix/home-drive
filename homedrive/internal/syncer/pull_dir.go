@@ -41,7 +41,7 @@ func (p *Puller) removeLocal(
 	if err := p.removeSyncedDescendants(ctx, relPath, localPath, start, false); err != nil {
 		return err
 	}
-	err := os.Remove(localPath)
+	err := removeLocalPath(localPath)
 	if err == nil || os.IsNotExist(err) {
 		return nil
 	}
@@ -58,7 +58,7 @@ func (p *Puller) removeLocal(
 }
 
 func removeIgnoringMissing(localPath string) error {
-	err := os.Remove(localPath)
+	err := removeLocalPath(localPath)
 	if err == nil || os.IsNotExist(err) {
 		return nil
 	}

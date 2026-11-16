@@ -317,3 +317,14 @@ func TestBisync_Delete_ConflictEventPublished(t *testing.T) {
 		t.Errorf("no conflict.detected event, published: %v", mqtt.published)
 	}
 }
+
+func TestPlannedDeletions_OnlyDeleteKinds(t *testing.T) {
+	diffs := []FileDiff{
+		{Path: "a", Kind: DiffLocalOnly}, {Path: "b", Kind: DiffRemoteDeleted},
+		{Path: "c", Kind: DiffLocalDeleted}, {Path: "d", Kind: DiffConflict},
+	}
+	got := plannedDeletions(diffs)
+	if len(got) != 2 || got[0].Path != "b" || got[1].Path != "c" {
+		t.Errorf("plannedDeletions = %+v, want b and c", got)
+	}
+}
