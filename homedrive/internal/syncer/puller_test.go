@@ -766,6 +766,7 @@ func TestPuller_RemoteDelete(t *testing.T) {
 	store := newMockStore()
 	store.entries["deleted.txt"] = JournalEntry{
 		Path: "deleted.txt", LastOrigin: "local",
+		LocalMtime: now, RemoteMtime: now, RemoteMD5: "m",
 	}
 	audit := newMockAuditLogger()
 

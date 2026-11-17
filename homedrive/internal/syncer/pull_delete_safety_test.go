@@ -69,8 +69,9 @@ func TestPuller_FileDelete_ModifiedKept(t *testing.T) {
 			path: "e.txt", changes: []Change{del("e.txt")}, wantKept: true, wantConfl: 1},
 		{name: "child_before_parent_unchanged", journaled: true,
 			path: "d/e.txt", changes: []Change{del("d/e.txt"), del("d")}},
-		{name: "unjournaled_still_deleted", path: "d/e.txt",
-			changes: []Change{del("d/e.txt")}},
+		// T2: no record that this file is the synced copy: keep it.
+		{name: "unjournaled_kept", path: "d/e.txt",
+			changes: []Change{del("d/e.txt")}, wantKept: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -122,7 +123,10 @@ func TestPuller_FileDelete_StaleIDIgnored(t *testing.T) {
 	}{
 		{name: "different_id_ignored", journal: "id-new", changeID: "id-old"},
 		{name: "same_id_deleted", journal: "id-1", changeID: "id-1", wantGone: true},
-		{name: "journal_without_id_deleted", journal: "", changeID: "id-1", wantGone: true},
+		// T2: recreated file whose journal entry has no ID (nil-object push
+		// entry or older entry) must not be deleted by an ID-carrying change.
+		{name: "journal_without_id_change_with_id_kept", journal: "", changeID: "id-1"},
+		{name: "neither_has_id_deleted", journal: "", changeID: "", wantGone: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

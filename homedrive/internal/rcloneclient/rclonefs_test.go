@@ -87,10 +87,11 @@ func TestRcloneFS_List_SeedsPathCache(t *testing.T) {
 	if _, err := r.List(context.Background(), ""); err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	for id, want := range map[string]string{"id-b": "sub/b.txt", "sub-id": "sub"} {
-		ch, ok := r.translateChange(&drivev3.Change{FileId: id, Removed: true})
-		if !ok || !ch.Deleted || ch.Path != want {
-			t.Errorf("removed %s = (%+v, %v), want deleted %q", id, ch, ok, want)
+	// the file first: removing the folder evicts everything beneath it
+	for _, c := range []struct{ id, want string }{{"id-b", "sub/b.txt"}, {"sub-id", "sub"}} {
+		ch, ok := r.translateChange(&drivev3.Change{FileId: c.id, Removed: true})
+		if !ok || !ch.Deleted || ch.Path != c.want {
+			t.Errorf("removed %s = (%+v, %v), want deleted %q", c.id, ch, ok, c.want)
 		}
 	}
 }

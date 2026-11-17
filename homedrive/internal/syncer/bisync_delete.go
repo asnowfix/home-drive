@@ -146,6 +146,9 @@ func (b *Bisync) deleteRemote(ctx context.Context, d FileDiff) (bool, error) {
 	obj, err := b.remote.Stat(ctx, d.Path)
 	switch {
 	case errors.Is(err, ErrRemoteNotFound):
+		if b.cfg.DryRun {
+			return false, nil
+		}
 		return false, b.journal.Delete(d.Path) // already gone on Drive
 	case err != nil:
 		return false, fmt.Errorf("re-check %s on remote: %w", d.Path, err)

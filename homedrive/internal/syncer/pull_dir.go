@@ -42,11 +42,11 @@ const (
 // path is not an error. A deleted change carries no Object, so a remote
 // folder delete arrives here too (issue #114).
 //
-// A regular file is deleted only if it is safe to: when the journal holds a
-// baseline for it and its mtime moved since, it is kept as a delete-vs-modify
-// conflict; when the journal recorded another file ID for the path, the
-// change is stale and ignored. A path with no journal entry is deleted as
-// before (an explicit delete of a path we have no record of).
+// A regular file is deleted only when the journal proves it is the synced
+// copy: a full baseline, the same Drive file ID as the change (or none on
+// either side), and an unchanged mtime. If its mtime moved it is kept as a
+// delete-vs-modify conflict. Anything else (no entry, no baseline, another
+// ID) is kept untouched: it may be a new file recreated at a deleted path.
 //
 // Drive is not known to report an entry per descendant of a deleted folder,
 // and the ID-to-path cache that resolves such entries is lost on restart,
@@ -89,6 +89,17 @@ func (p *Puller) removeLocal(
 	return deleteNothing, err
 }
 
+// sameFileID reports whether the journal entry and the delete change
+// designate the same Drive file: equal non-empty IDs. When neither side has
+// an ID (entries journaled without one) nothing contradicts the match, and
+// the caller's mtime check decides.
+func sameFileID(e JournalEntry, ch Change) bool {
+	if e.RemoteID == "" && ch.ID == "" {
+		return true
+	}
+	return e.RemoteID != "" && e.RemoteID == ch.ID
+}
+
 // removeLocalFile is removeLocal for a path that is not a directory.
 func (p *Puller) removeLocalFile(
 	ctx context.Context, ch Change, info os.FileInfo, localPath string, start time.Time,
@@ -97,13 +108,16 @@ func (p *Puller) removeLocalFile(
 	if err != nil {
 		return deleteNothing, fmt.Errorf("reading journal for %s: %w", ch.Path, err)
 	}
-	if found && e.RemoteID != "" && ch.ID != "" && e.RemoteID != ch.ID {
-		p.log.Warn("remote delete is for another file ID than the journaled one: ignoring",
-			"path", ch.Path, "op", "pull_delete", "change_id", ch.ID, "journal_id", e.RemoteID)
+	if !found || !hasBaseline(&e) || !info.Mode().IsRegular() || !sameFileID(e, ch) {
+		// Nothing proves this local file is the one Drive deleted (it may
+		// be new: deleted and recreated before the push), so keep it;
+		// bisync pushes it if it is unsynced.
+		p.log.Warn("remote file deleted but local file is not a known synced copy: keeping it",
+			"path", ch.Path, "op", "pull_delete", "origin", "remote",
+			"change_id", ch.ID, "journal_id", e.RemoteID, "journaled", found)
 		return deleteStale, nil
 	}
-	if found && info.Mode().IsRegular() && hasBaseline(&e) &&
-		!mtimeClose(info.ModTime(), e.LocalMtime) {
+	if !mtimeClose(info.ModTime(), e.LocalMtime) {
 		return deleteKept, p.keepModifiedDescendant(ctx, e, info.ModTime(), start, false)
 	}
 	err = removeLocalPath(localPath)

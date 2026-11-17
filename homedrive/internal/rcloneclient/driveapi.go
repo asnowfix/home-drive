@@ -298,9 +298,20 @@ func (r *RcloneFS) translateChange(c *drivev3.Change) (Change, bool) {
 			return Change{}, false
 		}
 		r.pathCache.delete(c.FileId)
+		r.pathCache.evictTree(p)
+		if !ValidRemotePath(p) {
+			r.log.Warn("ListChanges: skipping removed file with unsafe path",
+				"op", "ListChanges", "file_id", c.FileId)
+			return Change{}, false
+		}
 		return Change{Path: p, Deleted: true, ID: c.FileId}, !r.excluded(p)
 	}
 
+	if !ValidName(c.File.Name) {
+		r.log.Warn("ListChanges: skipping change with unsafe name",
+			"op", "ListChanges", "file_id", c.FileId)
+		return Change{}, false
+	}
 	p, ok := r.resolveChangePath(c.File)
 	if !ok {
 		r.log.Warn("ListChanges: skipping change with unresolved parent path",
@@ -313,6 +324,7 @@ func (r *RcloneFS) translateChange(c *drivev3.Change) (Change, bool) {
 
 	if c.File.Trashed {
 		r.pathCache.delete(c.FileId)
+		r.pathCache.evictTree(p)
 		return Change{Path: p, Deleted: true, ID: c.FileId}, true
 	}
 

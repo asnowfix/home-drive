@@ -1,6 +1,9 @@
 package rcloneclient
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
 // idPathCache maps Drive file/folder IDs to their last-known remote-relative
 // path. Google Drive's Changes API reports changes by file ID plus a parent
@@ -52,6 +55,19 @@ func (c *idPathCache) delete(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.m, id)
+}
+
+// evictTree forgets every cached ID whose path is path or lies beneath it.
+// Used when a folder is trashed or removed: its descendants' IDs would
+// otherwise keep resolving to paths that may by then belong to new items.
+func (c *idPathCache) evictTree(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, p := range c.m {
+		if p == path || strings.HasPrefix(p, path+"/") {
+			delete(c.m, id)
+		}
+	}
 }
 
 // len returns the number of cached entries. Used by tests.

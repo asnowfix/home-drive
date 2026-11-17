@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/asnowfix/home-drive/homedrive/internal/pathfilter"
+	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 )
 
 // removeSyncedDescendants removes every journaled, locally unchanged file
@@ -32,7 +33,7 @@ func (p *Puller) removeSyncedDescendants(
 	}
 	touched := make(map[string]struct{})
 	for _, e := range entries {
-		if pathfilter.Excluded(p.cfg.Exclude, e.Path) {
+		if pathfilter.Excluded(p.cfg.Exclude, e.Path) || !rcloneclient.ValidRemotePath(e.Path) {
 			continue
 		}
 		gone, err := p.removeSyncedFile(ctx, e, start, dryRun)

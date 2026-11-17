@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 )
 
 // processChange handles a single remote change: download or delete.
@@ -25,11 +27,12 @@ func (p *Puller) processChange(ctx context.Context, ch Change) error {
 
 // processDelete handles a remote deletion.
 func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) error {
-	if ch.Path == "" || ch.Path == "." {
-		// The sync root's own ID resolves to "": a delete of it must never
-		// reach the local-root sweep.
-		p.log.Warn("ignoring remote delete of the sync root",
-			"op", "pull_delete", "origin", "remote")
+	if !rcloneclient.ValidRemotePath(ch.Path) {
+		// The sync root's own ID resolves to "", and an empty, "." or ".."
+		// component or a backslash could address something outside the
+		// deleted item: none of these may reach the local-root sweep.
+		p.log.Warn("ignoring remote delete with an unsafe path",
+			"path", ch.Path, "op", "pull_delete", "origin", "remote")
 		return nil
 	}
 	p.log.Info("remote file deleted",
