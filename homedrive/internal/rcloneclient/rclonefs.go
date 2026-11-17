@@ -413,6 +413,11 @@ func (r *RcloneFS) DownloadFile(ctx context.Context, remotePath, localPath strin
 func (r *RcloneFS) List(ctx context.Context, dir string) ([]RemoteObject, error) {
 	var objs []RemoteObject
 	if err := r.listObjects(ctx, dir, &objs); err != nil {
+		if dir != "" && errors.Is(err, rclonefs.ErrorDirNotFound) {
+			// a directory that does not exist holds no objects; the puller
+			// uses this to confirm a deleted folder is really gone
+			return nil, nil
+		}
 		return nil, err
 	}
 	return objs, nil

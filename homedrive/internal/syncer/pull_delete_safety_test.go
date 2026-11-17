@@ -19,7 +19,14 @@ func runPull(
 	t *testing.T, root string, st *mockStore, changes []Change,
 ) (*mockAuditLogger, *mockPublisher) {
 	t.Helper()
-	remote := newMockRemoteFS()
+	return runPullOn(t, newMockRemoteFS(), root, st, changes)
+}
+
+// runPullOn is runPull against a caller-prepared mock remote.
+func runPullOn(
+	t *testing.T, remote *mockRemoteFS, root string, st *mockStore, changes []Change,
+) (*mockAuditLogger, *mockPublisher) {
+	t.Helper()
 	remote.startToken = "start-1"
 	remote.changes["start-1"] = Changes{Items: changes, NextPageToken: "token-2"}
 	audit, pub := newMockAuditLogger(), newMockPublisher()

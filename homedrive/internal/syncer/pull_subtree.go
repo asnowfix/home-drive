@@ -31,6 +31,9 @@ func (p *Puller) removeSyncedDescendants(
 	if err != nil {
 		return fmt.Errorf("listing journal under %s: %w", relPath, err)
 	}
+	if len(entries) > 0 && !p.folderGoneOnDrive(ctx, relPath) {
+		return nil
+	}
 	touched := make(map[string]struct{})
 	for _, e := range entries {
 		if pathfilter.Excluded(p.cfg.Exclude, e.Path) || !rcloneclient.ValidRemotePath(e.Path) {
@@ -49,6 +52,27 @@ func (p *Puller) removeSyncedDescendants(
 		p.pruneEmptyDirs(touched, localPath)
 	}
 	return nil
+}
+
+// folderGoneOnDrive confirms nothing exists on Drive under relPath any more.
+// The sweep decides from a change that carries only a (possibly stale) ID
+// resolved through a cache, so it must not trust that alone: if something
+// lives at the path now it is a different, current item and its synced
+// files are not ours to delete. A lookup error also says no; bisync, which
+// re-derives everything from fresh listings, is the backstop.
+func (p *Puller) folderGoneOnDrive(ctx context.Context, relPath string) bool {
+	objs, err := p.remote.List(ctx, relPath)
+	if err != nil {
+		p.log.Warn("cannot confirm the deleted folder is gone on Drive: not sweeping",
+			"path", relPath, "op", "pull_delete", "origin", "remote", "error", err)
+		return false
+	}
+	if len(objs) > 0 {
+		p.log.Warn("Drive still has content at the deleted folder's path: not sweeping",
+			"path", relPath, "op", "pull_delete", "origin", "remote", "objects", len(objs))
+		return false
+	}
+	return true
 }
 
 // removeSyncedFile applies the delete-or-keep decision to one journaled

@@ -232,6 +232,9 @@ func (p *Puller) buildConflictEntry(
 		entry.LocalMtime = ch.Object.ModTime
 	} else {
 		entry.LocalMtime = localMtime
+		// The loser (renamed to .old.<N>) keeps ch.Object's ID; the path now
+		// holds the upload, a different Drive file.
+		entry.RemoteID = result.WinnerRemoteID
 	}
 	return entry
 }

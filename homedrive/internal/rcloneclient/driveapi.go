@@ -310,15 +310,18 @@ func (r *RcloneFS) translateChange(c *drivev3.Change) (Change, bool) {
 	if !ValidName(c.File.Name) {
 		r.log.Warn("ListChanges: skipping change with unsafe name",
 			"op", "ListChanges", "file_id", c.FileId)
+		r.forgetID(c.FileId)
 		return Change{}, false
 	}
 	p, ok := r.resolveChangePath(c.File)
 	if !ok {
 		r.log.Warn("ListChanges: skipping change with unresolved parent path",
 			"op", "ListChanges", "file_id", c.FileId, "name", c.File.Name)
+		r.forgetID(c.FileId)
 		return Change{}, false
 	}
 	if r.excluded(p) {
+		r.forgetID(c.FileId)
 		return Change{}, false
 	}
 
@@ -338,6 +341,18 @@ func (r *RcloneFS) translateChange(c *drivev3.Change) (Change, bool) {
 		IsDir:    c.File.MimeType == driveFolderMimeType,
 	}
 	return Change{Path: p, Object: &obj}, true
+}
+
+// forgetID drops id from the cache together with everything cached beneath
+// its old path. Called when a change moves an item somewhere the cache will
+// not follow (outside the sync root, into an excluded path): the old
+// mapping would otherwise outlive the move and resolve a later Removed
+// change for that ID to a path now held by a different, live item.
+func (r *RcloneFS) forgetID(id string) {
+	if old, ok := r.pathCache.get(id); ok {
+		r.pathCache.evictTree(old)
+	}
+	r.pathCache.delete(id)
 }
 
 // resolveChangePath resolves a changed file's remote-relative path from its
