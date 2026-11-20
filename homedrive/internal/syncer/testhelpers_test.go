@@ -173,6 +173,8 @@ func (j *mockJournal) SetMeta(key []byte, val string) error {
 type mockMQTT struct {
 	mu     sync.Mutex
 	events []BisyncEvent
+	// published records every payload, whatever its type.
+	published []any
 }
 
 func newMockMQTT() *mockMQTT {
@@ -185,6 +187,7 @@ func (m *mockMQTT) PublishJSON(_ string, payload any) error {
 	if ev, ok := payload.(BisyncEvent); ok {
 		m.events = append(m.events, ev)
 	}
+	m.published = append(m.published, payload)
 	return nil
 }
 

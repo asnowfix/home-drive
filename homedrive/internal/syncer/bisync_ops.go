@@ -62,11 +62,7 @@ func (b *Bisync) diffLocalAgainstRemote(
 	for path, local := range localMap {
 		remote, exists := remoteMap[path]
 		if !exists {
-			diffs = append(diffs, FileDiff{
-				Path:      path,
-				Kind:      DiffLocalOnly,
-				LocalInfo: &local,
-			})
+			diffs = append(diffs, b.localOnlyDiff(path, local))
 			continue
 		}
 		if kind, differs := b.classify(path, local, remote); differs {
@@ -90,12 +86,7 @@ func (b *Bisync) diffRemoteAgainstLocal(
 ) []FileDiff {
 	for path, remote := range remoteMap {
 		if _, exists := localMap[path]; !exists {
-			remoteCopy := remote
-			diffs = append(diffs, FileDiff{
-				Path:       path,
-				Kind:       DiffRemoteOnly,
-				RemoteInfo: &remoteCopy,
-			})
+			diffs = append(diffs, b.remoteOnlyDiff(path, remote))
 		}
 	}
 	return diffs
@@ -198,6 +189,7 @@ func (b *Bisync) syncLocalToRemote(ctx context.Context, d FileDiff) error {
 		LocalMtime:   d.LocalInfo.ModTime,
 		RemoteMtime:  obj.ModTime,
 		RemoteMD5:    obj.MD5,
+		RemoteID:     obj.RemoteID,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "local",
 	})
@@ -233,6 +225,7 @@ func (b *Bisync) syncRemoteToLocal(ctx context.Context, d FileDiff) error {
 		LocalMtime:   d.RemoteInfo.ModTime,
 		RemoteMtime:  d.RemoteInfo.ModTime,
 		RemoteMD5:    d.RemoteInfo.MD5,
+		RemoteID:     d.RemoteInfo.RemoteID,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "remote",
 	})
@@ -306,6 +299,7 @@ func (b *Bisync) resolveLocalWins(ctx context.Context, d FileDiff) error {
 		LocalMtime:   d.LocalInfo.ModTime,
 		RemoteMtime:  obj.ModTime,
 		RemoteMD5:    obj.MD5,
+		RemoteID:     obj.RemoteID,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "local",
 	}); err != nil {
@@ -361,6 +355,7 @@ func (b *Bisync) resolveRemoteWins(ctx context.Context, d FileDiff) error {
 		LocalMtime:   d.RemoteInfo.ModTime,
 		RemoteMtime:  d.RemoteInfo.ModTime,
 		RemoteMD5:    d.RemoteInfo.MD5,
+		RemoteID:     d.RemoteInfo.RemoteID,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "remote",
 	}); err != nil {

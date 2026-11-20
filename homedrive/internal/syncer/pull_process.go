@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 )
 
 // processChange handles a single remote change: download or delete.
@@ -25,6 +27,14 @@ func (p *Puller) processChange(ctx context.Context, ch Change) error {
 
 // processDelete handles a remote deletion.
 func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) error {
+	if !rcloneclient.ValidRemotePath(ch.Path) {
+		// The sync root's own ID resolves to "", and an empty, "." or ".."
+		// component or a backslash could address something outside the
+		// deleted item: none of these may reach the local-root sweep.
+		p.log.Warn("ignoring remote delete with an unsafe path",
+			"path", ch.Path, "op", "pull_delete", "origin", "remote")
+		return nil
+	}
 	p.log.Info("remote file deleted",
 		"path", ch.Path,
 		"op", "pull_delete",
@@ -43,11 +53,13 @@ func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) 
 			Origin:    "remote",
 			DryRun:    true,
 		})
-		return nil
+		return p.removeSyncedDescendants(ctx, ch.Path,
+			filepath.Join(p.cfg.LocalRoot, ch.Path), start, true)
 	}
 
 	localPath := filepath.Join(p.cfg.LocalRoot, ch.Path)
-	if err := p.removeLocal(ch.Path, localPath); err != nil {
+	outcome, err := p.removeLocal(ctx, ch, localPath, start)
+	if err != nil {
 		p.log.Error("failed to delete local file",
 			"path", ch.Path,
 			"op", "pull_delete",
@@ -55,19 +67,25 @@ func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) 
 		)
 		return fmt.Errorf("deleting local file %s: %w", ch.Path, err)
 	}
+	if outcome == deleteStale {
+		return nil
+	}
 
 	if err := p.store.Delete(ctx, ch.Path); err != nil {
 		return fmt.Errorf("removing journal entry for %s: %w", ch.Path, err)
 	}
 
-	p.logAudit(AuditEntry{
-		Timestamp:  start,
-		Op:         "pull_delete",
-		Path:       ch.Path,
-		Origin:     "remote",
-		DurationMs: p.clock().Sub(start).Milliseconds(),
-	})
-
+	// One audit line per deletion actually made: a path already removed by
+	// an earlier sweep or change, or kept, is not audited as deleted.
+	if outcome == deleteRemoved {
+		p.logAudit(AuditEntry{
+			Timestamp:  start,
+			Op:         "pull_delete",
+			Path:       ch.Path,
+			Origin:     "remote",
+			DurationMs: p.clock().Sub(start).Milliseconds(),
+		})
+	}
 	return nil
 }
 
@@ -214,6 +232,9 @@ func (p *Puller) buildConflictEntry(
 		entry.LocalMtime = ch.Object.ModTime
 	} else {
 		entry.LocalMtime = localMtime
+		// The loser (renamed to .old.<N>) keeps ch.Object's ID; the path now
+		// holds the upload, a different Drive file.
+		entry.RemoteID = result.WinnerRemoteID
 	}
 	return entry
 }

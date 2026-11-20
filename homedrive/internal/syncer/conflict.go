@@ -26,6 +26,10 @@ type ConflictResult struct {
 	Winner     string // "local" or "remote"
 	OldPath    string // path where the loser was preserved
 	Resolution string // e.g. "newer_wins:local"
+
+	// WinnerRemoteID is the Drive file ID of the uploaded local winner
+	// (empty unless the local copy won).
+	WinnerRemoteID string
 }
 
 // conflictDeps groups the per-Puller dependencies resolveConflict needs
@@ -217,9 +221,11 @@ func resolveConflict(
 		pruneAfterConflict(ctx, deps, base)
 		// Upload the local winner.
 		localFile := fmt.Sprintf("%s/%s", deps.localRoot, path)
-		if _, err := deps.remote.CopyFile(ctx, localFile, remoteDir(path)); err != nil {
+		obj, err := deps.remote.CopyFile(ctx, localFile, remoteDir(path))
+		if err != nil {
 			return ConflictResult{}, fmt.Errorf("uploading local winner %s: %w", path, err)
 		}
+		result.WinnerRemoteID = obj.RemoteID
 	}
 
 	// Emit conflict.resolved event.

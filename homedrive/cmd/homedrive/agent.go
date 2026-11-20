@@ -303,6 +303,7 @@ func (a *Agent) buildPuller(pub syncer.Publisher, audit syncer.AuditLogger, audi
 			Matcher:        a.oldSuffixMatcher,
 			Retention:      retentionPolicy(a.cfg.Conflict.Retention),
 			Auditor:        auditor,
+			Exclude:        a.cfg.Watcher.Exclude,
 			DryRun:         a.cfg.DryRun,
 		},
 		a.rfs,

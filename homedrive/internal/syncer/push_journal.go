@@ -37,6 +37,16 @@ func (s *Syncer) pushEntry(rel string, obj *RemoteObject) JournalEntry {
 		return e
 	}
 	e.LocalMtime = info.ModTime()
+	if !mtimeClose(e.LocalMtime, obj.ModTime) {
+		// The file changed after the content that was uploaded (Drive
+		// keeps the uploaded file's mtime). Journaling the newer mtime
+		// would make that edit look like the synced baseline, and a later
+		// Drive deletion would then delete it as unchanged: baseline the
+		// uploaded content instead, so the edit reads as a local change.
+		s.logger.Warn("local file changed during upload, journaling the uploaded mtime",
+			"path", rel)
+		e.LocalMtime = obj.ModTime
+	}
 	return e
 }
 

@@ -26,10 +26,11 @@ func (b *Bisync) writeAudit(
 		Timestamp:    start.UTC().Format(time.RFC3339),
 		Op:           "bisync",
 		Duration:     fmt.Sprintf("%d", elapsed.Milliseconds()),
-		FilesChanged: pushed + pulled,
+		FilesChanged: pushed + pulled + b.deleted,
 		FilesPushed:  pushed,
 		FilesPulled:  pulled,
 		Conflicts:    conflicts,
+		FilesDeleted: b.deleted,
 		DryRun:       b.cfg.DryRun,
 	}
 	if syncErr != nil {

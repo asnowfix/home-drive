@@ -41,6 +41,11 @@ type Change struct {
 	// Deleted is true if the file was removed on the remote.
 	Deleted bool
 
+	// ID is the Drive file ID of a Deleted change (empty otherwise). The
+	// puller uses it to refuse a deletion whose ID is not the one the
+	// journal recorded for that path (a stale ID-to-path mapping).
+	ID string
+
 	// Object holds the current state if the file still exists.
 	// Nil when Deleted is true.
 	Object *RemoteObject
