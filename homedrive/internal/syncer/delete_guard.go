@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,16 +17,22 @@ const DefaultDeleteGuardTTL = 30 * time.Second
 
 // DeleteGuard is the expected-deletion set (issue #154). Loop prevention
 // (PLAN.md §7.3) matches writes against the journal mtime, but a deletion
-// leaves nothing to match, so the watcher's remove event for a path homedrive
-// itself deleted (puller, bisync, trash move, emptied parent) would be pushed
-// back to Drive. The guard records those deletions by root-relative path, and
-// the push syncer consumes the mark when the matching remove event arrives.
+// leaves nothing to match, so the watcher's remove event for a directory
+// homedrive itself removed (puller, bisync, emptied parent) would be pushed
+// back to Drive.
 //
-// It is a LocalRemover decorator: every local deletion already goes through
-// removeLocalPath, so wrapping the remover marks all of them. A mark is
+// It is a LocalRemover decorator and marks only directories: the Trasher
+// moves files into the freedesktop.org trash, which the watcher reports as an
+// unpaired rename that the push side already drops, so a file mark would never
+// be consumed and could swallow a genuine user deletion later. A mark is
 // consumed by the first matching remove event, cleared by a create/write
-// event for the same path (the path was re-created, so a later remove is the
-// user's), and expires after the TTL.
+// event for the path or by any write homedrive itself makes there
+// (noteLocalWrite), and expires after the TTL.
+//
+// Not covered on purpose: conflict-loser retention (conflict.go,
+// bisync_retention.go) unlinks `.old.N` copies with os.Remove, outside
+// removeLocalPath. Its echoed push remove is what deletes the pruned copy
+// from Drive (#83), so it must stay unguarded.
 type DeleteGuard struct {
 	root  string
 	inner LocalRemover
@@ -56,6 +63,9 @@ func NewDeleteGuard(root string, inner LocalRemover, ttl time.Duration, now func
 // whose mark must survive).
 func (g *DeleteGuard) Remove(path string) error {
 	rel, ok := g.rel(path)
+	if info, err := os.Lstat(path); ok && (err != nil || !info.IsDir()) {
+		ok = false // only a directory removal echoes as a remove event
+	}
 	var prev time.Time
 	var had bool
 	if ok {
@@ -66,6 +76,25 @@ func (g *DeleteGuard) Remove(path string) error {
 		g.restore(rel, prev, had)
 	}
 	return err
+}
+
+// noteLocalWrite tells r, when it is a DeleteGuard, that homedrive itself
+// just created path (a file download or the directories made for it): any
+// mark on path or its ancestors is stale, because the path exists again and a
+// later remove event is the user's. The watcher drops these self-made creates
+// as self-induced, so the push side never sees them and cannot clear the marks.
+func noteLocalWrite(r LocalRemover, path string) {
+	g, ok := r.(*DeleteGuard)
+	if !ok || g == nil {
+		return
+	}
+	for p := filepath.Clean(path); ; p = filepath.Dir(p) {
+		rel, ok := g.rel(p)
+		if !ok {
+			return
+		}
+		g.Forget(rel)
+	}
 }
 
 // Expected reports whether rel (root-relative, slash-separated) was just
@@ -142,8 +171,11 @@ func (s *Syncer) skipExpectedDelete(logger *slog.Logger, ev Event) bool {
 		s.deleteGuard.Forget(ev.Path)
 	case OpRemove:
 		if s.deleteGuard.Expected(ev.Path) {
-			logger.Debug("ignoring remove event for a deletion made by homedrive: no Drive call",
-				"origin", "local")
+			logger.Info("ignoring remove event for a deletion made by homedrive: no Drive call",
+				"op", "remove_suppressed", "origin", "local")
+			s.appendAudit(AuditEntry{
+				Timestamp: s.nowFn(), Op: "remove_suppressed", Path: ev.Path, Origin: "local",
+			})
 			return true
 		}
 	}

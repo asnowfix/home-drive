@@ -178,10 +178,7 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 	a.reloadedDryRun.Store(cfg.DryRun)
 
 	a.trasher = newTrasher(cfg, journal, auditor, log)
-	if a.trasher != nil {
-		a.deleteGuard = syncer.NewDeleteGuard(cfg.LocalRoot, a.trasher,
-			syncer.DefaultDeleteGuardTTL, time.Now)
-	}
+	a.buildDeleteGuard()
 
 	if err := a.buildWatcher(); err != nil {
 		a.closeResources()
@@ -432,6 +429,17 @@ func (a *Agent) closeResources() {
 		_ = a.journal.Close()
 	}
 	closeAuditFile(a.auditFile, a.log)
+}
+
+// buildDeleteGuard wraps the trasher so the push syncer can recognise (and
+// not echo) the deletions sync makes locally (issue #154). No trasher, no
+// guard: sync then refuses to delete anything.
+func (a *Agent) buildDeleteGuard() {
+	if a.trasher == nil {
+		return
+	}
+	a.deleteGuard = syncer.NewDeleteGuard(a.cfg.LocalRoot, a.trasher,
+		syncer.DefaultDeleteGuardTTL, time.Now)
 }
 
 // localRemover returns the remover for sync's local deletions: the trash

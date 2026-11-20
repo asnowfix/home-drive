@@ -21,6 +21,9 @@ type LocalRemover interface {
 // local root: the puller's remote-folder/file deletions and bisync's
 // propagation of a Drive deletion all go through it (issue #152). A nil
 // remover refuses (ErrNoRemover); tests that really delete wire one.
+// Conflict-loser retention is the deliberate exception: it unlinks `.old.N`
+// copies directly so the DeleteGuard (#154) leaves their echo alone, which is
+// what prunes them on Drive.
 func removeLocalPath(r LocalRemover, path string) error {
 	if r == nil {
 		return ErrNoRemover
