@@ -531,7 +531,11 @@ Topic: `homedrive/<host>/<user>/events/<type>` (QoS 1, retain false).
 
 Types: `push.success`, `push.failure`, `pull.success`, `pull.failure`,
 `conflict.detected`, `conflict.resolved`, `dir_rename`, `quota.warning`,
-`quota.exhausted`, `oauth.refresh_failed`.
+`quota.exhausted`, `oauth.refresh_failed`, `bisync.delete_blocked` (topic
+`events/bisync/delete_blocked`, issue #156), `root.blocked` and `root.resumed`
+(topics `events/root/blocked` and `events/root/resumed`, issue #170: payload
+`{ts,type,reason,detail}`, `reason` is `missing`, `marker_missing`,
+`identity_mismatch` or `unreadable`).
 
 Sample payload:
 ```json

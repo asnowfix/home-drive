@@ -436,8 +436,56 @@ forced), whether or not that run had anything to delete, and releases only
 a block of the same reason with no more planned deletions than the one it
 was armed against; anything else is blocked again with its own figures. The
 journal denominator counts only rows with a sync baseline that are not
-excluded. The Changes API pull path has no count guard and no empty-root
-check of its own.
+excluded. The Changes API pull path has no count guard of its own; it is
+covered by the `local_root` guard below.
+
+### local_root guard (`.homedrive-root`)
+
+The puller, the push syncer and bisync act on `local_root`. If the data disk
+holding it is absent they would act on whatever sits at that path (the root
+filesystem, an empty mount point). Before each unit of work the agent checks
+that `local_root` resolves (symlinks followed) to a directory that carries
+the identity it recorded:
+
+- On the first start (empty journal) the agent writes a random id to
+  `<local_root>/.homedrive-root` (atomically: temp file, fsync, rename) and
+  then records it in the state DB. The marker is local bookkeeping: it is
+  never synced and a Drive entry of that name is ignored. **Do not delete
+  it.** Upgrading an existing install adopts the tree once, provided at
+  least one journaled path exists under `local_root`. `dry_run` writes
+  nothing.
+- When the check fails (reason `missing`, `marker_missing`,
+  `identity_mismatch` or `unreadable`) pulls, pushes, bisync, `ctl resync`,
+  `ctl conflict repair` (both answer 503) and the trash purge do nothing: no
+  download, no local delete or trash, no journal change, no remote
+  operation. `/status` shows `"state":"root_blocked"` and
+  `"local_root_blocked":{"reason","detail","since"}`, an ERROR log names the
+  reason, the audit log gets a `root_blocked` line (`root_resumed` on
+  recovery), and MQTT gets `events/root/blocked` / `events/root/resumed`
+  (`{ts,type:"root.blocked"|"root.resumed",reason,detail}`, not retained).
+- If the data disk is absent when the agent starts and the journal is
+  populated, the agent does not create `local_root`; it starts in a
+  blocked-only mode (HTTP, MQTT, audit and logs, no watcher, pull, push or
+  bisync) and re-checks every `pull.changes_api_interval`.
+- **Recovery is a restart.** When the check passes again the agent logs it,
+  audits `root_resumed`, publishes the event and exits non-zero, so the
+  supervisor (`Restart=on-failure`, `RestartSec=60` in the shipped units)
+  restarts it with fresh inotify watches. The old watches die with the
+  unmounted tree and are not re-armed in process. Changes made while paused
+  are picked up by the next bisync pass.
+
+If the tree is correct but the marker was lost (deleted by hand, a copy that
+skipped dotfiles), the block reason is `marker_missing` and `detail` carries
+the expected id. With the agent running, restore the marker (the agent then
+exits and restarts by itself):
+
+```bash
+printf '%s\n' <expected-id> > <local_root>/.homedrive-root
+```
+
+For `identity_mismatch` the directory belongs to another install or tree:
+fix the mount or `local_root`; do not edit the marker to match unless you
+are certain it is the right tree.
 
 ### HTTP control endpoint auth
 
