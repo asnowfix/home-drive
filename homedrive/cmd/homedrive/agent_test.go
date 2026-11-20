@@ -79,6 +79,7 @@ func newIntegrationTestAgentAudit(t *testing.T, audit syncer.AuditLogger) (*Agen
 		startTime:   time.Now(),
 	}
 	a.reloadedDryRun.Store(cfg.DryRun)
+	a.rootGuard = a.newRootGuard(journal, nil, noopPublisher{})
 
 	// Same trasher + delete guard wiring as newAgent (issue #154).
 	a.trasher = newTrasher(cfg, journal, store.NewAuditor(io.Discard, slog.Default()), slog.Default())

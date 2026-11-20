@@ -61,6 +61,10 @@ type PullerConfig struct {
 	// Nil means os.Remove.
 	Remover LocalRemover
 
+	// Gate, if non-nil, is consulted at the start of every poll cycle; a
+	// refusal skips the cycle with ErrRootBlocked (issue #170).
+	Gate RootGate
+
 	// DryRun when true logs intended actions without writing.
 	DryRun bool
 }
@@ -221,6 +225,9 @@ func (p *Puller) PollOnce(ctx context.Context) error {
 
 // poll executes one pull cycle: fetch changes, process each one.
 func (p *Puller) poll(ctx context.Context) error {
+	if err := p.gateErr(); err != nil {
+		return err
+	}
 	token, err := p.ensurePageToken(ctx)
 	if err != nil {
 		p.log.Error("failed to get page token",
@@ -262,12 +269,25 @@ func (p *Puller) poll(ctx context.Context) error {
 		}
 	}
 
-	// Persist the new token only after processing all changes.
+	// Persist the new token only after processing all changes, and only if
+	// local_root is still the synced tree: if the disk dropped mid-cycle the
+	// changes must be replayed after recovery, not skipped (issue #170).
+	if err := p.gateErr(); err != nil {
+		return err
+	}
 	if err := p.persistToken(ctx, changes.NextPageToken); err != nil {
 		return err
 	}
 
 	return lastErr
+}
+
+// gateErr returns nil when the root gate (if any) lets the cycle act.
+func (p *Puller) gateErr() error {
+	if p.cfg.Gate == nil {
+		return nil
+	}
+	return p.cfg.Gate.Check()
 }
 
 // ensurePageToken retrieves the persisted page token from the store,

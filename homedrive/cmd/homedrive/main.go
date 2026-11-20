@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -36,6 +37,10 @@ func main() {
 
 	root := newRootCmd(logLevel)
 	if err := root.ExecuteContext(context.Background()); err != nil {
+		if errors.Is(err, ErrRootResumed) {
+			slog.Warn("planned restart", "error", err) // still exits non-zero for Restart=on-failure
+			os.Exit(1)
+		}
 		slog.Error("fatal error", "error", err)
 		os.Exit(1)
 	}

@@ -51,6 +51,14 @@ type Agent struct {
 
 	mqttReal *mqtt.Client // non-nil only when MQTT is enabled and connected
 
+	// rootGuard pauses pull, push and bisync while local_root is missing or
+	// is not the tree being synced (issue #170).
+	rootGuard *syncer.RootGuard
+	// rootResumed is set when the guard passes again after a block; cancelRun
+	// (set by Run) then stops the agent, which returns ErrRootResumed.
+	rootResumed atomic.Bool
+	cancelRun   context.CancelFunc
+
 	watch      *watcher.Watcher
 	pushSyncer *syncer.Syncer
 	puller     *syncer.Puller
@@ -112,16 +120,9 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 		cfg.DryRun = true
 	}
 
-	if err := os.MkdirAll(filepath.Dir(cfg.State.Path), 0o755); err != nil {
-		return nil, fmt.Errorf("create state dir: %w", err)
-	}
-	if err := os.MkdirAll(cfg.LocalRoot, 0o755); err != nil {
-		return nil, fmt.Errorf("create local root: %w", err)
-	}
-
-	journal, err := store.OpenJournal(cfg.State.Path, log)
+	journal, err := openState(cfg, log)
 	if err != nil {
-		return nil, fmt.Errorf("open journal: %w", err)
+		return nil, err
 	}
 
 	auditAdapter, auditor, rawAudit, auditFile, err := buildAuditLog(cfg, log)
@@ -176,6 +177,8 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 		pushRenames:      make(chan syncer.DirRename, cfg.Push.Workers*4+4),
 	}
 	a.reloadedDryRun.Store(cfg.DryRun)
+
+	a.rootGuard = a.newRootGuard(journal, auditor, pub)
 
 	a.trasher = newTrasher(cfg, journal, auditor, log)
 	a.buildDeleteGuard()
@@ -310,6 +313,7 @@ func (a *Agent) buildPushSyncer(pub syncer.Publisher, audit syncer.AuditLogger) 
 		pub,
 		a.log,
 		syncer.WithBisyncMutex(a.bisyncMu),
+		syncer.WithRootGate(a.rootGuard),
 		syncer.WithDeleteGuard(a.deleteGuard),
 	)
 }
@@ -332,6 +336,7 @@ func (a *Agent) buildPuller(pub syncer.Publisher, audit syncer.AuditLogger, audi
 			Auditor:        auditor,
 			Exclude:        a.cfg.Watcher.Exclude,
 			Remover:        a.localRemover(),
+			Gate:           a.rootGuard,
 			DryRun:         a.cfg.DryRun,
 		},
 		a.rfs,
@@ -372,6 +377,7 @@ func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer, auditor *s
 		Logger:  a.log,
 		Mu:      a.bisyncMu,
 		Auditor: auditor,
+		Gate:    a.rootGuard,
 	})
 	a.bisync = b
 }

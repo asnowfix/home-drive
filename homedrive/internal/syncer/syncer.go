@@ -56,6 +56,10 @@ type Syncer struct {
 
 	// nowFn is injectable for testing; defaults to time.Now.
 	nowFn func() time.Time
+
+	// rootGate, if set, vetoes push work while local_root is not the synced
+	// tree (issue #170).
+	rootGate RootGate
 }
 
 // Option configures a Syncer.
@@ -216,14 +220,14 @@ func (s *Syncer) handleEvent(ctx context.Context, ev Event) {
 	defer s.bisyncMu.RUnlock()
 
 	var obj *RemoteObject
-	err := retryFunc(ctx, s.cfg.Retry, logger, ev.Op.String(),
-		s.sleepFn, func(ctx context.Context) error {
-			var execErr error
-			obj, execErr = s.execEvent(ctx, ev)
-			return execErr
-		},
-	)
-
+	blocked, err := s.retryGated(ctx, logger, ev.Op.String(), func(ctx context.Context) error {
+		var execErr error
+		obj, execErr = s.execEvent(ctx, ev)
+		return execErr
+	})
+	if blocked {
+		return // nothing was attempted: no journal change, no failure event
+	}
 	elapsed := s.nowFn().Sub(start)
 	s.recordResult(ctx, ev.Path, ev.Op.String(), obj, err, elapsed)
 }
@@ -273,11 +277,12 @@ func (s *Syncer) handleDirRename(ctx context.Context, dr DirRename) {
 	s.bisyncMu.RLock()
 	defer s.bisyncMu.RUnlock()
 
-	err := retryFunc(ctx, s.cfg.Retry, logger, "dir_rename",
-		s.sleepFn, func(ctx context.Context) error {
-			return s.remote.MoveDir(ctx, dr.From, dr.To)
-		},
-	)
+	blocked, err := s.retryGated(ctx, logger, "dir_rename", func(ctx context.Context) error {
+		return s.remote.MoveDir(ctx, dr.From, dr.To)
+	})
+	if blocked {
+		return
+	}
 
 	elapsed := s.nowFn().Sub(start)
 
@@ -313,6 +318,11 @@ func (s *Syncer) handleDirRename(ctx context.Context, dr DirRename) {
 		return
 	}
 
+	s.dirRenameFailed(logger, dr, err, elapsed)
+}
+
+// dirRenameFailed reports a directory rename that failed after its retries.
+func (s *Syncer) dirRenameFailed(logger *slog.Logger, dr DirRename, err error, elapsed time.Duration) {
 	logger.Error("directory rename failed",
 		"error", err.Error(),
 		"duration_ms", elapsed.Milliseconds(),

@@ -40,7 +40,15 @@ func (a *Agent) Resume(_ context.Context) error {
 // ForceResync triggers an immediate bisync pass, bypassing the hourly
 // ticker. Returns syncer.ErrBisyncRunning if one is already in progress.
 func (a *Agent) ForceResync(ctx context.Context) error {
-	return a.bisync.ForceRun(ctx)
+	return mapRootBlocked(a.bisync.ForceRun(ctx))
+}
+
+// mapRootBlocked turns the syncer's root-guard refusal into the HTTP layer's.
+func mapRootBlocked(err error) error {
+	if errors.Is(err, syncer.ErrRootBlocked) {
+		return fmt.Errorf("%w: %w", httpctl.ErrLocalRootBlocked, err)
+	}
+	return err
 }
 
 // AllowNextDeletes arms the one-shot override of the bisync mass-deletion
@@ -83,7 +91,7 @@ func (a *Agent) bisyncDeleteBlock() *httpctl.DeleteBlock {
 func (a *Agent) RunChainRepair(ctx context.Context, dryRun bool) (httpctl.RepairReport, error) {
 	report, err := a.bisync.RunChainRepair(ctx, dryRun)
 	if err != nil {
-		return httpctl.RepairReport{}, err
+		return httpctl.RepairReport{}, mapRootBlocked(err)
 	}
 
 	links := make([]httpctl.RepairedLink, 0, len(report.Links))
@@ -135,6 +143,11 @@ func (a *Agent) Status(ctx context.Context) (httpctl.StatusInfo, error) {
 		state = "paused"
 	}
 
+	rootBlock := a.localRootBlock()
+	if rootBlock != nil {
+		state = "root_blocked"
+	}
+
 	return httpctl.StatusInfo{
 		State:         state,
 		Version:       a.version,
@@ -150,7 +163,21 @@ func (a *Agent) Status(ctx context.Context) (httpctl.StatusInfo, error) {
 		UptimeSeconds: int64(time.Since(a.startTime).Seconds()),
 
 		BisyncDeleteBlocked: a.bisyncDeleteBlock(),
+		LocalRootBlocked:    rootBlock,
 	}, nil
+}
+
+// localRootBlock maps the root guard's current block onto the /status shape.
+func (a *Agent) localRootBlock() *httpctl.RootBlock {
+	blk := a.rootGuard.Block()
+	if blk == nil {
+		return nil
+	}
+	return &httpctl.RootBlock{
+		Reason: blk.Reason,
+		Detail: blk.Detail,
+		Since:  blk.Since.UTC().Format(time.RFC3339),
+	}
 }
 
 // quotaUsedPct performs a live quota lookup for /status. Errors are

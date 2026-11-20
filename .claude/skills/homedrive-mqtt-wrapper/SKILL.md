@@ -78,7 +78,10 @@ Topic: `homedrive/<host>/<user>/events/<type>` (QoS 1, retain false).
 
 Allowed types: `push.success`, `push.failure`, `pull.success`,
 `pull.failure`, `conflict.detected`, `conflict.resolved`, `dir_rename`,
-`quota.warning`, `quota.exhausted`, `oauth.refresh_failed`.
+`quota.warning`, `quota.exhausted`, `oauth.refresh_failed`,
+`bisync.delete_blocked` (topic `events/bisync/delete_blocked`),
+`root.blocked` / `root.resumed` (topics `events/root/blocked` and
+`events/root/resumed`).
 
 JSON payload format includes always: `ts` (ISO8601 UTC), `type`. Other
 fields are type-specific. See PLAN.md §9.2.

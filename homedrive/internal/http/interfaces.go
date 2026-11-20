@@ -26,6 +26,18 @@ type StatusInfo struct {
 	// vetoing the deletions of the last run that planned any (issue #156).
 	// Under status v2 (#144) it maps to bisync.delete_blocked.
 	BisyncDeleteBlocked *DeleteBlock `json:"bisync_delete_blocked,omitempty"`
+
+	// LocalRootBlocked is set while pulls, pushes and bisync are paused
+	// because local_root is missing or is not the synced tree (issue #170);
+	// State is then "root_blocked".
+	LocalRootBlocked *RootBlock `json:"local_root_blocked,omitempty"`
+}
+
+// RootBlock says why local_root is not being synced.
+type RootBlock struct {
+	Reason string `json:"reason"`
+	Detail string `json:"detail,omitempty"`
+	Since  string `json:"since"`
 }
 
 // DeleteBlock describes deletions vetoed by the bisync mass-deletion guard.
@@ -35,6 +47,10 @@ type DeleteBlock struct {
 	Reason    string `json:"reason"`
 	Since     string `json:"since"`
 }
+
+// ErrLocalRootBlocked is returned by Resyncable and ChainRepairer while
+// local_root is not the synced tree (issue #170); the endpoints answer 503.
+var ErrLocalRootBlocked = errors.New("local_root is not the synced tree: sync is paused")
 
 // ErrNothingBlocked is returned by DeleteOverrider.AllowNextDeletes when no
 // bisync deletions are blocked; the endpoint answers 409.
