@@ -104,7 +104,9 @@ func TestSyncer_RootGate_NoActionWhileBlocked(t *testing.T) {
 			remote.Seed("a.txt", subtreeT0, "m")
 			st := newMockStore()
 			putBaseline(t, st, "a.txt", "id-a")
-			s := New(Config{LocalRoot: e.root}, remote, st, newMockAuditLogger(),
+			cfg := DefaultConfig()
+			cfg.LocalRoot = e.root
+			s := New(cfg, remote, st, newMockAuditLogger(),
 				newMockPublisher(), newDiscardLogger(), WithSleepFunc(noSleep), WithRootGate(e.guard))
 
 			events := make(chan Event, 4)

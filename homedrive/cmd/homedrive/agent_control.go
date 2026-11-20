@@ -135,6 +135,11 @@ func (a *Agent) Status(ctx context.Context) (httpctl.StatusInfo, error) {
 		state = "paused"
 	}
 
+	rootBlock := a.localRootBlock()
+	if rootBlock != nil {
+		state = "root_blocked"
+	}
+
 	return httpctl.StatusInfo{
 		State:         state,
 		Version:       a.version,
@@ -150,7 +155,21 @@ func (a *Agent) Status(ctx context.Context) (httpctl.StatusInfo, error) {
 		UptimeSeconds: int64(time.Since(a.startTime).Seconds()),
 
 		BisyncDeleteBlocked: a.bisyncDeleteBlock(),
+		LocalRootBlocked:    rootBlock,
 	}, nil
+}
+
+// localRootBlock maps the root guard's current block onto the /status shape.
+func (a *Agent) localRootBlock() *httpctl.RootBlock {
+	blk := a.rootGuard.Block()
+	if blk == nil {
+		return nil
+	}
+	return &httpctl.RootBlock{
+		Reason: blk.Reason,
+		Detail: blk.Detail,
+		Since:  blk.Since.UTC().Format(time.RFC3339),
+	}
 }
 
 // quotaUsedPct performs a live quota lookup for /status. Errors are

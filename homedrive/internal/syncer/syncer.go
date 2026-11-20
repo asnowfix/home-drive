@@ -52,6 +52,10 @@ type Syncer struct {
 
 	// nowFn is injectable for testing; defaults to time.Now.
 	nowFn func() time.Time
+
+	// rootGate, if set, vetoes push work while local_root is not the synced
+	// tree (issue #170).
+	rootGate RootGate
 }
 
 // Option configures a Syncer.
@@ -202,6 +206,10 @@ func (s *Syncer) handleEvent(ctx context.Context, ev Event) {
 		return
 	}
 
+	if s.rootBlocked(logger) {
+		return
+	}
+
 	if s.cfg.DryRun {
 		s.logDryRun(logger, ev)
 		return
@@ -259,6 +267,10 @@ func (s *Syncer) execEvent(ctx context.Context, ev Event) (*RemoteObject, error)
 func (s *Syncer) handleDirRename(ctx context.Context, dr DirRename) {
 	start := s.nowFn()
 	logger := s.logger.With("op", "dir_rename", "from", dr.From, "to", dr.To)
+
+	if s.rootBlocked(logger) {
+		return
+	}
 
 	if s.cfg.DryRun {
 		s.logDryRunDirRename(logger, dr)

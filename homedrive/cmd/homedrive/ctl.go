@@ -96,6 +96,11 @@ func ctlRunStatus(cmd *cobra.Command) error {
 			"planned", blk.Planned, "threshold", blk.Threshold,
 			"reason", blk.Reason, "since", blk.Since)
 	}
+	if blk := info.LocalRootBlocked; blk != nil {
+		slog.Error("pulls, pushes and bisync paused: local_root is not the synced tree; "+
+			"they resume by themselves once it is back",
+			"reason", blk.Reason, "detail", blk.Detail, "since", blk.Since)
+	}
 	return nil
 }
 

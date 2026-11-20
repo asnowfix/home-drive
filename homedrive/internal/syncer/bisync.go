@@ -46,6 +46,9 @@ type Bisync struct {
 	// (PLAN.md §11.5). May be nil to disable.
 	auditor *Auditor
 
+	// gate vetoes a pass while local_root is not the synced tree (#170).
+	gate RootGate
+
 	// lastSweep is when the periodic retention sweep last ran. Only
 	// read/written from execute(), which already holds b.mu exclusively,
 	// so it needs no separate lock.
@@ -118,6 +121,10 @@ type BisyncOpts struct {
 	// same *store.Auditor instance the push/pull paths use for
 	// per-file AuditEntry lines.
 	Auditor *Auditor
+
+	// Gate, if non-nil, is consulted before every pass; a refusal skips the
+	// pass entirely (issue #170).
+	Gate RootGate
 }
 
 // NewBisync creates a new bisync runner. The returned ForceCh can be
@@ -153,6 +160,7 @@ func NewBisync(opts BisyncOpts) (*Bisync, chan<- struct{}) {
 		mu:      mu,
 		forceCh: forceCh,
 		auditor: opts.Auditor,
+		gate:    opts.Gate,
 	}
 	return b, forceCh
 }
@@ -224,6 +232,13 @@ func (b *Bisync) execute(ctx context.Context) {
 		b.running = false
 		b.runMu.Unlock()
 	}()
+
+	if b.gate != nil {
+		if err := b.gate.Check(); err != nil {
+			b.log.Debug("bisync skipped: local_root is not the synced tree", "error", err)
+			return
+		}
+	}
 
 	start := b.clock.Now()
 

@@ -28,6 +28,10 @@ func (a *Agent) Run(ctx context.Context) error {
 		"dry_run", a.cfg.DryRun,
 	)
 
+	// Startup check (issue #170): records the identity on a first install and
+	// reports a missing or foreign local_root before any component acts.
+	_ = a.rootGuard.Check()
+
 	var wg sync.WaitGroup
 	a.startComponents(ctx, &wg)
 
@@ -203,6 +207,9 @@ func (a *Agent) pollOnceGuarded(ctx context.Context) {
 	defer a.bisyncMu.RUnlock()
 
 	err := a.puller.PollOnce(ctx)
+	if errors.Is(err, syncer.ErrRootBlocked) {
+		return // paused: the guard already logged, audited and published it
+	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		a.log.Error("poll error", "error", err)
 		return

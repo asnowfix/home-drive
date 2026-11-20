@@ -231,7 +231,7 @@ func TestRootGuard_ReportsOnceAndRecovers(t *testing.T) {
 			t.Fatalf("cycle %d: want blocked, got %v", i, err)
 		}
 	}
-	blocked := e.pub.getMessagesByTopic("/events/root/blocked")
+	blocked := e.pub.getMessagesByTopic(e.pub.Topic("events", "root", "blocked"))
 	if len(blocked) != 1 {
 		t.Fatalf("want exactly 1 blocked event for 3 blocked cycles, got %d", len(blocked))
 	}
@@ -260,7 +260,7 @@ func TestRootGuard_ReportsOnceAndRecovers(t *testing.T) {
 	if e.guard.Block() != nil {
 		t.Error("block must clear on recovery")
 	}
-	if n := len(e.pub.getMessagesByTopic("/events/root/resumed")); n != 1 {
+	if n := len(e.pub.getMessagesByTopic(e.pub.Topic("events", "root", "resumed"))); n != 1 {
 		t.Errorf("want 1 resumed event, got %d", n)
 	}
 	if !strings.Contains(e.audit.String(), `"op":"root_resumed"`) {

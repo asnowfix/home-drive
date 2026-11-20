@@ -41,6 +41,15 @@ func IsTrash(relPath string) bool {
 	return true
 }
 
+// RootMarker is the name of the identity file homedrive keeps at the top of
+// local_root (issue #170). It is local bookkeeping and never synced.
+const RootMarker = ".homedrive-root"
+
+// IsRootMarker reports whether relPath is the root marker file itself.
+func IsRootMarker(relPath string) bool {
+	return strings.TrimPrefix(relPath, "/") == RootMarker
+}
+
 // Excluded reports whether relPath matches any of the given doublestar glob
 // patterns. relPath must be forward-slash separated and relative to the
 // sync root; a leading slash is tolerated and stripped.
@@ -56,10 +65,11 @@ func IsTrash(relPath string) bool {
 //     not just its contents (".git/HEAD").
 //
 // Independently of patterns, a freedesktop.org Trash directory directly under
-// the sync root (see IsTrash) is always excluded (issue #155).
+// the sync root (see IsTrash) and the root marker (see RootMarker) are always
+// excluded (issues #155, #170).
 func Excluded(patterns []string, relPath string) bool {
 	relPath = strings.TrimPrefix(relPath, "/")
-	if IsTrash(relPath) {
+	if IsTrash(relPath) || IsRootMarker(relPath) {
 		return true
 	}
 

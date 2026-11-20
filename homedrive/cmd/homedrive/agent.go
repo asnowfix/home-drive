@@ -51,6 +51,10 @@ type Agent struct {
 
 	mqttReal *mqtt.Client // non-nil only when MQTT is enabled and connected
 
+	// rootGuard pauses pull, push and bisync while local_root is missing or
+	// is not the tree being synced (issue #170).
+	rootGuard *syncer.RootGuard
+
 	watch      *watcher.Watcher
 	pushSyncer *syncer.Syncer
 	puller     *syncer.Puller
@@ -172,6 +176,15 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 		pushRenames:      make(chan syncer.DirRename, cfg.Push.Workers*4+4),
 	}
 	a.reloadedDryRun.Store(cfg.DryRun)
+
+	a.rootGuard = syncer.NewRootGuard(syncer.RootGuardConfig{
+		Root:     cfg.LocalRoot,
+		Identity: journal,
+		Auditor:  auditor,
+		MQTT:     pub,
+		Log:      log,
+		DryRun:   cfg.DryRun,
+	})
 
 	a.trasher = newTrasher(cfg, journal, auditor, log)
 
@@ -305,6 +318,7 @@ func (a *Agent) buildPushSyncer(pub syncer.Publisher, audit syncer.AuditLogger) 
 		pub,
 		a.log,
 		syncer.WithBisyncMutex(a.bisyncMu),
+		syncer.WithRootGate(a.rootGuard),
 	)
 }
 
@@ -326,6 +340,7 @@ func (a *Agent) buildPuller(pub syncer.Publisher, audit syncer.AuditLogger, audi
 			Auditor:        auditor,
 			Exclude:        a.cfg.Watcher.Exclude,
 			Remover:        a.trasher,
+			Gate:           a.rootGuard,
 			DryRun:         a.cfg.DryRun,
 		},
 		a.rfs,
@@ -366,6 +381,7 @@ func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer, auditor *s
 		Logger:  a.log,
 		Mu:      a.bisyncMu,
 		Auditor: auditor,
+		Gate:    a.rootGuard,
 	})
 	a.bisync = b
 }

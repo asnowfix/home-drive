@@ -61,6 +61,10 @@ type PullerConfig struct {
 	// Nil means os.Remove.
 	Remover LocalRemover
 
+	// Gate, if non-nil, is consulted at the start of every poll cycle; a
+	// refusal skips the cycle with ErrRootBlocked (issue #170).
+	Gate RootGate
+
 	// DryRun when true logs intended actions without writing.
 	DryRun bool
 }
@@ -217,6 +221,11 @@ func (p *Puller) PollOnce(ctx context.Context) error {
 
 // poll executes one pull cycle: fetch changes, process each one.
 func (p *Puller) poll(ctx context.Context) error {
+	if p.cfg.Gate != nil {
+		if err := p.cfg.Gate.Check(); err != nil {
+			return err
+		}
+	}
 	token, err := p.ensurePageToken(ctx)
 	if err != nil {
 		p.log.Error("failed to get page token",
