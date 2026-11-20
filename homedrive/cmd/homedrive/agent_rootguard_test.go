@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,7 +23,7 @@ import (
 // newBlockedRootAgent returns an Agent whose root guard is blocked: the
 // journal says a tree was synced and local_root is gone. disk is where the
 // tree went; renaming it back to a.cfg.LocalRoot brings the disk back.
-func newBlockedRootAgent(t *testing.T) (a *Agent, disk string, logs *bytes.Buffer) {
+func newBlockedRootAgent(t *testing.T) (a *Agent, disk string, logs *syncBuf) {
 	t.Helper()
 	a, _ = newIntegrationTestAgent(t)
 	root := a.cfg.LocalRoot
@@ -42,7 +43,7 @@ func newBlockedRootAgent(t *testing.T) (a *Agent, disk string, logs *bytes.Buffe
 	if err := a.rootGuard.Check(); !errors.Is(err, syncer.ErrRootBlocked) {
 		t.Fatalf("guard should be blocked, got %v", err)
 	}
-	logs = &bytes.Buffer{}
+	logs = &syncBuf{}
 	a.log = slog.New(slog.NewJSONHandler(logs, nil))
 	return a, disk, logs
 }
@@ -89,16 +90,17 @@ func TestAgent_RootGuardWiring(t *testing.T) {
 			}
 		}},
 		{"push", func(t *testing.T, a *Agent, remote *fakeRemoteFS) {
-			events := make(chan syncer.Event, 1)
-			renames := make(chan syncer.DirRename)
-			events <- syncer.Event{Path: "a.txt", Op: syncer.OpWrite, At: time.Now()}
+			// A dir rename is a remote MoveDir that needs no local file.
+			events := make(chan syncer.Event)
+			renames := make(chan syncer.DirRename, 1)
+			renames <- syncer.DirRename{From: "d1", To: "d2", At: time.Now()}
 			close(events)
 			close(renames)
 			a.pushSyncer.Run(context.Background(), events, renames)
 			remote.mu.Lock()
 			defer remote.mu.Unlock()
-			if len(remote.copyCalls) != 0 {
-				t.Errorf("push reached the remote while blocked: %v", remote.copyCalls)
+			if len(remote.moveDirCalls) != 0 {
+				t.Errorf("push reached the remote while blocked: %v", remote.moveDirCalls)
 			}
 		}},
 		{"force_resync", func(t *testing.T, a *Agent, _ *fakeRemoteFS) {
@@ -191,19 +193,22 @@ func TestEnsureLocalRoot_Cases(t *testing.T) {
 // data disk is absent at start. The agent reports instead of crash-looping,
 // starts nothing, and exits non-zero once the disk is back.
 func TestAgent_Run_BlockedOnlyThenExitsOnRecovery(t *testing.T) {
-	a, disk, _ := newBlockedRootAgent(t)
+	a, disk, logs := newBlockedRootAgent(t)
 	a.cfg.Pull.ChangesAPIInterval = config.Duration{Duration: 20 * time.Millisecond}
 	done := runAgentUntilExit(t, a)
 
 	deadline := time.Now().Add(3 * time.Second)
-	for a.localRootBlock() == nil { // Status itself races with Run's startTime write
+	for !strings.Contains(logs.String(), "blocked-only mode") {
 		if time.Now().After(deadline) {
-			t.Fatal("the guard never reported the block")
+			t.Fatalf("the startup check did not put the agent in blocked-only mode: %s", logs.String())
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	if a.lastPullUnixNano.Load() != 0 {
 		t.Error("the pull loop ran in blocked-only mode")
+	}
+	if !strings.Contains(logs.String(), "blocked-only mode") {
+		t.Errorf("the startup check did not put the agent in blocked-only mode: %s", logs.String())
 	}
 
 	if err := os.Rename(disk, a.cfg.LocalRoot); err != nil {
@@ -256,4 +261,22 @@ func runAgentUntilExit(t *testing.T, a *Agent) <-chan error {
 	done := make(chan error, 1)
 	go func() { done <- a.Run(ctx) }()
 	return done
+}
+
+// syncBuf is a goroutine-safe log sink.
+type syncBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuf) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuf) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
