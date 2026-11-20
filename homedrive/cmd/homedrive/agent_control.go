@@ -15,6 +15,7 @@ import (
 
 	"github.com/asnowfix/home-drive/homedrive/internal/config"
 	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
+	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
 )
 
 // Pause stops the watcher pump from forwarding events to the push worker
@@ -49,7 +50,12 @@ func (a *Agent) AllowNextDeletes(_ context.Context) error {
 	if a.bisync == nil {
 		return errors.New("bisync not running")
 	}
-	a.bisync.AllowNextDeletes()
+	if err := a.bisync.AllowNextDeletes(); err != nil {
+		if errors.Is(err, syncer.ErrNoDeleteBlock) {
+			return httpctl.ErrNothingBlocked
+		}
+		return err
+	}
 	return nil
 }
 

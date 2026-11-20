@@ -357,13 +357,17 @@ and vetoes all of them when
 - the local walk, or the Drive listing, is empty while `n > 0` (the journal
   is non-empty by construction): an unmounted or emptied `local_root`, or a
   replaced root folder or an rclone remote re-pointed to another account.
-  This blocks whatever the count.
+  This blocks whatever the count, and **aborts the whole bisync pass**
+  (no pushes, pulls or conflict handling either), so the agent cannot
+  repopulate an empty side or push to a wrong remote and let the next run
+  slip under the floor. The block persists until the operator overrides it
+  or the side really holds files again.
 
 Runs with 10 deletions or fewer are blocked only by the empty-side rule. A
 blocked run still pushes, pulls and resolves conflicts, and leaves the
 journal untouched for the vetoed paths, so the next run plans the same
 deletions. It writes a `delete_blocked` audit line (planned count, threshold,
-reason, first 20 paths), publishes `<base_topic>/.../events/bisync/delete_blocked`
+reason, first 20 paths), publishes `<base_topic>/<host>/<user>/events/bisync/delete_blocked`
 (`{ts,type,planned,threshold,reason,paths,dry_run}`; `reason` is `threshold`,
 `empty_local` or `empty_remote`) and shows `bisync_delete_blocked`
 (`planned`, `threshold`, `reason`, `since`) in `/status` until a run is no
@@ -376,9 +380,14 @@ homedrive ctl allow-deletes   # POST /bisync/allow-deletes (loopback, like /resy
 homedrive ctl resync
 ```
 
-The override is consumed by the next bisync run (hourly or forced), whether
-or not that run had anything to delete, and it also lifts the empty-side
-rule. The Changes API pull path has no count guard.
+The override can only be armed while a run is blocked (otherwise the
+endpoint answers 409). It is consumed by the next bisync run (hourly or
+forced), whether or not that run had anything to delete, and releases only
+a block of the same reason with no more planned deletions than the one it
+was armed against; anything else is blocked again with its own figures. The
+journal denominator counts only rows with a sync baseline that are not
+excluded. The Changes API pull path has no count guard and no empty-root
+check of its own.
 
 ### HTTP control endpoint auth
 

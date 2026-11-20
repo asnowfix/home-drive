@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -72,6 +73,23 @@ func seedBystander(t *testing.T, root string, remote *mockRemoteFS, journal *moc
 	createLocalFile(t, root, "bystander.txt", deleteT0)
 	remote.Seed("bystander.txt", deleteT0, "m0")
 	seedBaseline(journal, "bystander.txt")
+}
+
+// arm arms the one-shot override, which must be accepted.
+func (w *guardWorld) arm() {
+	w.t.Helper()
+	if err := w.b.AllowNextDeletes(); err != nil {
+		w.t.Fatalf("AllowNextDeletes: %v", err)
+	}
+}
+
+// dropRemote removes files from the mock Drive.
+func (w *guardWorld) dropRemote(prefix string, n int) {
+	w.remote.mu.Lock()
+	defer w.remote.mu.Unlock()
+	for i := 0; i < n; i++ {
+		delete(w.remote.files, guardName(prefix, i))
+	}
 }
 
 func (w *guardWorld) run() { w.b.execute(context.Background()) }
@@ -304,7 +322,7 @@ func TestBisyncGuard_OneShotOverride(t *testing.T) {
 	w.run()
 	assertBlocked(t, w, 60, 16, BlockThreshold)
 
-	w.b.AllowNextDeletes()
+	w.arm()
 	w.run()
 	if got := w.localFiles(); got != 100 {
 		t.Errorf("local files after override = %d, want 100 (60 deleted)", got)
@@ -330,7 +348,9 @@ func TestBisyncGuard_OverrideEmptySideAndExpiry(t *testing.T) {
 	t.Run("lifts_empty_remote", func(t *testing.T) {
 		w := newGuardWorld(t, false)
 		w.goneFromDrive("f", 3)
-		w.b.AllowNextDeletes()
+		w.run()
+		assertBlocked(t, w, 3, 0, BlockEmptyRemote)
+		w.arm()
 
 		w.run()
 
@@ -341,13 +361,19 @@ func TestBisyncGuard_OverrideEmptySideAndExpiry(t *testing.T) {
 	t.Run("consumed_by_a_run_without_deletions", func(t *testing.T) {
 		w := newGuardWorld(t, false)
 		w.synced("keep", 30)
-		w.b.AllowNextDeletes()
-		w.run() // nothing to delete: override spent here
 		w.goneFromDrive("gd", 15)
+		w.run()
+		assertBlocked(t, w, 15, 10, BlockThreshold)
+		w.arm()
+		for i := 0; i < 15; i++ { // Drive got the files back: nothing to delete
+			w.remote.Seed(guardName("gd", i), deleteT0, "m0")
+		}
+		w.run() // override spent here
+		w.goneFromDrive("hd", 15)
 
 		w.run()
 
-		assertBlocked(t, w, 15, 10, BlockThreshold)
+		assertBlockedAgain(t, w, 15, 10, BlockThreshold)
 	})
 }
 
@@ -373,10 +399,13 @@ func TestBisyncGuard_DryRun(t *testing.T) {
 		}
 	}
 
-	w.b.AllowNextDeletes()
+	w.arm()
 	w.run()
-	if !w.b.allowOnce {
+	if w.b.allow == nil {
 		t.Error("dry-run consumed the override")
+	}
+	if w.b.DeleteBlock() == nil {
+		t.Error("dry-run honouring the override cleared the /status block")
 	}
 	if len(w.blockedAudit()) != 1 {
 		t.Error("dry-run with the override armed still reported a block")
@@ -405,4 +434,110 @@ func TestBisyncGuard_DefaultsWhenUnset(t *testing.T) {
 	if c, p := b.maxDelete(); c != 5 || p != 3 {
 		t.Errorf("configured = %d, %d, want 5, 3", c, p)
 	}
+}
+
+// assertBlockedAgain checks the current status block after a later run.
+func assertBlockedAgain(t *testing.T, w *guardWorld, planned, threshold int, reason string) {
+	t.Helper()
+	blk := w.b.DeleteBlock()
+	if blk == nil || blk.Planned != planned || blk.Threshold != threshold || blk.Reason != reason {
+		t.Errorf("status block = %+v, want planned %d threshold %d reason %s", blk, planned, threshold, reason)
+	}
+}
+
+// G1: conflict-loser rows and other baseline-less rows cannot become
+// deletions, so they must not dilute the percentage bound.
+func TestBisyncGuard_LosersDoNotDiluteDenominator(t *testing.T) {
+	w := newGuardWorld(t, false)
+	w.synced("keep", 79)
+	w.goneFromDrive("gd", 21) // 21% of the 100 real files
+	for i := 0; i < 200; i++ {
+		w.journal.Seed(JournalEntry{
+			Path: guardName("loser", i) + ".old.1", RemoteMtime: deleteT0, RemoteMD5: "m0",
+		})
+	}
+
+	w.run()
+
+	assertBlocked(t, w, 21, 10, BlockThreshold)
+	if got := w.localFiles(); got != 100 {
+		t.Errorf("local files = %d, want 100 untouched", got)
+	}
+}
+
+// G2: an empty-side block aborts the whole pass. Otherwise run 1 would pull
+// into the empty tree and run 2's smaller plan would slip under the floor.
+func TestBisyncGuard_EmptySideAbortsWholePass(t *testing.T) {
+	t.Run("empty_local_stays_blocked_on_second_run", func(t *testing.T) {
+		w := newGuardWorld(t, false)
+		w.goneLocally("f", 9)
+		w.remote.Seed("unjournaled.txt", deleteT0, "mx")
+
+		w.run()
+		w.run()
+
+		assertBlockedAgain(t, w, 9, 0, BlockEmptyLocal)
+		if n := len(w.remote.getDeleteCalls()); n != 0 {
+			t.Errorf("remote deletes = %d, want 0", n)
+		}
+		if len(w.remote.downloadedFiles) != 0 || w.localFiles() != 0 {
+			t.Errorf("pulled %d files into an empty tree, want none", len(w.remote.downloadedFiles))
+		}
+	})
+	t.Run("empty_remote_pushes_nothing", func(t *testing.T) {
+		w := newGuardWorld(t, false)
+		w.goneFromDrive("f", 9)
+		createLocalFile(t, w.root, "unjournaled.txt", deleteT0)
+
+		w.run()
+
+		if w.remote.CopyCount() != 0 {
+			t.Errorf("pushed %d files to an empty remote, want none", w.remote.CopyCount())
+		}
+		if got := w.localFiles(); got != 10 {
+			t.Errorf("local files = %d, want 10 untouched", got)
+		}
+	})
+}
+
+// G3: the override is tied to the block it releases.
+func TestBisyncGuard_OverrideTiedToBlock(t *testing.T) {
+	t.Run("refused_when_nothing_blocked", func(t *testing.T) {
+		w := newGuardWorld(t, false)
+		w.synced("keep", 30)
+		w.run()
+		if err := w.b.AllowNextDeletes(); !errors.Is(err, ErrNoDeleteBlock) {
+			t.Errorf("AllowNextDeletes = %v, want ErrNoDeleteBlock", err)
+		}
+	})
+	t.Run("larger_plan_blocked_again", func(t *testing.T) {
+		w := newGuardWorld(t, false)
+		w.synced("keep", 100)
+		w.goneFromDrive("a", 30)
+		w.run()
+		w.arm()
+		w.goneFromDrive("b", 10) // plan grows from 30 to 40
+
+		w.run()
+
+		assertBlockedAgain(t, w, 40, 14, BlockThreshold)
+		if got := w.localFiles(); got != 140 {
+			t.Errorf("local files = %d, want 140 untouched", got)
+		}
+	})
+	t.Run("different_reason_blocked_again", func(t *testing.T) {
+		w := newGuardWorld(t, false)
+		w.synced("keep", 100)
+		w.goneFromDrive("a", 30)
+		w.run()
+		w.arm()
+		w.dropRemote("keep", 100) // the remote then comes back empty
+
+		w.run()
+
+		assertBlockedAgain(t, w, 130, 0, BlockEmptyRemote)
+		if got := w.localFiles(); got != 130 {
+			t.Errorf("local files = %d, want 130 untouched", got)
+		}
+	})
 }

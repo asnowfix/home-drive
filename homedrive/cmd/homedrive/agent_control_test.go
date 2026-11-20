@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	httpctl "github.com/asnowfix/home-drive/homedrive/internal/http"
 	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
 )
@@ -61,8 +63,9 @@ func TestAgent_ForceResync_SucceedsOnce(t *testing.T) {
 func TestAgent_AllowNextDeletes_AndStatusBlock(t *testing.T) {
 	a := newBisyncTestAgent(t)
 
-	if err := a.AllowNextDeletes(context.Background()); err != nil {
-		t.Fatalf("AllowNextDeletes: %v", err)
+	// Nothing is blocked, so the override is refused (the endpoint answers 409).
+	if err := a.AllowNextDeletes(context.Background()); !errors.Is(err, httpctl.ErrNothingBlocked) {
+		t.Fatalf("AllowNextDeletes = %v, want httpctl.ErrNothingBlocked", err)
 	}
 	if blk := a.bisyncDeleteBlock(); blk != nil {
 		t.Errorf("block = %+v, want nil before any blocked run", blk)

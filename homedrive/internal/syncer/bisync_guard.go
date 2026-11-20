@@ -9,8 +9,15 @@
 package syncer
 
 import (
+	"errors"
 	"time"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/pathfilter"
 )
+
+// ErrNoDeleteBlock is returned by AllowNextDeletes when no run is blocked:
+// the override is tied to the block it releases and is never armed blind.
+var ErrNoDeleteBlock = errors.New("no bisync deletions are blocked")
 
 const (
 	// DefaultMaxDeleteCount and DefaultMaxDeletePct are the bisync
@@ -53,14 +60,30 @@ type DeleteBlockedEvent struct {
 	DryRun    bool     `json:"dry_run,omitempty"`
 }
 
-// AllowNextDeletes arms the one-shot override: the deletions of the next
-// bisync run that reaches the guard go through, whatever their number, then
-// the override resets. A dry-run pass honours but does not consume it.
-func (b *Bisync) AllowNextDeletes() {
+// deleteAllowance is a one-shot override tied to the block it was armed
+// against: it only releases a block of the same reason with no more planned
+// deletions than that block had.
+type deleteAllowance struct {
+	reason  string
+	planned int
+}
+
+// AllowNextDeletes arms the one-shot override for the current block. The
+// next bisync run that reaches the guard is released from the veto only if
+// its block has the same reason and no more planned deletions than the
+// current one; otherwise it is blocked again with its own figures. Either
+// way the override is then spent. It returns ErrNoDeleteBlock when nothing
+// is blocked. A dry-run pass honours but does not consume it.
+func (b *Bisync) AllowNextDeletes() error {
 	b.guardMu.Lock()
-	b.allowOnce = true
-	b.guardMu.Unlock()
-	b.log.Warn("bisync: next run's deletions allowed once", "op", "allow_deletes")
+	defer b.guardMu.Unlock()
+	if b.block == nil {
+		return ErrNoDeleteBlock
+	}
+	b.allow = &deleteAllowance{reason: b.block.Reason, planned: b.block.Planned}
+	b.log.Warn("bisync: next run's deletions allowed once", "op", "allow_deletes",
+		"reason", b.allow.reason, "up_to", b.allow.planned)
+	return nil
 }
 
 // DeleteBlock returns the current block, or nil when the last run that
@@ -75,14 +98,14 @@ func (b *Bisync) DeleteBlock() *DeleteBlock {
 	return &cp
 }
 
-// takeOverride reports whether the one-shot override is armed, consuming it
+// takeOverride returns the armed override (nil if none), consuming it
 // unless this is a dry run.
-func (b *Bisync) takeOverride() bool {
+func (b *Bisync) takeOverride() *deleteAllowance {
 	b.guardMu.Lock()
 	defer b.guardMu.Unlock()
-	armed := b.allowOnce
+	armed := b.allow
 	if !b.cfg.DryRun {
-		b.allowOnce = false
+		b.allow = nil
 	}
 	return armed
 }
@@ -115,12 +138,17 @@ func (b *Bisync) evaluateGuard(n int) (blocked bool, reason string, threshold in
 	return n > deleteGuardFloor && (n > maxCount || n*100 > maxPct*journaled), BlockThreshold, threshold
 }
 
-// journalSize counts journal entries. A read failure yields 0, which makes
-// the percentage bound fail closed (deletions above the floor are blocked).
+// journalSize counts the journal rows that could become a deletion: those
+// with a sync baseline that watcher.exclude does not exclude. Conflict-loser
+// rows and other baseline-less rows would only dilute the percentage bound. A
+// read failure yields 0, which makes the bound fail closed (deletions above
+// the floor are blocked).
 func (b *Bisync) journalSize() int {
 	n := 0
-	err := b.journal.ForEach(func(JournalEntry) error {
-		n++
+	err := b.journal.ForEach(func(e JournalEntry) error {
+		if hasBaseline(&e) && !pathfilter.Excluded(b.cfg.Exclude, e.Path) {
+			n++
+		}
 		return nil
 	})
 	if err != nil {
@@ -131,38 +159,49 @@ func (b *Bisync) journalSize() int {
 }
 
 // applyDeleteGuard returns the diffs to execute: all of them, or all but
-// the planned deletions when the guard vetoes them.
-func (b *Bisync) applyDeleteGuard(diffs []FileDiff) []FileDiff {
+// the planned deletions when the guard vetoes them. abort is true when an
+// empty side blocked the run: the whole pass must then do nothing, since a
+// transfer would repopulate the empty side (or push to a wrong remote) and
+// let the next run's smaller plan slip under the floor.
+func (b *Bisync) applyDeleteGuard(diffs []FileDiff) (kept []FileDiff, abort bool) {
 	b.vetoed = 0
 	planned := plannedDeletions(diffs)
 	// Consumed by every run that reaches the guard, even one with nothing
 	// to delete, so a stale override cannot wave through a later bad run.
-	override := b.takeOverride()
+	allow := b.takeOverride()
 	if len(planned) == 0 {
 		b.setBlock(nil)
-		return diffs
+		return diffs, false
 	}
 	blocked, reason, threshold := b.evaluateGuard(len(planned))
-	if override || !blocked {
-		if override {
-			b.log.Warn("bisync: deletions allowed by one-shot override",
-				"op", "allow_deletes", "planned", len(planned), "dry_run", b.cfg.DryRun)
-		}
+	if !blocked {
 		b.setBlock(nil)
-		return diffs
+		return diffs, false
+	}
+	if allow != nil && allow.reason == reason && len(planned) <= allow.planned {
+		b.log.Warn("bisync: deletions allowed by one-shot override",
+			"op", "allow_deletes", "planned", len(planned), "reason", reason,
+			"dry_run", b.cfg.DryRun)
+		if !b.cfg.DryRun {
+			b.setBlock(nil)
+		}
+		return diffs, false
 	}
 
 	blk := b.setBlock(&DeleteBlock{Planned: len(planned), Threshold: threshold, Reason: reason})
 	b.vetoed = len(planned)
 	b.reportBlock(blk, planned)
+	if reason != BlockThreshold {
+		return nil, true
+	}
 
-	kept := make([]FileDiff, 0, len(diffs)-len(planned))
+	kept = make([]FileDiff, 0, len(diffs)-len(planned))
 	for _, d := range diffs {
 		if d.Kind != DiffRemoteDeleted && d.Kind != DiffLocalDeleted {
 			kept = append(kept, d)
 		}
 	}
-	return kept
+	return kept, false
 }
 
 // setBlock records the current block (nil clears it), keeping Since stable

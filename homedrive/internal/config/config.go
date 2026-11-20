@@ -59,7 +59,8 @@ type PullConfig struct {
 // BisyncConfig configures the bisync mass-deletion guard (issue #156): a
 // run's deletions are blocked when there are more than 10 AND (more than
 // MaxDeleteCount OR more than MaxDeletePct percent of the journaled
-// entries). A nil field means its default (50 and 10); an explicit value
+// entries). A nil field means the syncer default (50 and 10, defined once as
+// syncer.DefaultMaxDeleteCount/Pct); an explicit value
 // below 1, or a percentage above 100, is a configuration error.
 type BisyncConfig struct {
 	MaxDeleteCount *int `yaml:"max_delete_count"`
@@ -172,10 +173,6 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 const (
 	defaultMaxPerFile    = 3
 	defaultSweepInterval = 24 * time.Hour
-
-	// Bisync mass-deletion guard defaults (issue #156).
-	defaultMaxDeleteCount = 50
-	defaultMaxDeletePct   = 10
 )
 
 // Load reads and parses the YAML config file at path, validates
@@ -234,15 +231,6 @@ func (c *Config) applyDefaults() {
 		c.Conflict.Retention.SweepInterval = Duration{Duration: defaultSweepInterval}
 	} else if c.Conflict.Retention.MaxPerFile <= 0 {
 		c.Conflict.Retention.MaxPerFile = 1
-	}
-
-	if c.Bisync.MaxDeleteCount == nil {
-		n := defaultMaxDeleteCount
-		c.Bisync.MaxDeleteCount = &n
-	}
-	if c.Bisync.MaxDeletePct == nil {
-		n := defaultMaxDeletePct
-		c.Bisync.MaxDeletePct = &n
 	}
 
 	if c.Conflict.RepairChains == nil {

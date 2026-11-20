@@ -1,6 +1,7 @@
 package http
 
 import (
+	"errors"
 	"net/http"
 )
 
@@ -54,6 +55,10 @@ func (s *Server) handleAllowDeletes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.deps.DeleteOverrider.AllowNextDeletes(r.Context()); err != nil {
+		if errors.Is(err, ErrNothingBlocked) {
+			s.writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		s.log.Error("failed to arm deletion override", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "failed to arm deletion override")
 		return

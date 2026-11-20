@@ -2,7 +2,10 @@
 // serving /status, /pause, /resume, /resync, /reload, /healthz, and /metrics.
 package http
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // StatusInfo holds the current agent state returned by GET /status.
 type StatusInfo struct {
@@ -32,6 +35,10 @@ type DeleteBlock struct {
 	Reason    string `json:"reason"`
 	Since     string `json:"since"`
 }
+
+// ErrNothingBlocked is returned by DeleteOverrider.AllowNextDeletes when no
+// bisync deletions are blocked; the endpoint answers 409.
+var ErrNothingBlocked = errors.New("no bisync deletions are blocked, nothing to allow")
 
 // DeleteOverrider is implemented by the syncer to arm the one-shot override
 // of the bisync mass-deletion guard: the next bisync run's deletions go
