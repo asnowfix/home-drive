@@ -284,6 +284,9 @@ const trashPurgeInterval = time.Hour
 // runTrashPurge purges aged homedrive-trashed entries at start and then
 // every trashPurgeInterval, until ctx is canceled.
 func (a *Agent) runTrashPurge(ctx context.Context) {
+	if a.trasher == nil { // partially wired agent (tests)
+		return
+	}
 	ticker := time.NewTicker(trashPurgeInterval)
 	defer ticker.Stop()
 	for {
