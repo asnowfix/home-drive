@@ -45,9 +45,12 @@ func IsTrash(relPath string) bool {
 // local_root (issue #170). It is local bookkeeping and never synced.
 const RootMarker = ".homedrive-root"
 
-// IsRootMarker reports whether relPath is the root marker file itself.
+// IsRootMarker reports whether relPath is the root marker file, its
+// temporary write file, or lies under a top-level entry of that name (a Drive
+// folder called ".homedrive-root" must never replace the marker).
 func IsRootMarker(relPath string) bool {
-	return strings.TrimPrefix(relPath, "/") == RootMarker
+	first, _, _ := strings.Cut(strings.TrimPrefix(relPath, "/"), "/")
+	return first == RootMarker || first == RootMarker+".tmp"
 }
 
 // Excluded reports whether relPath matches any of the given doublestar glob

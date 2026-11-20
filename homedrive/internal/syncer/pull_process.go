@@ -19,7 +19,7 @@ func (p *Puller) processChange(ctx context.Context, ch Change) error {
 	if pathfilter.IsTrash(ch.Path) || pathfilter.IsRootMarker(ch.Path) {
 		// A topdir trash or the root marker directly under the root is never
 		// synced (#155, #170).
-		p.log.Debug("ignoring remote change under a trash directory",
+		p.log.Debug("ignoring remote change under a trash directory or the root marker",
 			"path", ch.Path, "op", "pull", "origin", "remote")
 		return nil
 	}

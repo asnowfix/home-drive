@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/asnowfix/home-drive/homedrive/internal/pathfilter"
 	"github.com/asnowfix/home-drive/homedrive/internal/store"
 )
 
@@ -69,7 +70,7 @@ func (e *rootGuardEnv) seedJournal(paths ...string) {
 }
 
 func (e *rootGuardEnv) marker() string {
-	b, err := os.ReadFile(filepath.Join(e.root, RootMarkerName))
+	b, err := os.ReadFile(filepath.Join(e.root, pathfilter.RootMarker))
 	if err != nil {
 		return ""
 	}
@@ -106,15 +107,15 @@ func TestRootGuard_Check(t *testing.T) {
 			setup: func(t *testing.T, e *rootGuardEnv) {
 				e.establish(t)
 				target := filepath.Join(e.parent, "disk")
-				_ = os.Rename(e.root, target)
-				_ = os.Symlink(target, e.root)
+				must(t, os.Rename(e.root, target))
+				must(t, os.Symlink(target, e.root))
 				_ = os.RemoveAll(target) // the disk went away; the link dangles
 			}},
 		{name: "root_is_a_file", wantReason: RootBlockMissing,
 			setup: func(t *testing.T, e *rootGuardEnv) {
 				e.establish(t)
 				_ = os.RemoveAll(e.root)
-				_ = os.WriteFile(e.root, []byte("x"), 0o644)
+				must(t, os.WriteFile(e.root, []byte("x"), 0o644))
 			}},
 		{name: "replaced_by_empty_dir", wantReason: RootBlockNoMarker,
 			setup: func(t *testing.T, e *rootGuardEnv) {
@@ -131,13 +132,13 @@ func TestRootGuard_Check(t *testing.T) {
 		{name: "other_installs_marker", wantReason: RootBlockMismatch,
 			setup: func(t *testing.T, e *rootGuardEnv) {
 				e.establish(t)
-				_ = os.WriteFile(filepath.Join(e.root, RootMarkerName), []byte("someone-else\n"), 0o644)
+				must(t, os.WriteFile(filepath.Join(e.root, pathfilter.RootMarker), []byte("someone-else\n"), 0o644))
 			}},
 		{name: "symlinked_root_healthy",
 			setup: func(t *testing.T, e *rootGuardEnv) {
 				disk := filepath.Join(e.parent, "disk")
-				_ = os.MkdirAll(disk, 0o755)
-				_ = os.Symlink(disk, e.root)
+				must(t, os.MkdirAll(disk, 0o755))
+				must(t, os.Symlink(disk, e.root))
 				e.seedJournal("a.txt")
 				createLocalFile(t, disk, "a.txt", rootGuardT0)
 				_ = e.guard.Check() // adopt through the link
@@ -235,6 +236,9 @@ func TestRootGuard_ReportsOnceAndRecovers(t *testing.T) {
 	if len(blocked) != 1 {
 		t.Fatalf("want exactly 1 blocked event for 3 blocked cycles, got %d", len(blocked))
 	}
+	if ev, ok := blocked[0].Payload.(RootEvent); !ok || ev.Type != "root.blocked" || ev.Reason != RootBlockMissing || ev.Timestamp == "" {
+		t.Errorf("blocked payload = %+v", blocked[0].Payload)
+	}
 	if n := strings.Count(e.audit.String(), `"op":"root_blocked"`); n != 1 {
 		t.Errorf("want 1 root_blocked audit line, got %d:\n%s", n, e.audit.String())
 	}
@@ -260,10 +264,22 @@ func TestRootGuard_ReportsOnceAndRecovers(t *testing.T) {
 	if e.guard.Block() != nil {
 		t.Error("block must clear on recovery")
 	}
-	if n := len(e.pub.getMessagesByTopic(e.pub.Topic("events", "root", "resumed"))); n != 1 {
-		t.Errorf("want 1 resumed event, got %d", n)
+	resumed := e.pub.getMessagesByTopic(e.pub.Topic("events", "root", "resumed"))
+	if len(resumed) != 1 {
+		t.Fatalf("want 1 resumed event, got %d", len(resumed))
+	}
+	if ev, ok := resumed[0].Payload.(RootEvent); !ok || ev.Type != "root.resumed" || ev.Reason != RootBlockMissing || ev.Timestamp == "" {
+		t.Errorf("resumed payload = %+v", resumed[0].Payload)
 	}
 	if !strings.Contains(e.audit.String(), `"op":"root_resumed"`) {
 		t.Errorf("want a root_resumed audit line: %s", e.audit.String())
+	}
+}
+
+// must fails the test on a setup error.
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

@@ -17,23 +17,17 @@
 package syncer
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/asnowfix/home-drive/homedrive/internal/pathfilter"
 	"github.com/asnowfix/home-drive/homedrive/internal/store"
 )
-
-// RootMarkerName is the identity file at the top of local_root.
-const RootMarkerName = pathfilter.RootMarker
 
 // keyRootID is the state DB meta key holding the recorded local_root id.
 var keyRootID = []byte("local_root_id")
@@ -89,7 +83,13 @@ type RootGuardConfig struct {
 	Log      *slog.Logger
 	Clock    func() time.Time
 	// DryRun records nothing (no marker, no stored id) but still evaluates.
+	// Captured at construction, like the other components' dry-run flag: a
+	// config reload does not change it.
 	DryRun bool
+	// OnResume, if set, is called (with the guard's lock held, so it must
+	// not call back into the guard) when a check passes again after a block.
+	// The agent uses it to exit and let systemd re-arm the watcher.
+	OnResume func()
 }
 
 // RootGuard is the local_root guard. Safe for concurrent use.
@@ -167,7 +167,9 @@ func (g *RootGuard) evaluate() (reason, detail string) {
 	case marker != "":
 		return "", ""
 	case stored != "":
-		return RootBlockNoMarker, "the marker is gone: local_root is empty, foreign or was not mounted"
+		return RootBlockNoMarker, fmt.Sprintf("the marker is gone: local_root is empty, foreign or not mounted. "+
+			"If this directory is the synced tree, restore it by writing the expected id %s to %s",
+			stored, filepath.Join(resolved, pathfilter.RootMarker))
 	}
 	return g.establish(resolved)
 }
@@ -227,34 +229,6 @@ func (g *RootGuard) scanJournal(resolved string) (entries int, present bool, err
 	return entries, present, err
 }
 
-func readRootMarker(root string) (string, error) {
-	b, err := os.ReadFile(filepath.Join(root, RootMarkerName))
-	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
-	}
-	return strings.TrimSpace(string(b)), err
-}
-
-func writeRootMarker(root, id string) error {
-	f, err := os.OpenFile(filepath.Join(root, RootMarkerName), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return err
-	}
-	if _, err := f.WriteString(id + "\n"); err != nil {
-		_ = f.Close()
-		return err
-	}
-	return f.Close()
-}
-
-func newRootID() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
-}
-
 // transition reports a change of state: a new or changed block, or a
 // recovery. Called with g.mu held.
 func (g *RootGuard) transition(reason, detail string) {
@@ -263,8 +237,11 @@ func (g *RootGuard) transition(reason, detail string) {
 	case reason == "" && g.block != nil:
 		g.cfg.Log.Info("local_root is the synced tree again, resuming pulls and pushes",
 			"op", "root_guard", "was", g.block.Reason)
-		g.report("root_resumed", "root.resumed", "events/root/resumed", g.block.Reason, "", now)
+		g.report("root_resumed", "root.resumed", "resumed", g.block.Reason, "", now)
 		g.block = nil
+		if g.cfg.OnResume != nil {
+			g.cfg.OnResume()
+		}
 	case reason != "" && (g.block == nil || g.block.Reason != reason):
 		since := now
 		if g.block != nil {
@@ -273,7 +250,7 @@ func (g *RootGuard) transition(reason, detail string) {
 		g.block = &RootBlock{Reason: reason, Detail: detail, Since: since}
 		g.cfg.Log.Error("local_root is not the synced tree: pulls and pushes paused",
 			"op", "root_guard", "reason", reason, "detail", detail, "local_root", g.cfg.Root)
-		g.report("root_blocked", "root.blocked", "events/root/blocked", reason, detail, now)
+		g.report("root_blocked", "root.blocked", "blocked", reason, detail, now)
 	}
 }
 
@@ -286,7 +263,7 @@ func (g *RootGuard) report(auditOp, evType, topic, reason, detail string, now ti
 		return
 	}
 	ev := RootEvent{Timestamp: now.UTC().Format(time.RFC3339), Type: evType, Reason: reason, Detail: detail}
-	if err := g.cfg.MQTT.PublishJSON(g.cfg.MQTT.Topic(strings.Split(topic, "/")...), ev); err != nil {
+	if err := g.cfg.MQTT.PublishJSON(g.cfg.MQTT.Topic("events", "root", topic), ev); err != nil {
 		g.cfg.Log.Error("failed to publish root guard event", "type", evType, "error", err)
 	}
 }

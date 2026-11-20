@@ -27,6 +27,8 @@ func TestExcluded_Cases(t *testing.T) {
 		{"idea directory", []string{"**/.idea/**"}, "project/.idea/workspace.xml", true},
 		{"trash uid dir, no patterns", nil, ".Trash-1000", true},
 		{"root marker, no patterns", nil, ".homedrive-root", true},
+		{"root marker temp file", nil, ".homedrive-root.tmp", true},
+		{"a Drive folder named like the marker", nil, ".homedrive-root/x.txt", true},
 		{"nested file of the marker name is a user file", nil, "sub/.homedrive-root", false},
 		{"trash uid content, no patterns", nil, ".Trash-1000/files/a.txt", true},
 		{"admin trash content", []string{"*.tmp"}, ".Trash/1000/info/a.trashinfo", true},
