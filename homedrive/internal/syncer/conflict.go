@@ -173,8 +173,14 @@ func resolveConflict(
 
 	if winner == "remote" {
 		// Remote wins: rename local file to .old.<N>, then download remote.
-		localFile := fmt.Sprintf("%s/%s", deps.localRoot, path)
-		localOld := fmt.Sprintf("%s/%s", deps.localRoot, oldPath)
+		localFile, err := localPathFor(deps.localRoot, path)
+		if err != nil {
+			return ConflictResult{}, err
+		}
+		localOld, err := localPathFor(deps.localRoot, oldPath)
+		if err != nil {
+			return ConflictResult{}, err
+		}
 		if err := os.Rename(localFile, localOld); err != nil {
 			log.Error("failed to rename local loser",
 				"path", path,

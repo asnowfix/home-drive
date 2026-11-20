@@ -10,6 +10,7 @@ import (
 
 	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 	"github.com/asnowfix/home-drive/homedrive/internal/pathfilter"
+	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 )
 
 // ---------------------------------------------------------------------------
@@ -62,6 +63,9 @@ func (b *Bisync) diffLocalAgainstRemote(
 	for path, local := range localMap {
 		remote, exists := remoteMap[path]
 		if !exists {
+			if _, skip := b.unrepresentable[path]; skip {
+				continue
+			}
 			diffs = append(diffs, b.localOnlyDiff(path, local))
 			continue
 		}
@@ -146,7 +150,18 @@ func (b *Bisync) listRemote(ctx context.Context) ([]RemoteObject, error) {
 		return nil, fmt.Errorf("remote list: %w", err)
 	}
 	kept := objects[:0:0]
+	b.unrepresentable = make(map[string]struct{})
 	for _, o := range objects {
+		if !rcloneclient.ValidRemotePath(o.Path) {
+			// Never pulled (it could address a path outside local_root),
+			// but remembered: a local file at this exact path still
+			// exists on Drive, so its absence from the listing must not
+			// read as a remote deletion nor trigger a push (issue #161).
+			b.unrepresentable[o.Path] = struct{}{}
+			b.log.Warn("bisync skipping remote entry with an unsafe path",
+				"op", "list", "origin", "remote", "path", o.Path)
+			continue
+		}
 		if !pathfilter.Excluded(b.cfg.Exclude, o.Path) {
 			kept = append(kept, o)
 		}
@@ -209,7 +224,10 @@ func (b *Bisync) syncRemoteToLocal(ctx context.Context, d FileDiff) error {
 		return nil
 	}
 
-	localPath := filepath.Join(b.cfg.LocalRoot, filepath.FromSlash(d.Path))
+	localPath, err := localPathFor(b.cfg.LocalRoot, d.Path)
+	if err != nil {
+		return err
+	}
 
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir for %s: %w", d.Path, err)
@@ -332,11 +350,14 @@ func (b *Bisync) resolveRemoteWins(ctx context.Context, d FileDiff) error {
 		"kept_old_as", oldPath,
 	)
 
-	localPath := filepath.Join(b.cfg.LocalRoot, filepath.FromSlash(d.Path))
-	localOldPath := filepath.Join(
-		b.cfg.LocalRoot,
-		filepath.FromSlash(oldPath),
-	)
+	localPath, err := localPathFor(b.cfg.LocalRoot, d.Path)
+	if err != nil {
+		return err
+	}
+	localOldPath, err := localPathFor(b.cfg.LocalRoot, oldPath)
+	if err != nil {
+		return err
+	}
 
 	if err := os.Rename(localPath, localOldPath); err != nil {
 		return fmt.Errorf("rename local %s to %s: %w", d.Path, oldPath, err)
