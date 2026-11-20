@@ -1,10 +1,30 @@
 package syncer
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+// osRemover is the hard-delete remover tests that do not exercise the trash
+// wire explicitly; production never does (issue #155 review S2).
+type osRemover struct{}
+
+func (osRemover) Remove(path string) error { return os.Remove(path) }
+
+// A nil remover must refuse, never fall back to a hard delete.
+func TestRemoveLocalPath_NilRemoverRefuses(t *testing.T) {
+	root := t.TempDir()
+	createLocalFile(t, root, "f.txt", deleteT0)
+	p := filepath.Join(root, "f.txt")
+	if err := removeLocalPath(nil, p); !errors.Is(err, ErrNoRemover) {
+		t.Fatalf("err = %v, want ErrNoRemover", err)
+	}
+	if _, err := os.Lstat(p); err != nil {
+		t.Errorf("file removed by a nil remover: %v", err)
+	}
+}
 
 func TestRemoveLocalPath_Cases(t *testing.T) {
 	tests := []struct {
@@ -51,7 +71,7 @@ func TestRemoveLocalPath_Cases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := tt.setup(t, t.TempDir())
-			err := removeLocalPath(nil, p)
+			err := removeLocalPath(osRemover{}, p)
 			if tt.wantErr == nil && err != nil {
 				t.Fatalf("removeLocalPath: %v", err)
 			}

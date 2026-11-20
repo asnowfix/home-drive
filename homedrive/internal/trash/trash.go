@@ -53,6 +53,7 @@ type Config struct {
 	UID       int           // default os.Getuid()
 	PurgeAge  time.Duration // purge own entries older than this; <= 0 disables
 	DryRun    bool          // trash and purge nothing, audit only
+	LocalRoot string        // sync root; a topdir trash below it is refused
 
 	Rename    func(oldpath, newpath string) error // default os.Rename
 	Mountinfo func() ([]byte, error)              // default /proc/self/mountinfo
@@ -105,11 +106,17 @@ func DefaultHomeTrash() string {
 // directory is removed (nothing in it to recover; os.Remove refuses a
 // non-empty one), anything else is trashed.
 func (t *Trasher) Remove(path string) error {
+	if t == nil {
+		return fmt.Errorf("%w: no trasher configured", ErrUnavailable)
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		return err
 	}
 	if info.IsDir() {
+		if t.cfg.DryRun {
+			return nil
+		}
 		return os.Remove(path)
 	}
 	return t.Trash(path)
@@ -119,9 +126,15 @@ func (t *Trasher) Remove(path string) error {
 // left in place, the failure is logged at Error and audited, and the error
 // wraps ErrUnavailable.
 func (t *Trasher) Trash(path string) error {
+	if t == nil {
+		return fmt.Errorf("%w: no trasher configured", ErrUnavailable)
+	}
 	target, err := resolve(path)
 	if err != nil {
 		return err
+	}
+	if info, err := os.Lstat(target); err == nil && info.IsDir() {
+		return fmt.Errorf("trash: %s is a directory, only files are trashed", target)
 	}
 	if t.cfg.DryRun {
 		t.audit(store.AuditEntry{Op: "trash", Path: target, DryRun: true})
@@ -137,14 +150,19 @@ func (t *Trasher) Trash(path string) error {
 	if !errors.Is(homeErr, syscall.EXDEV) && !errors.Is(homeErr, syscall.EROFS) {
 		return t.fail(target, homeErr)
 	}
-	top, topErr := t.topdirTrash(target)
+	cands, topErr := t.topdirTrashes(target)
 	if topErr != nil {
 		return t.fail(target, errors.Join(homeErr, topErr))
 	}
-	if _, topErr = t.trashInto(top.dir, target, top.pathField(target)); topErr != nil {
-		return t.fail(target, errors.Join(homeErr, topErr))
+	errs := []error{homeErr}
+	for _, c := range cands {
+		_, err := t.trashInto(c.dir, target, c.pathField(target))
+		if err == nil {
+			return nil
+		}
+		errs = append(errs, err)
 	}
-	return nil
+	return t.fail(target, errors.Join(errs...))
 }
 
 // fail logs, audits and wraps a trashing failure. Nothing was moved.
@@ -184,23 +202,48 @@ func (tt topTrash) pathField(target string) string {
 	return rel
 }
 
-// topdirTrash picks the topdir trash for target's mount.
-func (t *Trasher) topdirTrash(target string) (topTrash, error) {
+// topdirTrashes returns the topdir trash candidates for target's mount, in
+// order: a valid admin $topdir/.Trash/$uid, then $topdir/.Trash-$uid. It
+// refuses a topdir strictly below the sync root: that trash would sit inside
+// the synced tree where only a root-level .Trash* is excluded.
+func (t *Trasher) topdirTrashes(target string) ([]topTrash, error) {
 	mi, err := t.cfg.Mountinfo()
 	if err != nil {
-		return topTrash{}, fmt.Errorf("reading mount table: %w", err)
+		return nil, fmt.Errorf("reading mount table: %w", err)
 	}
 	top, err := topdirOf(mi, target)
 	if err != nil {
-		return topTrash{}, err
+		return nil, err
+	}
+	if root, rerr := filepath.EvalSymlinks(t.cfg.LocalRoot); t.cfg.LocalRoot != "" && rerr == nil &&
+		top != root && underMount(root, top) {
+		return nil, fmt.Errorf("mount %s is nested inside the sync root %s: its trash would be synced", top, root)
 	}
 	uid := strconv.Itoa(t.cfg.UID)
+	var out []topTrash
 	admin := filepath.Join(top, ".Trash")
 	if info, err := os.Lstat(admin); err == nil && info.IsDir() &&
 		info.Mode()&os.ModeSymlink == 0 && info.Mode()&os.ModeSticky != 0 {
-		return topTrash{dir: filepath.Join(admin, uid), topdir: top}, nil
+		out = append(out, topTrash{dir: filepath.Join(admin, uid), topdir: top})
 	}
-	return topTrash{dir: filepath.Join(top, ".Trash-"+uid), topdir: top}, nil
+	return append(out, topTrash{dir: filepath.Join(top, ".Trash-"+uid), topdir: top}), nil
+}
+
+// plainDir checks that path is a real directory (not a symlink), creating it
+// with mode 0700 when create is set and it is missing. Trash directories can
+// live in a user-writable tree, so symlinks are never followed.
+func plainDir(path string, create bool) error {
+	fi, err := os.Lstat(path)
+	switch {
+	case err == nil:
+		if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+			return fmt.Errorf("trash: %s is not a plain directory", path)
+		}
+		return nil
+	case create && errors.Is(err, fs.ErrNotExist):
+		return os.Mkdir(path, 0o700)
+	}
+	return err
 }
 
 // trashInto moves target into the trash directory dir under a free name:
@@ -208,14 +251,17 @@ func (t *Trasher) topdirTrash(target string) (topTrash, error) {
 // spec asks), then the file renamed into files/. Any failure removes the
 // reservation and leaves target where it was.
 func (t *Trasher) trashInto(dir, target, pathField string) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return "", err
+	}
 	for _, sub := range []string{"", "files", "info"} {
-		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
+		if err := plainDir(filepath.Join(dir, sub), true); err != nil {
 			return "", err
 		}
 	}
 	now := t.cfg.Now().Local().Truncate(time.Second)
-	body := "[Trash Info]\nPath=" + encodePath(pathField) +
-		"\nDeletionDate=" + now.Format(dateLayout) + "\n"
+	date := now.Format(dateLayout)
+	body := "[Trash Info]\nPath=" + encodePath(pathField) + "\nDeletionDate=" + date + "\n"
 	base := filepath.Base(target)
 	for i := 0; i < maxNameTries; i++ {
 		name := base
@@ -245,18 +291,18 @@ func (t *Trasher) trashInto(dir, target, pathField string) (string, error) {
 			_ = os.Remove(infoPath)
 			return "", werr
 		}
-		t.recordTrashed(dir, name, target, filePath, now)
+		t.recordTrashed(dir, name, target, filePath, now, date)
 		return filePath, nil
 	}
 	return "", fmt.Errorf("no free name for %s in %s", base, dir)
 }
 
 // recordTrashed remembers the entry (so it can be purged later) and audits.
-func (t *Trasher) recordTrashed(dir, name, orig, filePath string, at time.Time) {
+func (t *Trasher) recordTrashed(dir, name, orig, filePath string, at time.Time, date string) {
 	if t.cfg.Records != nil {
-		rec := store.TrashRecord{Dir: dir, Name: name, Path: orig, DeletedAt: at}
+		rec := store.TrashRecord{Dir: dir, Name: name, Path: orig, DeletedAt: at.UTC(), Date: date}
 		if err := t.cfg.Records.PutTrashRecord(rec); err != nil {
-			t.cfg.Log.Warn("trashed file but could not record it: it will not be auto-purged",
+			t.cfg.Log.Error("trashed file but could not record it: it will not be auto-purged",
 				"path", orig, "op", "trash", "error", err)
 		}
 	}

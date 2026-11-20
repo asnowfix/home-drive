@@ -288,7 +288,15 @@ Where the trash lives:
   (`files/` holds the data, `info/*.trashinfo` the original path and date).
 - `.Trash-<uid>` and `.Trash` directly under `local_root` are **always
   excluded** (watcher, push, bisync, pull), whatever `watcher.exclude`
-  says, so trashed files are never pushed back to Drive.
+  says, so trashed files are never pushed back to Drive. A Drive folder
+  named `.Trash` or `.Trash-<digits>` at the root of the remote therefore
+  stops syncing too.
+- A topdir trash is refused (the file is kept and an error logged) when the
+  file's mount is nested *inside* `local_root`, because that trash would sit
+  in the synced tree under a name that is not excluded. Trash directories
+  that are symlinks are never used or purged through.
+- Conflict-loser retention (`.old.<N>` eviction) still deletes outright; it
+  does not use the trash.
 - If neither trash can take a file, homedrive never copies it and never
   erases it: it logs an error, writes an audit line (`op: trash` with an
   `error`), and leaves the file and its journal entry, so the deletion is

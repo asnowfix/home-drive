@@ -33,7 +33,7 @@ func TestPuller_FolderChange(t *testing.T) {
 			}
 			store := newMockStore()
 			p := NewPuller(
-				PullerConfig{
+				PullerConfig{Remover: osRemover{},
 					Interval: 30 * time.Second, LocalRoot: localRoot,
 					ConflictPolicy: PolicyNewerWins, DryRun: tt.dryRun,
 				},
@@ -146,7 +146,7 @@ func TestPuller_FolderDelete(t *testing.T) {
 			remote.startToken = "start-1"
 			remote.changes["start-1"] = Changes{Items: tt.changes, NextPageToken: "token-2"}
 			p := NewPuller(
-				PullerConfig{
+				PullerConfig{Remover: osRemover{},
 					Interval: 30 * time.Second, LocalRoot: localRoot,
 					ConflictPolicy: PolicyNewerWins,
 				},
@@ -217,7 +217,7 @@ func TestPuller_FileDeleteStrict(t *testing.T) {
 				Path: tt.path, LocalMtime: fi.ModTime(), RemoteMtime: fi.ModTime(), RemoteMD5: "m",
 			})
 			p := NewPuller(
-				PullerConfig{
+				PullerConfig{Remover: osRemover{},
 					Interval: 30 * time.Second, LocalRoot: localRoot,
 					ConflictPolicy: PolicyNewerWins,
 				},

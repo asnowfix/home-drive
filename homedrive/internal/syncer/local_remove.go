@@ -1,6 +1,11 @@
 package syncer
 
-import "os"
+import "errors"
+
+// ErrNoRemover is returned when a local deletion is attempted without a
+// configured LocalRemover. Refusing is the safe default: a config built
+// without the trash must not silently fall back to a hard delete (#155).
+var ErrNoRemover = errors.New("syncer: no local remover configured, refusing to delete")
 
 // LocalRemover performs one local deletion under the sync root. The agent
 // wires the freedesktop.org trash implementation (internal/trash, issue
@@ -15,11 +20,10 @@ type LocalRemover interface {
 // removeLocalPath is the single place where sync deletes anything under the
 // local root: the puller's remote-folder/file deletions and bisync's
 // propagation of a Drive deletion all go through it (issue #152). A nil
-// remover (unit tests that do not exercise the trash; the agent always
-// wires one) falls back to os.Remove.
+// remover refuses (ErrNoRemover); tests that really delete wire one.
 func removeLocalPath(r LocalRemover, path string) error {
 	if r == nil {
-		return os.Remove(path)
+		return ErrNoRemover
 	}
 	return r.Remove(path)
 }

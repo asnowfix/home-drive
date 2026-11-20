@@ -17,7 +17,11 @@ type TrashRecord struct {
 	Dir       string    `json:"dir"`        // absolute trash directory
 	Name      string    `json:"name"`       // entry name under files/ and info/
 	Path      string    `json:"path"`       // original absolute path
-	DeletedAt time.Time `json:"deleted_at"` // DeletionDate written to .trashinfo
+	DeletedAt time.Time `json:"deleted_at"` // the deletion instant, in UTC
+	// Date is the DeletionDate string exactly as written to .trashinfo
+	// (local time, no zone). Matching compares it verbatim so a timezone or
+	// DST change cannot make a still-valid entry look foreign.
+	Date string `json:"date,omitempty"`
 }
 
 func trashKey(dir, name string) []byte { return []byte(dir + "\x00" + name) }

@@ -58,6 +58,7 @@ type env struct {
 	home  string // home trash directory
 	recs  *memRecords
 	audit *bytes.Buffer
+	logs  *bytes.Buffer
 	cfg   Config
 }
 
@@ -68,11 +69,12 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	e := &env{t: t, root: filepath.Join(base, "root"), home: filepath.Join(base, "home", "Trash"),
-		recs: newMemRecords(), audit: &bytes.Buffer{}}
+		recs: newMemRecords(), audit: &bytes.Buffer{}, logs: &bytes.Buffer{}}
 	if err := os.MkdirAll(e.root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	log := slog.New(slog.NewTextHandler(e.logs, nil))
+	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
 	e.cfg = Config{
 		HomeTrash: e.home,
 		UID:       1000,
@@ -82,8 +84,9 @@ func newEnv(t *testing.T) *env {
 			return []byte("1 0 8:1 / / rw - ext4 /dev/sda1 rw\n" +
 				"2 1 8:1 /data " + e.root + " rw - ext4 /dev/sda1 rw\n"), nil
 		},
-		Records: e.recs,
-		Audit:   store.NewAuditor(e.audit, log),
+		Records:   e.recs,
+		LocalRoot: e.root,
+		Audit:   store.NewAuditor(e.audit, discard),
 		Log:     log,
 	}
 	return e
