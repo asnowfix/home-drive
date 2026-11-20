@@ -49,16 +49,18 @@ func TestDeleteGuard_Unit(t *testing.T) {
 		path    func(root string) string
 		advance time.Duration
 		forget  bool
+		twice   bool
 		query   string
 		want    bool
 	}{
-		{"match", osRemover{}, inRoot, 0, false, "a/f", true},
-		{"other path", osRemover{}, inRoot, 0, false, "a/g", false},
-		{"expired", osRemover{}, inRoot, guardTTL + time.Second, false, "a/f", false},
-		{"forgotten", osRemover{}, inRoot, 0, true, "a/f", false},
-		{"failed removal not marked", failing, inRoot, 0, false, "a/f", false},
+		{"match", osRemover{}, inRoot, 0, false, false, "a/f", true},
+		{"repeat removal of an absent path keeps the mark", osRemover{}, inRoot, 0, false, true, "a/f", true},
+		{"other path", osRemover{}, inRoot, 0, false, false, "a/g", false},
+		{"expired", osRemover{}, inRoot, guardTTL + time.Second, false, false, "a/f", false},
+		{"forgotten", osRemover{}, inRoot, 0, true, false, "a/f", false},
+		{"failed removal not marked", failing, inRoot, 0, false, false, "a/f", false},
 		{"outside root ignored", osRemover{}, func(r string) string { return filepath.Join(filepath.Dir(r), "x") },
-			0, false, "../x", false},
+			0, false, false, "../x", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -69,6 +71,9 @@ func TestDeleteGuard_Unit(t *testing.T) {
 			_ = os.MkdirAll(filepath.Dir(p), 0o755)
 			_ = os.WriteFile(p, []byte("x"), 0o644)
 			_ = g.Remove(p)
+			if tt.twice {
+				_ = g.Remove(p) // fails: already gone
+			}
 			clk.t = clk.t.Add(tt.advance)
 			if tt.forget {
 				g.Forget(tt.query)

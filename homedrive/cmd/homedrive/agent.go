@@ -60,6 +60,10 @@ type Agent struct {
 	// trash, issue #155) and purges the entries it trashed.
 	trasher *trash.Trasher
 
+	// deleteGuard wraps trasher and records each local deletion so the push
+	// syncer does not echo it back to Drive (issue #154).
+	deleteGuard *syncer.DeleteGuard
+
 	// bisyncMu is shared between the push syncer (RLock), the pull loop
 	// (RLock, taken by this package around each PollOnce call since
 	// syncer.Puller does not itself coordinate with bisync), and bisync
@@ -174,6 +178,10 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 	a.reloadedDryRun.Store(cfg.DryRun)
 
 	a.trasher = newTrasher(cfg, journal, auditor, log)
+	if a.trasher != nil {
+		a.deleteGuard = syncer.NewDeleteGuard(cfg.LocalRoot, a.trasher,
+			syncer.DefaultDeleteGuardTTL, time.Now)
+	}
 
 	if err := a.buildWatcher(); err != nil {
 		a.closeResources()
@@ -305,6 +313,7 @@ func (a *Agent) buildPushSyncer(pub syncer.Publisher, audit syncer.AuditLogger) 
 		pub,
 		a.log,
 		syncer.WithBisyncMutex(a.bisyncMu),
+		syncer.WithDeleteGuard(a.deleteGuard),
 	)
 }
 
@@ -325,7 +334,7 @@ func (a *Agent) buildPuller(pub syncer.Publisher, audit syncer.AuditLogger, audi
 			Retention:      retentionPolicy(a.cfg.Conflict.Retention),
 			Auditor:        auditor,
 			Exclude:        a.cfg.Watcher.Exclude,
-			Remover:        a.trasher,
+			Remover:        a.localRemover(),
 			DryRun:         a.cfg.DryRun,
 		},
 		a.rfs,
@@ -357,7 +366,7 @@ func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer, auditor *s
 
 			MaxDeleteCount: derefInt(a.cfg.Bisync.MaxDeleteCount),
 			MaxDeletePct:   derefInt(a.cfg.Bisync.MaxDeletePct),
-			Remover:        a.trasher,
+			Remover:        a.localRemover(),
 		},
 		Remote:  a.rfs,
 		Journal: &bisyncJournalAdapter{j: a.journal},
@@ -423,4 +432,14 @@ func (a *Agent) closeResources() {
 		_ = a.journal.Close()
 	}
 	closeAuditFile(a.auditFile, a.log)
+}
+
+// localRemover returns the remover for sync's local deletions: the trash
+// wrapped by the delete guard. It is a true nil interface when the agent has
+// no trasher, so removeLocalPath refuses to delete (ErrNoRemover).
+func (a *Agent) localRemover() syncer.LocalRemover {
+	if a.deleteGuard == nil {
+		return nil
+	}
+	return a.deleteGuard
 }
