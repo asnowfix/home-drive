@@ -489,15 +489,20 @@ Notes:
   changes made while paused are only picked up by the next bisync pass, which
   can be up to `pull.bisync_interval` (one hour by default) after the
   restart. `ctl resync` forces it.
-- **State DB reset while the disk is absent**: with an empty journal the
-  agent treats an existing empty `local_root` (for instance a directory
-  re-created on the root filesystem under a nested mount layout) as a first
-  install and records a new identity for it. When the real disk returns its
-  marker differs and the block reason is `identity_mismatch`: the fix is to
-  restore the previous state DB, or to remove the stray directory and start
-  again from the disk's own tree; do not edit the marker to match. Upgrading
-  an install that predates the guard likewise adopts the tree only when a
-  journaled path exists under the resolved `local_root`.
+- **Never reset (delete) the state DB while the data disk is absent.** The
+  guard cannot protect that case. With an empty journal and a `local_root`
+  that is a real directory (not a symlink) under an unmounted mount point,
+  the agent sees a first install: it records a new identity for that stray
+  empty directory and starts downloading the whole Drive into it, on the root
+  filesystem. Once the disk is mounted again that copy stays hidden under the
+  mount point, and the agent is blocked with `identity_mismatch` (the disk's marker
+  differs from the new id). To clean up: stop the agent, unmount the disk,
+  delete the stray files left in the mount point directory, mount the disk,
+  restore the previous state DB (or, if there is no copy, delete the new one
+  so the next start adopts the disk's own marker and rebuilds the journal
+  from a bisync pass), then start the agent. Do not edit the
+  marker to match. Upgrading an install that predates the guard adopts the
+  tree only when a journaled path exists under the resolved `local_root`.
 
 If the tree is correct but the marker was lost (deleted by hand, a copy that
 skipped dotfiles), the block reason is `marker_missing` and `detail` carries
