@@ -130,6 +130,7 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 		Remote:     cfg.Remote,
 		ConfigPath: cfg.RcloneConfig,
 		Exclude:    cfg.Watcher.Exclude,
+		IDResolver: journal,
 		Log:        log,
 	})
 	if err != nil {

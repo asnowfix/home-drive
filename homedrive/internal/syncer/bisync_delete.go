@@ -88,7 +88,10 @@ func (b *Bisync) deleteLocal(ctx context.Context, d FileDiff) (bool, error) {
 	} else if !errors.Is(err, ErrRemoteNotFound) {
 		return false, fmt.Errorf("confirm %s absent on remote: %w", d.Path, err)
 	}
-	localPath := filepath.Join(b.cfg.LocalRoot, filepath.FromSlash(d.Path))
+	localPath, err := localPathFor(b.cfg.LocalRoot, d.Path)
+	if err != nil {
+		return false, err
+	}
 	if !b.localUnchanged(d.Path, localPath) {
 		b.log.Warn("bisync: local file changed since the diff, keeping it",
 			"path", d.Path, "op", "pull_delete")

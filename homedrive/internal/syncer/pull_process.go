@@ -22,6 +22,14 @@ func (p *Puller) processChange(ctx context.Context, ch Change) error {
 			"path", ch.Path, "op", "pull", "origin", "remote")
 		return nil
 	}
+	if !ch.Deleted && !rcloneclient.ValidRemotePath(ch.Path) {
+		// Defence in depth (issue #161): translateChange and the full walk
+		// are meant to drop these, but a remote path with a ".." or empty
+		// component must never be joined onto local_root.
+		p.log.Warn("ignoring remote change with an unsafe path",
+			"op", "pull", "origin", "remote", "path", ch.Path)
+		return nil
+	}
 	if ch.Deleted {
 		return p.processDelete(ctx, ch, start)
 	}
@@ -60,11 +68,17 @@ func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) 
 			Origin:    "remote",
 			DryRun:    true,
 		})
-		return p.removeSyncedDescendants(ctx, ch.Path,
-			filepath.Join(p.cfg.LocalRoot, ch.Path), start, true)
+		dryPath, err := localPathFor(p.cfg.LocalRoot, ch.Path)
+		if err != nil {
+			return err
+		}
+		return p.removeSyncedDescendants(ctx, ch.Path, dryPath, start, true)
 	}
 
-	localPath := filepath.Join(p.cfg.LocalRoot, ch.Path)
+	localPath, err := localPathFor(p.cfg.LocalRoot, ch.Path)
+	if err != nil {
+		return err
+	}
 	outcome, err := p.removeLocal(ctx, ch, localPath, start)
 	if err != nil {
 		p.log.Error("failed to delete local file",
@@ -134,7 +148,10 @@ func (p *Puller) detectConflict(
 	ch Change,
 	journal JournalEntry,
 ) (bool, time.Time, error) {
-	localPath := filepath.Join(p.cfg.LocalRoot, ch.Path)
+	localPath, err := localPathFor(p.cfg.LocalRoot, ch.Path)
+	if err != nil {
+		return false, time.Time{}, err
+	}
 	info, err := os.Stat(localPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -249,7 +266,10 @@ func (p *Puller) buildConflictEntry(
 // downloadFile downloads a remote file to the local root and records the
 // result in the journal and audit log.
 func (p *Puller) downloadFile(ctx context.Context, ch Change, start time.Time) error {
-	localPath := filepath.Join(p.cfg.LocalRoot, ch.Path)
+	localPath, err := localPathFor(p.cfg.LocalRoot, ch.Path)
+	if err != nil {
+		return err
+	}
 
 	p.log.Info("downloading remote file",
 		"path", ch.Path,
