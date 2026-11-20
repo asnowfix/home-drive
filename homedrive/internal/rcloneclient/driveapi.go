@@ -365,6 +365,12 @@ func (r *RcloneFS) translateChangeWith(c *drivev3.Change, snap *idSnapshot) (Cha
 // not follow (outside the sync root, into an excluded path): the old
 // mapping would otherwise outlive the move and resolve a later Removed
 // change for that ID to a path now held by a different, live item.
+//
+// The journal is a separate source: a later Removed change for a forgotten
+// ID can still resolve through it (issue #163) to the path the local copy
+// was last synced at. That is intended: it is the outcome bisync reaches
+// (DiffRemoteDeleted), and the puller still keeps a locally modified copy
+// and requires the journaled RemoteID to equal the change's ID.
 func (r *RcloneFS) forgetID(id string) {
 	if old, ok := r.pathCache.get(id); ok {
 		r.pathCache.evictTree(old)

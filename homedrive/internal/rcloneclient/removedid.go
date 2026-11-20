@@ -53,7 +53,7 @@ func (s *idSnapshot) lookup(log *slog.Logger, id string) (string, bool) {
 		return ps[0], true
 	default:
 		log.Warn("ListChanges: skipping removed file whose ID is journaled under several paths",
-			"op", "ListChanges", "file_id", id, "paths", len(ps))
+			"op", "ListChanges", "file_id", id, "paths", ps)
 		return "", false
 	}
 }

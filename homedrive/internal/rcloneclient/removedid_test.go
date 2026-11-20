@@ -1,9 +1,12 @@
 package rcloneclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 
 	drivev3 "google.golang.org/api/drive/v3"
@@ -109,6 +112,49 @@ func TestPollChanges_RemovedUnknownIDResolvedFromJournal(t *testing.T) {
 				t.Fatalf("deleted paths = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// The duplicate-ID drop must be visible: a Warn naming the ID and the paths.
+func TestTranslateChange_DuplicateJournalIDWarns(t *testing.T) {
+	var buf bytes.Buffer
+	r := newTestRcloneFS(nil)
+	r.log = slog.New(slog.NewJSONHandler(&buf, nil))
+	r.idResolver = &fakeIDResolver{paths: map[string][]string{"dup": {"a.txt", "b.txt"}}}
+
+	if ch, ok := r.translateChange(&drivev3.Change{FileId: "dup", Removed: true}); ok {
+		t.Fatalf("translated to %+v, want dropped", ch)
+	}
+	out := buf.String()
+	for _, want := range []string{"journaled under several paths", `"file_id":"dup"`, "a.txt", "b.txt"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log %q lacks %q", out, want)
+		}
+	}
+}
+
+// F1 (#167 review): forgetID evicts a moved-out ID from the cache, but the
+// journal still maps it to the path of the local copy, so a later purge
+// deletes that copy. Intended: it is the outcome bisync reaches, and the
+// puller keeps a locally modified copy.
+func TestTranslateChange_ForgottenIDStillResolvesFromJournal(t *testing.T) {
+	r := newTestRcloneFS(nil)
+	r.idResolver = &fakeIDResolver{paths: map[string][]string{"moved": {"docs/a.txt"}}}
+	r.pathCache.put("moved", "docs/a.txt")
+
+	// Moved outside the sync root: parent unknown, so the ID is forgotten.
+	if _, ok := r.translateChange(&drivev3.Change{
+		FileId: "moved", File: &drivev3.File{Name: "a.txt", Parents: []string{"outside"}},
+	}); ok {
+		t.Fatal("move out of root translated, want skipped")
+	}
+	if _, ok := r.pathCache.get("moved"); ok {
+		t.Fatal("ID still cached after forgetID")
+	}
+
+	ch, ok := r.translateChange(&drivev3.Change{FileId: "moved", Removed: true})
+	if !ok || ch.Path != "docs/a.txt" || !ch.Deleted || ch.ID != "moved" {
+		t.Fatalf("Removed after forget = %+v ok=%v, want journal-resolved delete of docs/a.txt", ch, ok)
 	}
 }
 
