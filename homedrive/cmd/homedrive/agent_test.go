@@ -67,6 +67,7 @@ func newIntegrationTestAgent(t *testing.T) (*Agent, *fakeRemoteFS) {
 		startTime:   time.Now(),
 	}
 	a.reloadedDryRun.Store(cfg.DryRun)
+	a.rootGuard = a.newRootGuard(journal, nil, noopPublisher{})
 
 	if err := a.buildWatcher(); err != nil {
 		t.Fatalf("build watcher: %v", err)

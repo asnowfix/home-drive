@@ -19,6 +19,9 @@ import (
 // cancelled (SIGTERM/SIGINT), then drains in-flight work and shuts down
 // cleanly. See PLAN.md §3.2 for the runtime topology.
 func (a *Agent) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	a.cancelRun = cancel
 	a.startTime = time.Now()
 	a.log.Info("starting homedrive agent",
 		"version", a.version,
@@ -28,12 +31,21 @@ func (a *Agent) Run(ctx context.Context) error {
 		"dry_run", a.cfg.DryRun,
 	)
 
-	// Startup check (issue #170): records the identity on a first install and
-	// reports a missing or foreign local_root before any component acts.
-	_ = a.rootGuard.Check()
-
 	var wg sync.WaitGroup
-	a.startComponents(ctx, &wg)
+	// Startup check (issue #170): records the identity on a first install.
+	// A missing or foreign local_root is reported and nothing else starts
+	// (no watcher, pull, push, bisync, purge); the agent exits once it passes.
+	if err := a.rootGuard.Check(); err != nil {
+		a.log.Error("starting in blocked-only mode: status, MQTT and logs report; no sync runs",
+			"op", "root_guard", "error", err)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.runRootRecheck(ctx)
+		}()
+	} else {
+		a.startComponents(ctx, &wg)
+	}
 
 	httpErrCh := make(chan error, 1)
 	go func() { httpErrCh <- a.httpSrv.ListenAndServe() }()
@@ -49,6 +61,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.shutdownStore()
 
 	a.log.Info("homedrive agent stopped")
+	if a.rootResumed.Load() {
+		return ErrRootResumed
+	}
 	return nil
 }
 

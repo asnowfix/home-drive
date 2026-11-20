@@ -54,6 +54,10 @@ type Agent struct {
 	// rootGuard pauses pull, push and bisync while local_root is missing or
 	// is not the tree being synced (issue #170).
 	rootGuard *syncer.RootGuard
+	// rootResumed is set when the guard passes again after a block; cancelRun
+	// (set by Run) then stops the agent, which returns ErrRootResumed.
+	rootResumed atomic.Bool
+	cancelRun   context.CancelFunc
 
 	watch      *watcher.Watcher
 	pushSyncer *syncer.Syncer
@@ -115,13 +119,14 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 	if err := os.MkdirAll(filepath.Dir(cfg.State.Path), 0o755); err != nil {
 		return nil, fmt.Errorf("create state dir: %w", err)
 	}
-	if err := os.MkdirAll(cfg.LocalRoot, 0o755); err != nil {
-		return nil, fmt.Errorf("create local root: %w", err)
-	}
 
 	journal, err := store.OpenJournal(cfg.State.Path, log)
 	if err != nil {
 		return nil, fmt.Errorf("open journal: %w", err)
+	}
+	if err := ensureLocalRoot(cfg.LocalRoot, journal); err != nil {
+		_ = journal.Close()
+		return nil, err
 	}
 
 	auditAdapter, auditor, rawAudit, auditFile, err := buildAuditLog(cfg, log)
@@ -177,14 +182,7 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 	}
 	a.reloadedDryRun.Store(cfg.DryRun)
 
-	a.rootGuard = syncer.NewRootGuard(syncer.RootGuardConfig{
-		Root:     cfg.LocalRoot,
-		Identity: journal,
-		Auditor:  auditor,
-		MQTT:     pub,
-		Log:      log,
-		DryRun:   cfg.DryRun,
-	})
+	a.rootGuard = a.newRootGuard(journal, auditor, pub)
 
 	a.trasher = newTrasher(cfg, journal, auditor, log)
 
