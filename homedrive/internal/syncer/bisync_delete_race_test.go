@@ -197,7 +197,8 @@ func TestBisync_Delete_JournalAndAuditAfterPropagation(t *testing.T) {
 	})
 	t.Run("folder_deletion_drops_entries_one_audit_each", func(t *testing.T) {
 		root := t.TempDir()
-		b, _, _, journal, _, _ := newTestBisync(t, root, false)
+		b, _, remote, journal, _, _ := newTestBisync(t, root, false)
+		seedBystander(t, root, remote, journal)
 		buf := &threadSafeBuffer{}
 		b.auditor = store.NewAuditor(buf, newDiscardLogger())
 		files := []string{"top/a.txt", "top/mid/b.txt", "top/mid/low/c.txt"}

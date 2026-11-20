@@ -76,6 +76,7 @@ func TestBisync_TrashedFile_NeverResynced(t *testing.T) {
 	te := newTrashEnv(t, syscall.EXDEV, nil)
 	b, _, remote, journal, _, _ := newTestBisync(t, te.root, false)
 	b.cfg.Remover = te.tr
+	seedBystander(t, te.root, remote, journal) // keep both sides non-empty (#156 guard)
 	createLocalFile(t, te.root, rel, deleteT0)
 	seedBaseline(journal, rel)
 

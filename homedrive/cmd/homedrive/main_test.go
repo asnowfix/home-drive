@@ -155,7 +155,8 @@ func (stubCtlDeps) Resume(context.Context) error { return nil }
 func (stubCtlDeps) ForceResync(context.Context) error {
 	return nil
 }
-func (stubCtlDeps) Reload(context.Context) error { return nil }
+func (stubCtlDeps) Reload(context.Context) error           { return nil }
+func (stubCtlDeps) AllowNextDeletes(context.Context) error { return nil }
 func (stubCtlDeps) Status(context.Context) (httpctl.StatusInfo, error) {
 	return httpctl.StatusInfo{State: "running", Version: "test"}, nil
 }
@@ -175,11 +176,12 @@ func startStubCtlServer(t *testing.T) (configPath string) {
 	}
 
 	deps := httpctl.Deps{
-		Pausable:       stubCtlDeps{},
-		Resyncable:     stubCtlDeps{},
-		Reloadable:     stubCtlDeps{},
-		StatusProvider: stubCtlDeps{},
-		HealthChecker:  stubCtlDeps{},
+		Pausable:        stubCtlDeps{},
+		Resyncable:      stubCtlDeps{},
+		DeleteOverrider: stubCtlDeps{},
+		Reloadable:      stubCtlDeps{},
+		StatusProvider:  stubCtlDeps{},
+		HealthChecker:   stubCtlDeps{},
 	}
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	srv, err := httpctl.NewServer(httpctl.ServerConfig{}, deps, httpctl.NewMetrics(), log)
@@ -239,6 +241,17 @@ func TestCtlResync_Executes(t *testing.T) {
 
 	root := newRootCmd(nil)
 	root.SetArgs([]string{"ctl", "--config", configPath, "resync"})
+
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCtlAllowDeletes_Executes(t *testing.T) {
+	configPath := startStubCtlServer(t)
+
+	root := newRootCmd(nil)
+	root.SetArgs([]string{"ctl", "--config", configPath, "allow-deletes"})
 
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)

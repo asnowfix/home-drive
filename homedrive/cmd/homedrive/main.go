@@ -132,6 +132,7 @@ func newCtlCmd() *cobra.Command {
 	ctl.AddCommand(newCtlPauseCmd())
 	ctl.AddCommand(newCtlResumeCmd())
 	ctl.AddCommand(newCtlResyncCmd())
+	ctl.AddCommand(newCtlAllowDeletesCmd())
 	ctl.AddCommand(newCtlConflictCmd())
 
 	return ctl
@@ -173,6 +174,17 @@ func newCtlResyncCmd() *cobra.Command {
 		Short: "Force an immediate bisync",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return ctlRunAction(cmd, "resync")
+		},
+	}
+}
+
+func newCtlAllowDeletesCmd() *cobra.Command {
+	return &cobra.Command{
+		Use: "allow-deletes",
+		Short: "Allow the next bisync run's deletions once, bypassing the mass-deletion guard " +
+			"(then run `ctl resync`)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return ctlRunAction(cmd, "bisync/allow-deletes")
 		},
 	}
 }

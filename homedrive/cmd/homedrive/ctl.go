@@ -90,6 +90,12 @@ func ctlRunStatus(cmd *cobra.Command) error {
 		"dry_run", info.DryRun,
 		"uptime_seconds", info.UptimeSeconds,
 	)
+	if blk := info.BisyncDeleteBlocked; blk != nil {
+		slog.Warn("bisync deletions blocked by the mass-deletion guard; "+
+			"run `ctl allow-deletes` then `ctl resync` to allow them once",
+			"planned", blk.Planned, "threshold", blk.Threshold,
+			"reason", blk.Reason, "since", blk.Since)
+	}
 	return nil
 }
 

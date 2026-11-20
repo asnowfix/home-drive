@@ -119,6 +119,12 @@ type BisyncConfig struct {
 	// uploads or downloads a path the watcher and the pull path skip.
 	Exclude []string
 
+	// MaxDeleteCount and MaxDeletePct are the mass-deletion guard bounds
+	// (issue #156): a run's deletions are blocked when there are more than
+	// 10 AND (more than MaxDeleteCount OR more than MaxDeletePct percent of
+	// the journaled entries). Zero means the defaults (50 and 10).
+	MaxDeleteCount int
+	MaxDeletePct   int
 	// Remover performs bisync's local deletions (trash, issue #155).
 	// Nil means os.Remove.
 	Remover LocalRemover
@@ -138,8 +144,11 @@ type BisyncAuditEntry struct {
 	FilesPulled  int    `json:"files_pulled"`
 	Conflicts    int    `json:"conflicts"`
 	FilesDeleted int    `json:"files_deleted,omitempty"`
-	DryRun       bool   `json:"dry_run,omitempty"`
-	Error        string `json:"error,omitempty"`
+	// DeletesBlocked is the number of deletions vetoed by the mass-deletion
+	// guard (issue #156).
+	DeletesBlocked int    `json:"deletes_blocked,omitempty"`
+	DryRun         bool   `json:"dry_run,omitempty"`
+	Error          string `json:"error,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	httpctl "github.com/asnowfix/home-drive/homedrive/internal/http"
 	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
 )
@@ -55,6 +57,26 @@ func TestAgent_ForceResync_SucceedsOnce(t *testing.T) {
 	// stays full: a second immediate trigger must report "already running".
 	if err := a.ForceResync(context.Background()); err == nil {
 		t.Error("expected the second ForceResync to report bisync already running")
+	}
+}
+
+func TestAgent_AllowNextDeletes_AndStatusBlock(t *testing.T) {
+	a := newBisyncTestAgent(t)
+
+	// Nothing is blocked, so the override is refused (the endpoint answers 409).
+	if err := a.AllowNextDeletes(context.Background()); !errors.Is(err, httpctl.ErrNothingBlocked) {
+		t.Fatalf("AllowNextDeletes = %v, want httpctl.ErrNothingBlocked", err)
+	}
+	if blk := a.bisyncDeleteBlock(); blk != nil {
+		t.Errorf("block = %+v, want nil before any blocked run", blk)
+	}
+	// An agent without bisync cannot arm the override, and never panics.
+	bare := &Agent{log: slog.Default()}
+	if err := bare.AllowNextDeletes(context.Background()); err == nil {
+		t.Error("expected an error arming the override without bisync")
+	}
+	if blk := bare.bisyncDeleteBlock(); blk != nil {
+		t.Errorf("block = %+v, want nil without bisync", blk)
 	}
 }
 

@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/asnowfix/home-drive/homedrive/internal/config"
 	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
+	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
 )
 
 // Pause stops the watcher pump from forwarding events to the push worker
@@ -39,6 +41,39 @@ func (a *Agent) Resume(_ context.Context) error {
 // ticker. Returns syncer.ErrBisyncRunning if one is already in progress.
 func (a *Agent) ForceResync(ctx context.Context) error {
 	return a.bisync.ForceRun(ctx)
+}
+
+// AllowNextDeletes arms the one-shot override of the bisync mass-deletion
+// guard (issue #156). Backs POST /bisync/allow-deletes and
+// `homedrive ctl allow-deletes`.
+func (a *Agent) AllowNextDeletes(_ context.Context) error {
+	if a.bisync == nil {
+		return errors.New("bisync not running")
+	}
+	if err := a.bisync.AllowNextDeletes(); err != nil {
+		if errors.Is(err, syncer.ErrNoDeleteBlock) {
+			return httpctl.ErrNothingBlocked
+		}
+		return err
+	}
+	return nil
+}
+
+// bisyncDeleteBlock maps the guard's current block onto the /status shape.
+func (a *Agent) bisyncDeleteBlock() *httpctl.DeleteBlock {
+	if a.bisync == nil {
+		return nil
+	}
+	blk := a.bisync.DeleteBlock()
+	if blk == nil {
+		return nil
+	}
+	return &httpctl.DeleteBlock{
+		Planned:   blk.Planned,
+		Threshold: blk.Threshold,
+		Reason:    blk.Reason,
+		Since:     blk.Since.UTC().Format(time.RFC3339),
+	}
 }
 
 // RunChainRepair runs the one-time nested .old.<N> chain repair pass
@@ -113,6 +148,8 @@ func (a *Agent) Status(ctx context.Context) (httpctl.StatusInfo, error) {
 		BytesDown24h:  0, // not yet tracked; requires a metrics/quota follow-up
 		DryRun:        a.reloadedDryRun.Load(),
 		UptimeSeconds: int64(time.Since(a.startTime).Seconds()),
+
+		BisyncDeleteBlocked: a.bisyncDeleteBlock(),
 	}, nil
 }
 

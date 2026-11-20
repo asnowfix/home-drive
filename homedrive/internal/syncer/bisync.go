@@ -74,6 +74,21 @@ type Bisync struct {
 	// the current pass; local files at those exact paths are left alone.
 	// Same locking as snapshot.
 	unrepresentable map[string]struct{}
+
+	// localCount and remoteCount are the sizes of the current pass's local
+	// walk and (filtered) remote listing; the delete guard treats an empty
+	// side as suspect (issue #156). Same locking as snapshot.
+	localCount, remoteCount int
+
+	// vetoed is the number of deletions the guard blocked in the current
+	// pass. Same locking as snapshot.
+	vetoed int
+
+	// guardMu protects allow and block, which the HTTP control endpoint
+	// and /status read and write outside the bisync lock.
+	guardMu sync.Mutex
+	allow   *deleteAllowance
+	block   *DeleteBlock
 }
 
 // markForPrune records base as needing a retention-GC pass once the
@@ -239,17 +254,16 @@ func (b *Bisync) execute(ctx context.Context) {
 	diffs, err := b.diff(ctx)
 	if err != nil {
 		b.log.Error("bisync diff failed", "error", err)
-		b.writeAudit(start, 0, 0, 0, err)
-		b.publishEvent(BisyncEvent{
-			Timestamp: b.clock.Now().UTC().Format(time.RFC3339),
-			Type:      "bisync.completed",
-			Error:     err.Error(),
-			DryRun:    b.cfg.DryRun,
-		})
+		b.finishEarly(start, err)
 		return
 	}
 
 	b.logPlannedDeletions(diffs)
+	diffs, abort := b.applyDeleteGuard(diffs)
+	if abort {
+		b.finishEarly(start, nil)
+		return
+	}
 	pushed, pulled, conflicts := b.syncDiffs(ctx, diffs)
 	b.runRetention(ctx)
 	elapsed := b.clock.Now().Sub(start)
@@ -272,6 +286,22 @@ func (b *Bisync) execute(ctx context.Context) {
 		Conflicts:    conflicts,
 		DryRun:       b.cfg.DryRun,
 	})
+}
+
+// finishEarly closes a pass that did no work: its diff failed (err) or the
+// delete guard aborted it. Nothing was pushed, pulled, deleted or resolved.
+func (b *Bisync) finishEarly(start time.Time, err error) {
+	b.deleted = 0
+	b.writeAudit(start, 0, 0, 0, err)
+	ev := BisyncEvent{
+		Timestamp: b.clock.Now().UTC().Format(time.RFC3339),
+		Type:      "bisync.completed",
+		DryRun:    b.cfg.DryRun,
+	}
+	if err != nil {
+		ev.Error = err.Error()
+	}
+	b.publishEvent(ev)
 }
 
 // syncDiffs iterates over diffs and syncs each one.
