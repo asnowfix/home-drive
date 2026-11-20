@@ -26,6 +26,8 @@ func TestExcluded_Cases(t *testing.T) {
 		{"tilde backup", []string{"**/*~"}, "file.txt~", true},
 		{"idea directory", []string{"**/.idea/**"}, "project/.idea/workspace.xml", true},
 		{"trash uid dir, no patterns", nil, ".Trash-1000", true},
+		{"root marker, no patterns", nil, ".homedrive-root", true},
+		{"nested file of the marker name is a user file", nil, "sub/.homedrive-root", false},
 		{"trash uid content, no patterns", nil, ".Trash-1000/files/a.txt", true},
 		{"admin trash content", []string{"*.tmp"}, ".Trash/1000/info/a.trashinfo", true},
 		{"trash not at root is a normal dir", nil, "docs/.Trash-1000/a.txt", false},
