@@ -92,6 +92,10 @@ type Puller struct {
 	dangling   map[danglingKey]struct{}
 }
 
+// LocalRemover returns the remover the puller deletes through. It exists so
+// the agent wiring (the delete guard, issue #154) can be asserted.
+func (p *Puller) LocalRemover() LocalRemover { return p.cfg.Remover }
+
 // NewPuller creates a Puller. Pass a nil Publisher to disable MQTT events.
 func NewPuller(
 	cfg PullerConfig,

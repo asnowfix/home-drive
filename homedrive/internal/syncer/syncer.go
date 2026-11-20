@@ -44,6 +44,10 @@ type Syncer struct {
 	publisher Publisher
 	logger    *slog.Logger
 
+	// deleteGuard suppresses echoes of homedrive's own local deletions
+	// (issue #154); nil disables it.
+	deleteGuard *DeleteGuard
+
 	// bisyncMu coordinates push workers (RLock) with bisync (Lock).
 	bisyncMu *sync.RWMutex
 
@@ -202,7 +206,7 @@ func (s *Syncer) handleEvent(ctx context.Context, ev Event) {
 	start := s.nowFn()
 	logger := s.logger.With("path", ev.Path, "op", ev.Op.String())
 
-	if s.skipTrashEvent(ev) || s.skipUnpairedRename(logger, ev) || s.skipDirEvent(logger, ev) {
+	if s.skipTrashEvent(ev) || s.skipExpectedDelete(logger, ev) || s.skipUnpairedRename(logger, ev) || s.skipDirEvent(logger, ev) {
 		return
 	}
 

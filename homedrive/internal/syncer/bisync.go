@@ -165,6 +165,10 @@ func NewBisync(opts BisyncOpts) (*Bisync, chan<- struct{}) {
 	return b, forceCh
 }
 
+// LocalRemover returns the remover bisync deletes through. It exists so the
+// agent wiring (the delete guard, issue #154) can be asserted.
+func (b *Bisync) LocalRemover() LocalRemover { return b.cfg.Remover }
+
 // Mu returns the shared RWMutex so push workers can take RLock.
 func (b *Bisync) Mu() *sync.RWMutex {
 	return b.mu

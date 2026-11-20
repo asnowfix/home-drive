@@ -233,6 +233,7 @@ func (b *Bisync) syncRemoteToLocal(ctx context.Context, d FileDiff) error {
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir for %s: %w", d.Path, err)
 	}
+	noteLocalWrite(b.cfg.Remover, filepath.Dir(localPath))
 
 	if err := b.remote.DownloadFile(ctx, d.Path, localPath); err != nil {
 		return fmt.Errorf("download %s: %w", d.Path, err)
@@ -368,6 +369,7 @@ func (b *Bisync) resolveRemoteWins(ctx context.Context, d FileDiff) error {
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir for %s: %w", d.Path, err)
 	}
+	noteLocalWrite(b.cfg.Remover, filepath.Dir(localPath))
 	if err := b.remote.DownloadFile(ctx, d.Path, localPath); err != nil {
 		return fmt.Errorf("download %s: %w", d.Path, err)
 	}
