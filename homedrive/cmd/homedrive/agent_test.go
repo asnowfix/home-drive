@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -21,7 +22,18 @@ import (
 // HTTP server) without ever touching Google Drive or a real broker, per
 // the homedrive-test-mocks skill.
 func newIntegrationTestAgent(t *testing.T) (*Agent, *fakeRemoteFS) {
+	return newIntegrationTestAgentAudit(t, nil)
+}
+
+// newIntegrationTestAgentAudit is newIntegrationTestAgent with an audit
+// logger for the push syncer (nil disables it).
+func newIntegrationTestAgentAudit(t *testing.T, audit syncer.AuditLogger) (*Agent, *fakeRemoteFS) {
 	t.Helper()
+
+	// The trasher resolves the home trash from XDG_DATA_HOME / HOME: keep it
+	// off the developer's real trash.
+	t.Setenv("XDG_DATA_HOME", filepath.Join(t.TempDir(), "share"))
+	t.Setenv("HOME", t.TempDir())
 
 	cfg := &config.Config{
 		LocalRoot: t.TempDir(),
@@ -68,10 +80,14 @@ func newIntegrationTestAgent(t *testing.T) (*Agent, *fakeRemoteFS) {
 	}
 	a.reloadedDryRun.Store(cfg.DryRun)
 
+	// Same trasher + delete guard wiring as newAgent (issue #154).
+	a.trasher = newTrasher(cfg, journal, store.NewAuditor(io.Discard, slog.Default()), slog.Default())
+	a.buildDeleteGuard()
+
 	if err := a.buildWatcher(); err != nil {
 		t.Fatalf("build watcher: %v", err)
 	}
-	a.buildPushSyncer(noopPublisher{}, nil)
+	a.buildPushSyncer(noopPublisher{}, audit)
 	a.buildPuller(noopPublisher{}, nil, nil)
 	a.buildBisync(noopPublisher{}, nil, nil)
 	if err := a.buildHTTPServer(); err != nil {

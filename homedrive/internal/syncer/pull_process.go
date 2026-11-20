@@ -292,6 +292,7 @@ func (p *Puller) downloadFile(ctx context.Context, ch Change, start time.Time) e
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating directory %s: %w", dir, err)
 	}
+	noteLocalWrite(p.cfg.Remover, dir)
 
 	if err := p.remote.DownloadFile(ctx, ch.Path, localPath); err != nil {
 		if errors.Is(err, ErrDanglingShortcut) {
