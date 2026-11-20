@@ -51,7 +51,7 @@ func TestRemoveLocalPath_Cases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := tt.setup(t, t.TempDir())
-			err := removeLocalPath(p)
+			err := removeLocalPath(nil, p)
 			if tt.wantErr == nil && err != nil {
 				t.Fatalf("removeLocalPath: %v", err)
 			}

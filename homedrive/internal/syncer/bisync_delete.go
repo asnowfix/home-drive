@@ -102,7 +102,7 @@ func (b *Bisync) deleteLocal(ctx context.Context, d FileDiff) (bool, error) {
 		b.auditFile("pull_delete", d.Path, "", "")
 		return true, nil
 	}
-	if err := removeLocalPath(localPath); err != nil && !os.IsNotExist(err) {
+	if err := removeLocalPath(b.cfg.Remover, localPath); err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("delete local %s: %w", d.Path, err)
 	}
 	b.removeEmptyParents(localPath)
@@ -194,7 +194,7 @@ func (b *Bisync) reportDeleteConflict(d FileDiff) {
 func (b *Bisync) removeEmptyParents(localPath string) {
 	root := filepath.Clean(b.cfg.LocalRoot)
 	for dir := filepath.Dir(localPath); dir != root && len(dir) > len(root); dir = filepath.Dir(dir) {
-		if removeLocalPath(dir) != nil {
+		if removeLocalPath(b.cfg.Remover, dir) != nil {
 			return
 		}
 	}
