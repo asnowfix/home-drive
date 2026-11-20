@@ -201,6 +201,10 @@ func (s *Syncer) handleEvent(ctx context.Context, ev Event) {
 	if s.skipTrashEvent(ev) || s.skipDirEvent(logger, ev) {
 		return
 	}
+	var skip bool
+	if ev, skip = s.unpairedRenameAsRemove(ev); skip {
+		return
+	}
 
 	if s.cfg.DryRun {
 		s.logDryRun(logger, ev)

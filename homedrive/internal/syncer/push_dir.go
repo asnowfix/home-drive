@@ -16,6 +16,21 @@ func (s *Syncer) skipTrashEvent(ev Event) bool {
 	return pathfilter.IsTrash(filepath.ToSlash(ev.Path))
 }
 
+// unpairedRenameAsRemove turns an unpaired OpRename (the old path of a file
+// moved out of the watched tree, e.g. into the trash, or a user's mv out of
+// local_root) into the OpRemove it amounts to. If the path exists again the
+// event is stale and skipped. Other events pass through. Issue #155.
+func (s *Syncer) unpairedRenameAsRemove(ev Event) (Event, bool) {
+	if ev.Op != OpRename {
+		return ev, false
+	}
+	if _, err := os.Lstat(filepath.Join(s.cfg.LocalRoot, filepath.FromSlash(ev.Path))); err == nil {
+		return ev, true
+	}
+	ev.Op = OpRemove
+	return ev, false
+}
+
 // skipDirEvent reports whether ev is a create/write event for a local
 // directory, which must not be uploaded as a file (issue #105). Directories
 // are not synced on their own: Drive folders are created implicitly when a
