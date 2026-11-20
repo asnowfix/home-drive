@@ -46,6 +46,12 @@ type RcloneFSConfig struct {
 	// from Drive (PLAN.md §7, issue #50 point 5 / #54 filter parity).
 	Exclude []string
 
+	// IDResolver, when non-nil, resolves the Drive file ID of a Removed
+	// change that is not in the in-memory path cache (typically after a
+	// restart) from the journal. Nil keeps the previous behaviour: such
+	// changes are dropped and the hourly bisync catches them (issue #163).
+	IDResolver RemoteIDResolver
+
 	// Log is the structured logger.
 	Log *slog.Logger
 }
@@ -58,6 +64,7 @@ type RcloneFS struct {
 	fsObj      rclonefs.Fs
 	exclude    []string
 	log        *slog.Logger
+	idResolver RemoteIDResolver
 
 	// mu guards changesSvc and rootID, which are lazily resolved on first
 	// use of the Drive Changes API and cached for the life of the process,
@@ -130,6 +137,7 @@ func newRcloneFS(ctx context.Context, cfg RcloneFSConfig, validate func(*RcloneF
 		remoteName: remoteSectionName(remote),
 		exclude:    cfg.Exclude,
 		log:        log,
+		idResolver: cfg.IDResolver,
 		pathCache:  newIDPathCache(),
 	}
 
