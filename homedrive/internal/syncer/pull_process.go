@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/asnowfix/home-drive/homedrive/internal/pathfilter"
 	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 )
 
@@ -15,6 +16,12 @@ import (
 func (p *Puller) processChange(ctx context.Context, ch Change) error {
 	start := p.clock()
 
+	if pathfilter.IsTrash(ch.Path) {
+		// A topdir trash directly under the root is never synced (#155).
+		p.log.Debug("ignoring remote change under a trash directory",
+			"path", ch.Path, "op", "pull", "origin", "remote")
+		return nil
+	}
 	if !ch.Deleted && !rcloneclient.ValidRemotePath(ch.Path) {
 		// Defence in depth (issue #161): translateChange and the full walk
 		// are meant to drop these, but a remote path with a ".." or empty

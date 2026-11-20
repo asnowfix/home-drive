@@ -80,6 +80,12 @@ func (a *Agent) startComponents(ctx context.Context, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		a.runTrashPurge(ctx)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
 		if err := a.bisync.Run(ctx); err != nil && !errors.Is(err, syncer.ErrBisyncCanceled) {
 			a.log.Error("bisync stopped with error", "error", err)
 		}
@@ -268,5 +274,29 @@ func toSyncerOp(op watcher.Op) syncer.Op {
 		return syncer.OpRename
 	default:
 		return syncer.OpWrite
+	}
+}
+
+// trashPurgeInterval is how often the agent purges the trash entries it
+// created that are older than trash.purge_after (issue #155).
+const trashPurgeInterval = time.Hour
+
+// runTrashPurge purges aged homedrive-trashed entries at start and then
+// every trashPurgeInterval, until ctx is canceled.
+func (a *Agent) runTrashPurge(ctx context.Context) {
+	if a.trasher == nil { // partially wired agent (tests)
+		return
+	}
+	ticker := time.NewTicker(trashPurgeInterval)
+	defer ticker.Stop()
+	for {
+		if _, err := a.trasher.Purge(); err != nil {
+			a.log.Warn("trash purge incomplete", "op", "trash_purge", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }

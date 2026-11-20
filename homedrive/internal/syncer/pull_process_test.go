@@ -19,7 +19,7 @@ func TestPuller_RemoteOnlyChangeAfterPull_NoConflict(t *testing.T) {
 	remote := newMockRemoteFS()
 	store := newMockStore()
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: root, ConflictPolicy: PolicyNewerWins},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: root, ConflictPolicy: PolicyNewerWins},
 		remote, store, newMockAuditLogger(), newMockPublisher(),
 		newDiscardLogger(), fixedClock(t0.Add(time.Minute)),
 	)

@@ -66,7 +66,7 @@ func (p *Puller) removeLocal(
 	if err := p.removeSyncedDescendants(ctx, ch.Path, localPath, start, false); err != nil {
 		return deleteNothing, err
 	}
-	err := removeLocalPath(localPath)
+	err := removeLocalPath(p.cfg.Remover, localPath)
 	switch {
 	case err == nil:
 		return deleteRemoved, nil
@@ -120,7 +120,7 @@ func (p *Puller) removeLocalFile(
 	if !mtimeClose(info.ModTime(), e.LocalMtime) {
 		return deleteKept, p.keepModifiedDescendant(ctx, e, info.ModTime(), start, false)
 	}
-	err = removeLocalPath(localPath)
+	err = removeLocalPath(p.cfg.Remover, localPath)
 	if err == nil {
 		return deleteRemoved, nil
 	}

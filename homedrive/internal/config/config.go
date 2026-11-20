@@ -26,6 +26,7 @@ type Config struct {
 	MQTT         MQTTConfig    `yaml:"mqtt"`
 	Logging      LoggingConfig `yaml:"logging"`
 	Quota        QuotaConfig   `yaml:"quota"`
+	Trash        TrashConfig   `yaml:"trash"`
 	DryRun       bool          `yaml:"dry_run"`
 }
 
@@ -139,6 +140,27 @@ type LoggingConfig struct {
 type QuotaConfig struct {
 	WarnPct     float64 `yaml:"warn_pct"`
 	StopPushPct float64 `yaml:"stop_push_pct"`
+}
+
+// defaultTrashPurgeAfter is how long homedrive keeps the entries it moved to
+// the freedesktop.org trash before purging them (issue #155).
+const defaultTrashPurgeAfter = 30 * 24 * time.Hour
+
+// TrashConfig configures the local trash (issue #155).
+type TrashConfig struct {
+	// PurgeAfter is the age, judged by the .trashinfo DeletionDate, after
+	// which homedrive purges the entries it trashed itself. nil (omitted)
+	// means 30 days; an explicit 0s disables purging. Entries homedrive
+	// did not trash are never purged.
+	PurgeAfter *Duration `yaml:"purge_after"`
+}
+
+// PurgeAfterOrDefault returns the effective purge age (0 = never purge).
+func (t TrashConfig) PurgeAfterOrDefault() time.Duration {
+	if t.PurgeAfter == nil {
+		return defaultTrashPurgeAfter
+	}
+	return t.PurgeAfter.Duration
 }
 
 // Duration wraps time.Duration to support YAML unmarshaling of "2s", "500ms".

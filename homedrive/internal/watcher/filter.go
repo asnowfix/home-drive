@@ -27,10 +27,6 @@ func newFilter(root string, patterns []string) *filter {
 
 // excluded returns true if the absolute path matches any exclusion pattern.
 func (f *filter) excluded(absPath string) bool {
-	if len(f.patterns) == 0 {
-		return false
-	}
-
 	rel, err := filepath.Rel(f.root, absPath)
 	if err != nil {
 		return false

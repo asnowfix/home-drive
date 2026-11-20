@@ -39,7 +39,7 @@ func newDanglingFixture(t *testing.T) *danglingFixture {
 	}
 	f.remote.startToken = "t1"
 	f.puller = NewPuller(
-		PullerConfig{Interval: time.Second, LocalRoot: f.root},
+		PullerConfig{Remover: osRemover{}, Interval: time.Second, LocalRoot: f.root},
 		f.remote, f.store, f.audit, f.pub, slog.Default(),
 		fixedClock(time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)),
 	)

@@ -31,7 +31,7 @@ func runPullOn(
 	remote.changes["start-1"] = Changes{Items: changes, NextPageToken: "token-2"}
 	audit, pub := newMockAuditLogger(), newMockPublisher()
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: root, ConflictPolicy: PolicyNewerWins},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: root, ConflictPolicy: PolicyNewerWins},
 		remote, st, audit, pub, newDiscardLogger(), fixedClock(subtreeT0),
 	)
 	if err := p.PollOnce(context.Background()); err != nil {

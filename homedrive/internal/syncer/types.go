@@ -118,6 +118,10 @@ type BisyncConfig struct {
 	// walk and the remote listing via pathfilter.Excluded, so it never
 	// uploads or downloads a path the watcher and the pull path skip.
 	Exclude []string
+
+	// Remover performs bisync's local deletions (trash, issue #155).
+	// Nil means os.Remove.
+	Remover LocalRemover
 }
 
 // ---------------------------------------------------------------------------

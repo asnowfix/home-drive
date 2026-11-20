@@ -264,6 +264,53 @@ initialized`, `starting homedrive agent`, `http server starting`,
 - `/etc/default/homedrive` is not read; log defaults are in the unit and can
   be overridden in `~/.config/homedrive/env`.
 
+### Local trash
+
+When a file is deleted on Drive, homedrive moves its local copy to the
+[freedesktop.org Trash](https://specifications.freedesktop.org/trash-spec/latest/)
+instead of erasing it (issue #155). Empty directories are simply removed:
+there is nothing in them to recover. The Drive side keeps rclone's default
+(Drive's own trash).
+
+Where the trash lives:
+
+- **User unit (`homedrive.service`)**: the home trash,
+  `$XDG_DATA_HOME/Trash` (`~/.local/share/Trash`), by a plain rename. GNOME
+  shows it.
+- **System unit (`homedrive@<user>.service`)**: `ProtectHome=read-only` and a
+  per-path `ReadWritePaths` give the service its own bind mounts, so renaming
+  into the home trash fails (`EXDEV`/`EROFS`). homedrive then uses the spec's
+  topdir trash of the mount that holds the file, found in
+  `/proc/self/mountinfo`. When `local_root` is itself a mount point, as on the
+  NAS, that is **`<local_root>/.Trash-<uid>`**, inside the synced tree. A
+  valid admin-created `<topdir>/.Trash/<uid>` is used instead when it exists.
+  GNOME does not show this trash on a headless NAS; browse it on disk
+  (`files/` holds the data, `info/*.trashinfo` the original path and date).
+- `.Trash-<uid>` and `.Trash` directly under `local_root` are **always
+  excluded** (watcher, push, bisync, pull), whatever `watcher.exclude`
+  says, so trashed files are never pushed back to Drive. A Drive folder
+  named `.Trash` or `.Trash-<digits>` at the root of the remote therefore
+  stops syncing too.
+- A topdir trash is refused (the file is kept and an error logged) when the
+  file's mount is nested *inside* `local_root`, because that trash would sit
+  in the synced tree under a name that is not excluded. Trash directories
+  that are symlinks are never used or purged through.
+- Conflict-loser retention (`.old.<N>` eviction) still deletes outright; it
+  does not use the trash.
+- If neither trash can take a file, homedrive never copies it and never
+  erases it: it logs an error, writes an audit line (`op: trash` with an
+  `error`), and leaves the file and its journal entry, so the deletion is
+  replanned on the next pull or bisync.
+
+Purging: GNOME's housekeeping does not run on a headless host, so homedrive
+purges **only the entries it trashed itself** (recorded in its state
+database, with the trash directory, entry name and `DeletionDate`) once they
+are older than `trash.purge_after` (default `720h`, 30 days; `0s` disables).
+An entry is purged only while its `.trashinfo` still matches the record;
+anything else in a trash is never touched. Each trash and each purge writes
+one audit line (`op: trash`, `op: trash_purge`). With `--dry-run` nothing is
+trashed or purged; the deletion is audited as before.
+
 ## Configuration
 
 homedrive uses two configuration layers:
@@ -312,6 +359,9 @@ conflict:
     max_age: 0s         # expire siblings older than this; 0s = never (default)
     sweep_interval: 24h  # periodic full-journal sweep; 0s = disabled
   repair_chains: true  # one-time collapse of pre-existing nested chains, see PLAN.md §11.5
+
+trash:
+  purge_after: 720h  # purge entries homedrive trashed after this age; 0s = never (default 720h = 30 days)
 
 state:
   path: /var/lib/homedrive/state.db
