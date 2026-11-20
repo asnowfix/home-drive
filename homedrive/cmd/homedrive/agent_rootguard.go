@@ -21,7 +21,7 @@ import (
 // again after a block. The agent exits non-zero on purpose: the inotify
 // watches died with the unmounted tree (or sit on the directory a mount now
 // covers), and systemd's Restart=on-failure re-arms them with a fresh start.
-var ErrRootResumed = errors.New("local_root is the synced tree again: exiting so the supervisor restarts the agent")
+var ErrRootResumed = errors.New("planned restart: local_root is the synced tree again, exiting so the supervisor restarts the agent with fresh watches")
 
 // openState creates the state directory, opens the journal and, on a first
 // install, creates local_root.

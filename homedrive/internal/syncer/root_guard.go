@@ -97,6 +97,9 @@ type RootGuard struct {
 	cfg   RootGuardConfig
 	mu    sync.Mutex
 	block *RootBlock
+	// restarting is set once OnResume has fired: the process is about to
+	// exit, so every later check refuses (nothing may act on the way out).
+	restarting bool
 }
 
 // NewRootGuard creates a guard for cfg.Root.
@@ -126,7 +129,9 @@ func (g *RootGuard) Block() *RootBlock {
 }
 
 // Check evaluates local_root now. It returns nil when the sync may act, or
-// an error wrapping ErrRootBlocked. Block, log, audit line and MQTT event are
+// an error wrapping ErrRootBlocked. With OnResume set, the check that sees
+// the root come back also refuses, and so does every later one: the agent is
+// about to exit for a supervised restart. Block, log, audit line and MQTT event are
 // emitted on transitions only, not on every blocked check.
 func (g *RootGuard) Check() error {
 	if g == nil {
@@ -134,8 +139,14 @@ func (g *RootGuard) Check() error {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.restarting {
+		return fmt.Errorf("%w: planned restart pending", ErrRootBlocked)
+	}
 	reason, detail := g.evaluate()
 	g.transition(reason, detail)
+	if g.restarting { // this very check saw the root come back
+		return fmt.Errorf("%w: local_root is back, planned restart pending", ErrRootBlocked)
+	}
 	if reason == "" {
 		return nil
 	}
@@ -240,6 +251,7 @@ func (g *RootGuard) transition(reason, detail string) {
 		g.report("root_resumed", "root.resumed", "resumed", g.block.Reason, "", now)
 		g.block = nil
 		if g.cfg.OnResume != nil {
+			g.restarting = true
 			g.cfg.OnResume()
 		}
 	case reason != "" && (g.block == nil || g.block.Reason != reason):

@@ -474,6 +474,31 @@ the identity it recorded:
   unmounted tree and are not re-armed in process. Changes made while paused
   are picked up by the next bisync pass.
 
+Notes:
+
+- **systemd `ReadWritePaths=`**: write the `local_root` entry with the `-`
+  prefix (`ReadWritePaths=-/path/to/local_root`). Without it systemd refuses
+  to start the unit with `226/NAMESPACE` when the path does not exist (an
+  absent data disk), so the agent never reaches the blocked-only mode above.
+  `make install` now generates it that way. A unit installed earlier needs the
+  same one-character edit in its drop-in (for the system unit,
+  `/etc/systemd/system/homedrive@<user>.service.d/rw-paths.conf`), followed
+  by `systemctl daemon-reload`; this is not done automatically on existing
+  hosts.
+- **After a resume restart** the watcher starts from scratch and local
+  changes made while paused are only picked up by the next bisync pass, which
+  can be up to `pull.bisync_interval` (one hour by default) after the
+  restart. `ctl resync` forces it.
+- **State DB reset while the disk is absent**: with an empty journal the
+  agent treats an existing empty `local_root` (for instance a directory
+  re-created on the root filesystem under a nested mount layout) as a first
+  install and records a new identity for it. When the real disk returns its
+  marker differs and the block reason is `identity_mismatch`: the fix is to
+  restore the previous state DB, or to remove the stray directory and start
+  again from the disk's own tree; do not edit the marker to match. Upgrading
+  an install that predates the guard likewise adopts the tree only when a
+  journaled path exists under the resolved `local_root`.
+
 If the tree is correct but the marker was lost (deleted by hand, a copy that
 skipped dotfiles), the block reason is `marker_missing` and `detail` carries
 the expected id. With the agent running, restore the marker (the agent then

@@ -155,8 +155,13 @@ func TestRootGuard_OnResumeCalledOncePerRecovery(t *testing.T) {
 	if err := os.Rename(disk, e.root); err != nil {
 		t.Fatal(err)
 	}
-	_ = e.guard.Check()
-	_ = e.guard.Check()
+	// The check that sees the root come back, and every later one, refuses:
+	// the agent is exiting and nothing may act on the way out.
+	for i := 0; i < 2; i++ {
+		if err := e.guard.Check(); !errors.Is(err, ErrRootBlocked) {
+			t.Errorf("check %d after the recovery = %v, want ErrRootBlocked", i, err)
+		}
+	}
 	if calls != 1 {
 		t.Errorf("OnResume calls = %d, want 1", calls)
 	}

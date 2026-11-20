@@ -199,24 +199,6 @@ func (b *Bisync) Run(ctx context.Context) error {
 	}
 }
 
-// gateErr returns nil when the root gate (if any) lets bisync act, or an
-// error wrapping ErrRootBlocked.
-func (b *Bisync) gateErr() error {
-	if b.gate == nil {
-		return nil
-	}
-	return b.gate.Check()
-}
-
-// gateRefuses reports whether the root gate vetoes a pass now (issue #170).
-func (b *Bisync) gateRefuses() bool {
-	if err := b.gateErr(); err != nil {
-		b.log.Debug("bisync skipped: local_root is not the synced tree", "error", err)
-		return true
-	}
-	return false
-}
-
 // autoRepairChains runs the first-pass-after-upgrade chain repair when due.
 // Run before diff(): repair renames the very paths a pre-computed diffs
 // snapshot would reference, and mutating files mid-way through processing a
@@ -270,28 +252,24 @@ func (b *Bisync) execute(ctx context.Context) {
 		b.runMu.Unlock()
 	}()
 
-	if b.gateRefuses() {
-		return
-	}
-
-	start := b.clock.Now()
-
-	b.publishEvent(BisyncEvent{
-		Timestamp: start.UTC().Format(time.RFC3339),
-		Type:      "bisync.started",
-		DryRun:    b.cfg.DryRun,
-	})
-
 	// Acquire exclusive lock, blocking push/pull workers.
 	b.log.Debug("bisync acquiring global lock")
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.log.Debug("bisync global lock acquired")
 
-	// The lock may have waited out a long pull cycle: check again now.
+	// Checked under the lock, which may have waited out a long pull cycle.
+	// Nothing (not even the started event) is published for a refused pass.
 	if b.gateRefuses() {
 		return
 	}
+
+	start := b.clock.Now()
+	b.publishEvent(BisyncEvent{
+		Timestamp: start.UTC().Format(time.RFC3339),
+		Type:      "bisync.started",
+		DryRun:    b.cfg.DryRun,
+	})
 	b.autoRepairChains(ctx)
 
 	diffs, err := b.diff(ctx)

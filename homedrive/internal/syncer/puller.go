@@ -244,9 +244,6 @@ func (p *Puller) poll(ctx context.Context) error {
 			"page_token", token,
 		)
 		// Still persist the next token even if no changes.
-		if err := p.gateErr(); err != nil {
-			return err
-		}
 		return p.persistToken(ctx, changes.NextPageToken)
 	}
 

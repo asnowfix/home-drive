@@ -155,6 +155,13 @@ func TestAgent_PurgeTrash_SkippedWhileBlocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.purgeTrash()
+	if count() != 1 {
+		t.Error("the purge must stay refused while the restart after the recovery is pending")
+	}
+	// Sensitivity: a guard that is not about to restart the agent lets the
+	// same purge run (the record's directory is gone, so it is dropped).
+	a.rootGuard = syncer.NewRootGuard(syncer.RootGuardConfig{Root: a.cfg.LocalRoot, Identity: a.journal})
+	a.purgeTrash()
 	if count() != 0 {
 		t.Error("the purge did not run once local_root was back")
 	}
