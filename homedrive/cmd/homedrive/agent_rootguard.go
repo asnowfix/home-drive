@@ -7,9 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/asnowfix/home-drive/homedrive/internal/config"
 	"github.com/asnowfix/home-drive/homedrive/internal/store"
 	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
 )
@@ -19,6 +22,23 @@ import (
 // watches died with the unmounted tree (or sit on the directory a mount now
 // covers), and systemd's Restart=on-failure re-arms them with a fresh start.
 var ErrRootResumed = errors.New("local_root is the synced tree again: exiting so the supervisor restarts the agent")
+
+// openState creates the state directory, opens the journal and, on a first
+// install, creates local_root.
+func openState(cfg *config.Config, log *slog.Logger) (*store.Journal, error) {
+	if err := os.MkdirAll(filepath.Dir(cfg.State.Path), 0o755); err != nil {
+		return nil, fmt.Errorf("create state dir: %w", err)
+	}
+	journal, err := store.OpenJournal(cfg.State.Path, log)
+	if err != nil {
+		return nil, fmt.Errorf("open journal: %w", err)
+	}
+	if err := ensureLocalRoot(cfg.LocalRoot, journal); err != nil {
+		_ = journal.Close()
+		return nil, err
+	}
+	return journal, nil
+}
 
 // ensureLocalRoot creates local_root for a first install (empty journal). A
 // populated journal means the tree existed: a missing root is the guard's

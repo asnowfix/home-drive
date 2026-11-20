@@ -116,16 +116,8 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 		cfg.DryRun = true
 	}
 
-	if err := os.MkdirAll(filepath.Dir(cfg.State.Path), 0o755); err != nil {
-		return nil, fmt.Errorf("create state dir: %w", err)
-	}
-
-	journal, err := store.OpenJournal(cfg.State.Path, log)
+	journal, err := openState(cfg, log)
 	if err != nil {
-		return nil, fmt.Errorf("open journal: %w", err)
-	}
-	if err := ensureLocalRoot(cfg.LocalRoot, journal); err != nil {
-		_ = journal.Close()
 		return nil, err
 	}
 
