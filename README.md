@@ -69,7 +69,7 @@ cd home-drive/homedrive
 make build-mac        # local Mac build for type-checking
 make build-arm64      # cross-compile for the Pi
 make test-linux       # tests inside OrbStack Ubuntu VM (real inotify)
-make deploy-pi        # build-arm64 + scp + systemctl restart on the NAS
+make deploy-pi PI_HOST=<nas-host>  # build-arm64, then install + restart the user unit over ssh (no sudo)
 ```
 
 See [`homedrive/README.md`](homedrive/README.md) for installation,
