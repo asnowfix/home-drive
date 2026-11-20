@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,39 @@ func TestAgent_LocalRemover_Wiring(t *testing.T) {
 	if r, ok := a.localRemover().(*syncer.DeleteGuard); !ok || r != a.deleteGuard {
 		t.Errorf("localRemover = %v, want the agent's delete guard", a.localRemover())
 	}
+	// The puller and bisync must delete through the guard, not the bare
+	// trasher (fails if buildPuller/buildBisync revert to a.trasher).
+	if got := a.puller.LocalRemover(); got != syncer.LocalRemover(a.deleteGuard) {
+		t.Errorf("puller remover = %T, want the delete guard", got)
+	}
+	if got := a.bisync.LocalRemover(); got != syncer.LocalRemover(a.deleteGuard) {
+		t.Errorf("bisync remover = %T, want the delete guard", got)
+	}
+}
+
+// captureAudit records the push syncer's audit entries.
+type captureAudit struct {
+	mu      sync.Mutex
+	entries []syncer.AuditEntry
+}
+
+func (c *captureAudit) Log(e syncer.AuditEntry) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = append(c.entries, e)
+	return nil
+}
+
+func (c *captureAudit) count(op string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, e := range c.entries {
+		if e.Op == op {
+			n++
+		}
+	}
+	return n
 }
 
 // End to end with the real watcher, the real trasher wrapped by the guard and
@@ -30,7 +64,8 @@ func TestAgent_LocalRemover_Wiring(t *testing.T) {
 // remote, a directory the user removes is. Fails if buildPushSyncer drops
 // WithDeleteGuard.
 func TestAgent_AgentDirRemoval_NotEchoed(t *testing.T) {
-	a, remote := newIntegrationTestAgent(t)
+	audit := &captureAudit{}
+	a, remote := newIntegrationTestAgentAudit(t, audit)
 	root := a.cfg.LocalRoot
 	for _, d := range []string{"agent/sub", "user"} {
 		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
@@ -65,17 +100,17 @@ func TestAgent_AgentDirRemoval_NotEchoed(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Positive waits: the user's removal is pushed, and both of the agent's
+	// removals were seen by the push side and suppressed (audit lines).
 	deadline = time.After(5 * time.Second)
-	for !remote.hasDeleted("user") {
+	for !remote.hasDeleted("user") || audit.count("remove_suppressed") < 2 {
 		select {
 		case <-tick.C:
 		case <-deadline:
-			t.Fatal("the user's directory removal was not pushed")
+			t.Fatalf("timed out: user push=%v, remove_suppressed=%d (want 2)",
+				remote.hasDeleted("user"), audit.count("remove_suppressed"))
 		}
 	}
-	// The agent's removals came first and share the debounce window, so
-	// their echoes (if any) have been processed by now; allow a grace period.
-	time.Sleep(200 * time.Millisecond)
 	for _, d := range []string{"agent/sub", "agent"} {
 		if remote.hasDeleted(d) {
 			t.Errorf("agent's own removal of %s was echoed to Drive", d)

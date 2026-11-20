@@ -363,4 +363,60 @@ func TestDeleteGuard_Concurrent(t *testing.T) {
 		}(w)
 	}
 	wg.Wait()
+
+	// Only 5 distinct paths were ever marked.
+	if n := g.markCount(); n > 5 {
+		t.Errorf("marks = %d, want <= 5 distinct paths", n)
+	}
+	// The guard still works after the hammering: a fresh removal is marked
+	// once and consumed once.
+	fresh := filepath.Join(root, "fresh")
+	if err := os.Mkdir(fresh, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Remove(fresh); err != nil {
+		t.Fatal(err)
+	}
+	if !g.Expected("fresh") || g.Expected("fresh") {
+		t.Error("fresh mark must be expected exactly once")
+	}
+}
+
+// Bisync's own downloads re-create directories without any watcher event
+// reaching the push side, so they must clear marks (noteLocalWrite).
+func TestBisyncWrites_ClearGuardMarks(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, root string, remote *mockRemoteFS, journal *mockJournal)
+	}{
+		{"pull of a remote-only file", func(t *testing.T, root string, remote *mockRemoteFS, journal *mockJournal) {
+			remote.Seed("d/x.txt", deleteT0, "m0")
+		}},
+		{"remote wins conflict", func(t *testing.T, root string, remote *mockRemoteFS, journal *mockJournal) {
+			createLocalFile(t, root, "d/x.txt", deleteT0.Add(time.Hour))
+			remote.Seed("d/x.txt", deleteT0.Add(2*time.Hour), "new")
+			journal.Seed(JournalEntry{Path: "d/x.txt", LocalMtime: deleteT0, RemoteMtime: deleteT0,
+				RemoteMD5: "old", LastOrigin: "local"})
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			g := NewDeleteGuard(root, osRemover{}, guardTTL, newGuardClock().now)
+			b, _, remote, journal, _, _ := newTestBisync(t, root, false)
+			b.cfg.Remover = g
+			seedBystander(t, root, remote, journal)
+			tt.setup(t, root, remote, journal)
+			g.mark("d") // as if the agent had just removed d
+
+			b.execute(context.Background())
+
+			if !fileExists(filepath.Join(root, "d", "x.txt")) {
+				t.Fatal("precondition: file not written")
+			}
+			if g.Expected("d") {
+				t.Error("mark on d survived a bisync write into it")
+			}
+		})
+	}
 }

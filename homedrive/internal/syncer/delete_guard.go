@@ -172,7 +172,7 @@ func (s *Syncer) skipExpectedDelete(logger *slog.Logger, ev Event) bool {
 	case OpRemove:
 		if s.deleteGuard.Expected(ev.Path) {
 			logger.Info("ignoring remove event for a deletion made by homedrive: no Drive call",
-				"op", "remove_suppressed", "origin", "local")
+				"reason", "remove_suppressed", "origin", "local")
 			s.appendAudit(AuditEntry{
 				Timestamp: s.nowFn(), Op: "remove_suppressed", Path: ev.Path, Origin: "local",
 			})
