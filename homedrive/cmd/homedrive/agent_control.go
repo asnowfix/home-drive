@@ -40,7 +40,15 @@ func (a *Agent) Resume(_ context.Context) error {
 // ForceResync triggers an immediate bisync pass, bypassing the hourly
 // ticker. Returns syncer.ErrBisyncRunning if one is already in progress.
 func (a *Agent) ForceResync(ctx context.Context) error {
-	return a.bisync.ForceRun(ctx)
+	return mapRootBlocked(a.bisync.ForceRun(ctx))
+}
+
+// mapRootBlocked turns the syncer's root-guard refusal into the HTTP layer's.
+func mapRootBlocked(err error) error {
+	if errors.Is(err, syncer.ErrRootBlocked) {
+		return fmt.Errorf("%w: %w", httpctl.ErrLocalRootBlocked, err)
+	}
+	return err
 }
 
 // AllowNextDeletes arms the one-shot override of the bisync mass-deletion
@@ -83,7 +91,7 @@ func (a *Agent) bisyncDeleteBlock() *httpctl.DeleteBlock {
 func (a *Agent) RunChainRepair(ctx context.Context, dryRun bool) (httpctl.RepairReport, error) {
 	report, err := a.bisync.RunChainRepair(ctx, dryRun)
 	if err != nil {
-		return httpctl.RepairReport{}, err
+		return httpctl.RepairReport{}, mapRootBlocked(err)
 	}
 
 	links := make([]httpctl.RepairedLink, 0, len(report.Links))

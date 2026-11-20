@@ -199,9 +199,46 @@ func (b *Bisync) Run(ctx context.Context) error {
 	}
 }
 
+// gateErr returns nil when the root gate (if any) lets bisync act, or an
+// error wrapping ErrRootBlocked.
+func (b *Bisync) gateErr() error {
+	if b.gate == nil {
+		return nil
+	}
+	return b.gate.Check()
+}
+
+// gateRefuses reports whether the root gate vetoes a pass now (issue #170).
+func (b *Bisync) gateRefuses() bool {
+	if err := b.gateErr(); err != nil {
+		b.log.Debug("bisync skipped: local_root is not the synced tree", "error", err)
+		return true
+	}
+	return false
+}
+
+// autoRepairChains runs the first-pass-after-upgrade chain repair when due.
+// Run before diff(): repair renames the very paths a pre-computed diffs
+// snapshot would reference, and mutating files mid-way through processing a
+// stale diffs list is the same resurrection hazard the inline retention GC
+// has (see pendingPrune's doc comment). Running it first and letting diff()
+// see fresh post-repair state sidesteps that entirely.
+func (b *Bisync) autoRepairChains(ctx context.Context) {
+	if !b.shouldRepairChains() {
+		return
+	}
+	if _, err := b.runChainRepair(ctx, b.cfg.DryRun, true); err != nil {
+		b.log.Error("chain repair pass failed", "op", "conflict_repair", "error", err)
+	}
+}
+
 // ForceRun triggers an immediate bisync execution. Returns
-// ErrBisyncRunning if a run is already in progress.
+// ErrBisyncRunning if a run is already in progress, or an error wrapping
+// ErrRootBlocked while local_root is not the synced tree.
 func (b *Bisync) ForceRun(_ context.Context) error {
+	if err := b.gateErr(); err != nil {
+		return err
+	}
 	b.runMu.Lock()
 	if b.running {
 		b.runMu.Unlock()
@@ -233,11 +270,8 @@ func (b *Bisync) execute(ctx context.Context) {
 		b.runMu.Unlock()
 	}()
 
-	if b.gate != nil {
-		if err := b.gate.Check(); err != nil {
-			b.log.Debug("bisync skipped: local_root is not the synced tree", "error", err)
-			return
-		}
+	if b.gateRefuses() {
+		return
 	}
 
 	start := b.clock.Now()
@@ -254,17 +288,11 @@ func (b *Bisync) execute(ctx context.Context) {
 	defer b.mu.Unlock()
 	b.log.Debug("bisync global lock acquired")
 
-	if b.shouldRepairChains() {
-		// Run before diff(): repair renames the very paths a
-		// pre-computed diffs snapshot would reference, and mutating
-		// files mid-way through processing a stale diffs list is the
-		// same resurrection hazard the inline retention GC has (see
-		// pendingPrune's doc comment). Running it first and letting
-		// diff() see fresh post-repair state sidesteps that entirely.
-		if _, err := b.runChainRepair(ctx, b.cfg.DryRun, true); err != nil {
-			b.log.Error("chain repair pass failed", "op", "conflict_repair", "error", err)
-		}
+	// The lock may have waited out a long pull cycle: check again now.
+	if b.gateRefuses() {
+		return
 	}
+	b.autoRepairChains(ctx)
 
 	diffs, err := b.diff(ctx)
 	if err != nil {
@@ -419,6 +447,9 @@ func (b *Bisync) shouldRepairChains() bool {
 func (b *Bisync) RunChainRepair(ctx context.Context, dryRun bool) (Report, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if err := b.gateErr(); err != nil {
+		return Report{}, err
+	}
 	return b.runChainRepair(ctx, dryRun, !dryRun)
 }
 

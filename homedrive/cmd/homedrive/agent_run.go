@@ -297,13 +297,24 @@ func (a *Agent) runTrashPurge(ctx context.Context) {
 	ticker := time.NewTicker(trashPurgeInterval)
 	defer ticker.Stop()
 	for {
-		if _, err := a.trasher.Purge(); err != nil {
-			a.log.Warn("trash purge incomplete", "op", "trash_purge", "error", err)
-		}
+		a.purgeTrash()
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
+	}
+}
+
+// purgeTrash runs one purge pass unless local_root is not the synced tree:
+// the topdir trash lives on the data disk, and a purge with the disk absent
+// would drop every due record as "trash directory is gone" (issue #170).
+func (a *Agent) purgeTrash() {
+	if err := a.rootGuard.Check(); err != nil {
+		a.log.Debug("trash purge skipped: local_root is not the synced tree", "op", "trash_purge")
+		return
+	}
+	if _, err := a.trasher.Purge(); err != nil {
+		a.log.Warn("trash purge incomplete", "op", "trash_purge", "error", err)
 	}
 }

@@ -72,6 +72,10 @@ func (s *Server) handleResync(w http.ResponseWriter, r *http.Request) {
 	s.metrics.IncCounter("homedrive_http_requests_total_resync")
 
 	if err := s.deps.Resyncable.ForceResync(r.Context()); err != nil {
+		if errors.Is(err, ErrLocalRootBlocked) {
+			s.writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		s.log.Error("failed to trigger resync", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "failed to trigger resync")
 		return
@@ -101,6 +105,10 @@ func (s *Server) handleConflictRepair(w http.ResponseWriter, r *http.Request) {
 
 	dryRun := r.URL.Query().Get("dry_run") == "1"
 	report, err := s.deps.ChainRepairer.RunChainRepair(r.Context(), dryRun)
+	if errors.Is(err, ErrLocalRootBlocked) {
+		s.writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	if err != nil {
 		s.log.Error("chain repair failed", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "chain repair failed")

@@ -50,6 +50,9 @@ func retryFunc(
 		if lastErr == nil {
 			return nil
 		}
+		if errors.Is(lastErr, ErrRootBlocked) {
+			return lastErr // retrying cannot help; the guard resumes the work
+		}
 
 		logger.Warn("attempt failed",
 			"op", desc,

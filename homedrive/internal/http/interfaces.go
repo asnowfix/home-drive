@@ -48,6 +48,10 @@ type DeleteBlock struct {
 	Since     string `json:"since"`
 }
 
+// ErrLocalRootBlocked is returned by Resyncable and ChainRepairer while
+// local_root is not the synced tree (issue #170); the endpoints answer 503.
+var ErrLocalRootBlocked = errors.New("local_root is not the synced tree: sync is paused")
+
 // ErrNothingBlocked is returned by DeleteOverrider.AllowNextDeletes when no
 // bisync deletions are blocked; the endpoint answers 409.
 var ErrNothingBlocked = errors.New("no bisync deletions are blocked, nothing to allow")

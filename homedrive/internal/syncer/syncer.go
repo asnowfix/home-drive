@@ -12,6 +12,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -222,12 +223,18 @@ func (s *Syncer) handleEvent(ctx context.Context, ev Event) {
 	var obj *RemoteObject
 	err := retryFunc(ctx, s.cfg.Retry, logger, ev.Op.String(),
 		s.sleepFn, func(ctx context.Context) error {
+			if s.rootBlocked(logger) { // after the bisync lock, on every attempt
+				return ErrRootBlocked
+			}
 			var execErr error
 			obj, execErr = s.execEvent(ctx, ev)
 			return execErr
 		},
 	)
 
+	if errors.Is(err, ErrRootBlocked) {
+		return // nothing was attempted: no journal change, no failure event
+	}
 	elapsed := s.nowFn().Sub(start)
 	s.recordResult(ctx, ev.Path, ev.Op.String(), obj, err, elapsed)
 }
@@ -283,9 +290,15 @@ func (s *Syncer) handleDirRename(ctx context.Context, dr DirRename) {
 
 	err := retryFunc(ctx, s.cfg.Retry, logger, "dir_rename",
 		s.sleepFn, func(ctx context.Context) error {
+			if s.rootBlocked(logger) {
+				return ErrRootBlocked
+			}
 			return s.remote.MoveDir(ctx, dr.From, dr.To)
 		},
 	)
+	if errors.Is(err, ErrRootBlocked) {
+		return
+	}
 
 	elapsed := s.nowFn().Sub(start)
 

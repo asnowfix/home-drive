@@ -221,10 +221,8 @@ func (p *Puller) PollOnce(ctx context.Context) error {
 
 // poll executes one pull cycle: fetch changes, process each one.
 func (p *Puller) poll(ctx context.Context) error {
-	if p.cfg.Gate != nil {
-		if err := p.cfg.Gate.Check(); err != nil {
-			return err
-		}
+	if err := p.gateErr(); err != nil {
+		return err
 	}
 	token, err := p.ensurePageToken(ctx)
 	if err != nil {
@@ -246,6 +244,9 @@ func (p *Puller) poll(ctx context.Context) error {
 			"page_token", token,
 		)
 		// Still persist the next token even if no changes.
+		if err := p.gateErr(); err != nil {
+			return err
+		}
 		return p.persistToken(ctx, changes.NextPageToken)
 	}
 
@@ -267,12 +268,25 @@ func (p *Puller) poll(ctx context.Context) error {
 		}
 	}
 
-	// Persist the new token only after processing all changes.
+	// Persist the new token only after processing all changes, and only if
+	// local_root is still the synced tree: if the disk dropped mid-cycle the
+	// changes must be replayed after recovery, not skipped (issue #170).
+	if err := p.gateErr(); err != nil {
+		return err
+	}
 	if err := p.persistToken(ctx, changes.NextPageToken); err != nil {
 		return err
 	}
 
 	return lastErr
+}
+
+// gateErr returns nil when the root gate (if any) lets the cycle act.
+func (p *Puller) gateErr() error {
+	if p.cfg.Gate == nil {
+		return nil
+	}
+	return p.cfg.Gate.Check()
 }
 
 // ensurePageToken retrieves the persisted page token from the store,
