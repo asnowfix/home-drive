@@ -5,16 +5,17 @@ import (
 	"time"
 )
 
-// Issue #155 review M1: a file moved out of the watched tree (which is what
-// the trash rename looks like to inotify) arrives as an unpaired OpRename of
-// the old path. It must act as a removal, not fail as "unhandled operation".
-func TestSyncer_UnpairedRename_ActsAsRemove(t *testing.T) {
+// Issue #155 review M1/R1: a file moved out of the watched tree (what the
+// trash rename looks like to inotify) arrives as an unpaired OpRename of the
+// old path. It must make no Drive call (a removal could delete a conflict
+// winner mid-swap) and must not fail as "unhandled operation".
+func TestSyncer_UnpairedRename_NoDriveCallNoFailure(t *testing.T) {
 	tests := []struct {
 		name        string
 		stillThere  bool
 		wantDeletes int
 	}{
-		{"moved_out_old_path_gone_is_removed", false, 1},
+		{"moved_out_old_path_gone_makes_no_drive_call", false, 0},
 		{"old_path_exists_again_is_ignored", true, 0},
 	}
 	for _, tt := range tests {
@@ -36,6 +37,9 @@ func TestSyncer_UnpairedRename_ActsAsRemove(t *testing.T) {
 
 			if got := len(remote.getDeleteCalls()); got != tt.wantDeletes {
 				t.Errorf("DeleteFile calls = %d, want %d", got, tt.wantDeletes)
+			}
+			if len(remote.getCopyCalls()) != 0 {
+				t.Errorf("unexpected upload for an unpaired rename")
 			}
 			for _, m := range pub.getEvents() {
 				if m.Topic == "homedrive/test/events/push.failure" {

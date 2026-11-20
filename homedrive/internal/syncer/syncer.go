@@ -198,11 +198,7 @@ func (s *Syncer) handleEvent(ctx context.Context, ev Event) {
 	start := s.nowFn()
 	logger := s.logger.With("path", ev.Path, "op", ev.Op.String())
 
-	if s.skipTrashEvent(ev) || s.skipDirEvent(logger, ev) {
-		return
-	}
-	var skip bool
-	if ev, skip = s.unpairedRenameAsRemove(ev); skip {
+	if s.skipTrashEvent(ev) || s.skipUnpairedRename(logger, ev) || s.skipDirEvent(logger, ev) {
 		return
 	}
 

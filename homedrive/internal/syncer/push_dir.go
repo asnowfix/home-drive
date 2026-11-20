@@ -16,19 +16,17 @@ func (s *Syncer) skipTrashEvent(ev Event) bool {
 	return pathfilter.IsTrash(filepath.ToSlash(ev.Path))
 }
 
-// unpairedRenameAsRemove turns an unpaired OpRename (the old path of a file
-// moved out of the watched tree, e.g. into the trash, or a user's mv out of
-// local_root) into the OpRemove it amounts to. If the path exists again the
-// event is stale and skipped. Other events pass through. Issue #155.
-func (s *Syncer) unpairedRenameAsRemove(ev Event) (Event, bool) {
+// skipUnpairedRename reports whether ev is an unpaired OpRename (the old path
+// of a file moved out of the watched tree, e.g. into the trash). It makes no
+// Drive call: converting it into a removal could delete a conflict winner
+// while the pull path swaps the file in (issue #155 review). A journaled file
+// moved out of the root is propagated by bisync's journal-driven deletion.
+func (s *Syncer) skipUnpairedRename(logger *slog.Logger, ev Event) bool {
 	if ev.Op != OpRename {
-		return ev, false
+		return false
 	}
-	if _, err := os.Lstat(filepath.Join(s.cfg.LocalRoot, filepath.FromSlash(ev.Path))); err == nil {
-		return ev, true
-	}
-	ev.Op = OpRemove
-	return ev, false
+	logger.Debug("ignoring unpaired rename: no Drive call", "origin", "local")
+	return true
 }
 
 // skipDirEvent reports whether ev is a create/write event for a local

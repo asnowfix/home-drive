@@ -215,9 +215,14 @@ func (t *Trasher) topdirTrashes(target string) ([]topTrash, error) {
 	if err != nil {
 		return nil, err
 	}
-	if root, rerr := filepath.EvalSymlinks(t.cfg.LocalRoot); t.cfg.LocalRoot != "" && rerr == nil &&
-		top != root && underMount(root, top) {
-		return nil, fmt.Errorf("mount %s is nested inside the sync root %s: its trash would be synced", top, root)
+	if t.cfg.LocalRoot != "" {
+		root, rerr := filepath.EvalSymlinks(t.cfg.LocalRoot)
+		if rerr != nil {
+			return nil, fmt.Errorf("cannot resolve the sync root, refusing a topdir trash: %w", rerr)
+		}
+		if top != root && underMount(root, top) {
+			return nil, fmt.Errorf("mount %s is nested inside the sync root %s: its trash would be synced", top, root)
+		}
 	}
 	uid := strconv.Itoa(t.cfg.UID)
 	var out []topTrash

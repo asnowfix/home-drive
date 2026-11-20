@@ -230,3 +230,16 @@ func TestNilTrasher_IsSafe(t *testing.T) {
 		t.Errorf("Purge on nil trasher = %d, %v", n, err)
 	}
 }
+
+// Review round 2: if the sync root cannot be resolved the nested-mount check
+// fails closed instead of being skipped.
+func TestTrash_UnresolvableLocalRootFailsClosed(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.Rename = failUnder(e.home, syscall.EXDEV)
+	e.cfg.LocalRoot = filepath.Join(e.root, "does-not-exist")
+	src := e.write("f.txt", "x")
+	err := e.trasher().Trash(src)
+	if !errors.Is(err, ErrUnavailable) || !exists(src) {
+		t.Fatalf("err = %v, kept = %v; want refusal", err, exists(src))
+	}
+}
