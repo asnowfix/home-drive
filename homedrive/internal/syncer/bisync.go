@@ -69,6 +69,11 @@ type Bisync struct {
 	// deleted counts deletions propagated by the current pass (issue
 	// #152). Reset at the start of syncDiffs; same locking as snapshot.
 	deleted int
+
+	// unrepresentable holds listing paths listRemote dropped as unsafe in
+	// the current pass; local files at those exact paths are left alone.
+	// Same locking as snapshot.
+	unrepresentable map[string]struct{}
 }
 
 // markForPrune records base as needing a retention-GC pass once the
