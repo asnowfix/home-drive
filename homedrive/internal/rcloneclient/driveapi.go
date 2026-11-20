@@ -235,6 +235,7 @@ func (r *RcloneFS) pollChanges(ctx context.Context, pageToken string) (Changes, 
 	}
 
 	var items []Change
+	snap := &idSnapshot{res: r.idResolver}
 	token := pageToken
 	for {
 		list, err := svc.Changes.List(token).
@@ -269,7 +270,7 @@ func (r *RcloneFS) pollChanges(ctx context.Context, pageToken string) (Changes, 
 		}
 
 		for _, c := range list.Changes {
-			if ch, ok := r.translateChange(c); ok {
+			if ch, ok := r.translateChangeWith(c, snap); ok {
 				items = append(items, ch)
 			}
 		}
@@ -290,8 +291,24 @@ func (r *RcloneFS) pollChanges(ctx context.Context, pageToken string) (Changes, 
 // change should be skipped (excluded by config, or its path cannot yet be
 // resolved -- the hourly bisync safety net will catch the latter case).
 func (r *RcloneFS) translateChange(c *drivev3.Change) (Change, bool) {
+	return r.translateChangeWith(c, &idSnapshot{res: r.idResolver})
+}
+
+// translateChangeWith is translateChange sharing snap, the lazily loaded
+// journal ID snapshot, across the changes of one poll.
+//
+// A Removed change carries no parents, so its path comes from the cache; an
+// ID missing from the cache (the item was deleted while the agent was down,
+// or arrived through bisync, which does not seed the cache) is resolved
+// from the journal instead (issue #163). The resolved path then goes
+// through exactly the checks a cache-resolved one does. Folders are not
+// journaled, so a deleted folder's own ID is still unresolvable here.
+func (r *RcloneFS) translateChangeWith(c *drivev3.Change, snap *idSnapshot) (Change, bool) {
 	if c.Removed || c.File == nil {
 		p, ok := r.pathCache.get(c.FileId)
+		if !ok {
+			p, ok = snap.lookup(r.log, c.FileId)
+		}
 		if !ok {
 			r.log.Warn("ListChanges: skipping removed file with unknown path",
 				"op", "ListChanges", "file_id", c.FileId)
