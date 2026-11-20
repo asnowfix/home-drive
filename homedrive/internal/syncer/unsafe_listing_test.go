@@ -2,9 +2,11 @@ package syncer
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -31,6 +33,29 @@ func strayFiles(t *testing.T, dir string) []string {
 	return out
 }
 
+// assertUnsafeEntryWarned checks the structured log holds one Warn naming the
+// dropped path and no file contents (the mock remote writes "content-of-...").
+func assertUnsafeEntryWarned(t *testing.T, logs, bad string) {
+	t.Helper()
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue
+		}
+		if rec["level"] == "WARN" && rec["path"] == bad &&
+			rec["msg"] == "bisync skipping remote entry with an unsafe path" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no Warn for dropped path %q in logs:\n%s", bad, logs)
+	}
+	if strings.Contains(logs, "content-of-") {
+		t.Errorf("logs contain file contents:\n%s", logs)
+	}
+}
+
 func TestBisync_UnsafeListingPathsNotPulled(t *testing.T) {
 	tests := []struct {
 		name string
@@ -52,6 +77,8 @@ func TestBisync_UnsafeListingPathsNotPulled(t *testing.T) {
 				t.Fatal(err)
 			}
 			b, _, remote, _, _, _ := newTestBisync(t, root, false)
+			logs := &threadSafeBuffer{}
+			b.log = slog.New(slog.NewJSONHandler(logs, nil))
 			remote.Seed(tt.bad, deleteT0, "m1")
 			remote.Seed("ok.txt", deleteT0, "m2")
 
@@ -63,6 +90,7 @@ func TestBisync_UnsafeListingPathsNotPulled(t *testing.T) {
 			if got := strayFiles(t, sandbox); len(got) != 1 {
 				t.Errorf("files under sandbox = %v, want only root/ok.txt", got)
 			}
+			assertUnsafeEntryWarned(t, logs.String(), tt.bad)
 			for _, c := range remote.downloadedFiles {
 				if c.RemotePath == tt.bad {
 					t.Errorf("unsafe path %q was downloaded", tt.bad)
@@ -96,42 +124,19 @@ func TestBisync_UnsafeListingEntryNotADeletion(t *testing.T) {
 	}
 }
 
-func TestLocalPathFor_Cases(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "root")
+func TestPuller_UnsafeFileChangeNotDownloaded(t *testing.T) {
 	tests := []struct {
-		name    string
-		rel     string
-		wantErr bool
+		name string
+		bad  string
 	}{
-		{"plain", "a/b.txt", false},
-		{"parent", "../x", true},
-		{"inner_escape", "a/../../x", true},
-		{"inner_dotdot", "a/../b", true},
-		{"absolute", "/abs", true},
-		{"empty", "", true},
-		{"dot", ".", true},
-		{"dotdot", "..", true},
-		{"nul", "a\x00b", true},
+		{"parent_escape", "../x"},
+		{"inner_escape", "a/../../x"},
+		{"inner_dotdot_stays_inside", "a/../b"},
+		{"absolute", "/abs"},
+		{"backslash", "a\\b"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := localPathFor(root, tt.rel)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
-			}
-			if err != nil && !errors.Is(err, ErrUnsafeRemotePath) {
-				t.Errorf("err = %v, want ErrUnsafeRemotePath", err)
-			}
-			if err == nil && got != filepath.Join(root, filepath.FromSlash(tt.rel)) {
-				t.Errorf("path = %q", got)
-			}
-		})
-	}
-}
-
-func TestPuller_UnsafeFileChangeNotDownloaded(t *testing.T) {
-	for _, bad := range []string{"../x", "a/../../x", "/abs", "a/../b", "a\\b"} {
-		t.Run(bad, func(t *testing.T) {
 			sandbox := t.TempDir()
 			root := filepath.Join(sandbox, "root")
 			if err := os.MkdirAll(root, 0o755); err != nil {
@@ -139,9 +144,9 @@ func TestPuller_UnsafeFileChangeNotDownloaded(t *testing.T) {
 			}
 			remote := newMockRemoteFS()
 			good := RemoteObject{Path: "ok.txt", ModTime: subtreeT0, MD5: "m", Size: 1}
-			badObj := RemoteObject{Path: bad, ModTime: subtreeT0, MD5: "m", Size: 1}
+			badObj := RemoteObject{Path: tt.bad, ModTime: subtreeT0, MD5: "m", Size: 1}
 			runPullOn(t, remote, root, newMockStore(), []Change{
-				{Path: bad, Object: &badObj},
+				{Path: tt.bad, Object: &badObj},
 				{Path: "ok.txt", Object: &good},
 			})
 

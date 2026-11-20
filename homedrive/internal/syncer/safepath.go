@@ -14,11 +14,14 @@ import (
 var ErrUnsafeRemotePath = errors.New("unsafe remote path")
 
 // localPathFor maps a remote-relative path to its absolute local path under
-// root. It is the choke point for every place a Drive-supplied path becomes
-// a local write: the path must be a valid remote path (no "..", empty or
-// "." component, no backslash or NUL) and the joined result must still lie
-// strictly under root, so even a caller that forgot to validate cannot
-// escape the sync root.
+// root. Every join of a Drive-supplied path (listing, change, conflict
+// target) onto local_root goes through it: the path must be a valid remote
+// path (no "..", empty or "." component, no backslash or NUL) and the joined
+// result must still lie strictly under root. Joins that are not Drive-fed do
+// not use it: paths from the local walk, or journal paths that were
+// validated before being journaled (chain repair, retention GC, the
+// pull_subtree sweep, bisync's read-only Lstat in deleteRemote). It checks
+// the path lexically only; a symlinked directory under root is #166.
 func localPathFor(root, rel string) (string, error) {
 	if !rcloneclient.ValidRemotePath(rel) {
 		return "", fmt.Errorf("%w: %q", ErrUnsafeRemotePath, rel)

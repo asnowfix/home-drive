@@ -61,11 +61,17 @@ func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) 
 			Origin:    "remote",
 			DryRun:    true,
 		})
-		return p.removeSyncedDescendants(ctx, ch.Path,
-			filepath.Join(p.cfg.LocalRoot, ch.Path), start, true)
+		dryPath, err := localPathFor(p.cfg.LocalRoot, ch.Path)
+		if err != nil {
+			return err
+		}
+		return p.removeSyncedDescendants(ctx, ch.Path, dryPath, start, true)
 	}
 
-	localPath := filepath.Join(p.cfg.LocalRoot, ch.Path)
+	localPath, err := localPathFor(p.cfg.LocalRoot, ch.Path)
+	if err != nil {
+		return err
+	}
 	outcome, err := p.removeLocal(ctx, ch, localPath, start)
 	if err != nil {
 		p.log.Error("failed to delete local file",
@@ -135,7 +141,10 @@ func (p *Puller) detectConflict(
 	ch Change,
 	journal JournalEntry,
 ) (bool, time.Time, error) {
-	localPath := filepath.Join(p.cfg.LocalRoot, ch.Path)
+	localPath, err := localPathFor(p.cfg.LocalRoot, ch.Path)
+	if err != nil {
+		return false, time.Time{}, err
+	}
 	info, err := os.Stat(localPath)
 	if err != nil {
 		if os.IsNotExist(err) {
