@@ -191,7 +191,7 @@ func TestPuller_FolderDelete_RemovesSyncedDescendants(t *testing.T) {
 			}
 			audit, pub := newMockAuditLogger(), newMockPublisher()
 			p := NewPuller(
-				PullerConfig{
+				PullerConfig{Remover: osRemover{},
 					Interval: 30 * time.Second, LocalRoot: root,
 					ConflictPolicy: PolicyNewerWins, Exclude: tt.exclude,
 					DryRun: tt.dryRun,
@@ -285,7 +285,7 @@ func TestPuller_FolderDelete_AuditsEachDescendant(t *testing.T) {
 	}
 	audit := newMockAuditLogger()
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: root},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: root},
 		remote, st, audit, newMockPublisher(), newDiscardLogger(), fixedClock(subtreeT0),
 	)
 	if err := p.PollOnce(context.Background()); err != nil {

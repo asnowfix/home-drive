@@ -102,7 +102,7 @@ func (p *Puller) removeSyncedFile(
 		p.logAudit(audit)
 		return false, nil
 	}
-	if err := removeLocalPath(localPath); err != nil && !os.IsNotExist(err) {
+	if err := removeLocalPath(p.cfg.Remover, localPath); err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("deleting local file %s: %w", e.Path, err)
 	}
 	if err := p.store.Delete(ctx, e.Path); err != nil {
@@ -164,7 +164,7 @@ func (p *Puller) pruneEmptyDirs(dirs map[string]struct{}, folder string) {
 			if err != nil || pathfilter.Excluded(p.cfg.Exclude, filepath.ToSlash(rel)) {
 				break
 			}
-			if err := removeLocalPath(d); err != nil && !os.IsNotExist(err) {
+			if err := removeLocalPath(p.cfg.Remover, d); err != nil && !os.IsNotExist(err) {
 				break
 			}
 		}

@@ -69,7 +69,7 @@ func TestPuller_LocalWinsConflict_JournalsUploadedID(t *testing.T) {
 		NextPageToken: "t2",
 	}
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: root, ConflictPolicy: PolicyNewerWins},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: root, ConflictPolicy: PolicyNewerWins},
 		remote, st, newMockAuditLogger(), newMockPublisher(),
 		newDiscardLogger(), fixedClock(subtreeT0.Add(2*time.Hour)),
 	)

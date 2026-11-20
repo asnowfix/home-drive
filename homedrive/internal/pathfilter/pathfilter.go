@@ -18,6 +18,29 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 )
 
+// IsTrash reports whether relPath (forward-slash, relative to the sync root)
+// is, or lies under, a freedesktop.org topdir trash directory directly in the
+// sync root: ".Trash" or ".Trash-<uid>". When the root is itself a mount
+// point, homedrive's local deletions land in <root>/.Trash-<uid> (issue
+// #155), which must never be synced, whatever watcher.exclude says.
+func IsTrash(relPath string) bool {
+	relPath = strings.TrimPrefix(relPath, "/")
+	first, _, _ := strings.Cut(relPath, "/")
+	if first == ".Trash" {
+		return true
+	}
+	uid, ok := strings.CutPrefix(first, ".Trash-")
+	if !ok || uid == "" {
+		return false
+	}
+	for _, c := range uid {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // Excluded reports whether relPath matches any of the given doublestar glob
 // patterns. relPath must be forward-slash separated and relative to the
 // sync root; a leading slash is tolerated and stripped.
@@ -32,12 +55,13 @@ import (
 //     "/**" suffix stripped, so the directory itself (".git") is excluded,
 //     not just its contents (".git/HEAD").
 //
-// An empty patterns slice always returns false.
+// Independently of patterns, a freedesktop.org Trash directory directly under
+// the sync root (see IsTrash) is always excluded (issue #155).
 func Excluded(patterns []string, relPath string) bool {
-	if len(patterns) == 0 {
-		return false
-	}
 	relPath = strings.TrimPrefix(relPath, "/")
+	if IsTrash(relPath) {
+		return true
+	}
 
 	for _, pattern := range patterns {
 		if matched, _ := doublestar.Match(pattern, relPath); matched {

@@ -57,6 +57,10 @@ type PullerConfig struct {
 	// removed locally (issue #152), the same filter push and bisync use.
 	Exclude []string
 
+	// Remover performs the puller's local deletions (trash, issue #155).
+	// Nil means os.Remove.
+	Remover LocalRemover
+
 	// DryRun when true logs intended actions without writing.
 	DryRun bool
 }

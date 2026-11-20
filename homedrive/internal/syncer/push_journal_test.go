@@ -39,7 +39,7 @@ func pullBack(t *testing.T, root string, remote *mockRemoteFS, store *mockStore,
 		NextPageToken: "t2",
 	}
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: root, ConflictPolicy: PolicyNewerWins},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: root, ConflictPolicy: PolicyNewerWins},
 		remote, store, newMockAuditLogger(), newMockPublisher(),
 		newDiscardLogger(), fixedClock(pushTestMtime.Add(time.Minute)),
 	)

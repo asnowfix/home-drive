@@ -57,6 +57,9 @@ func OpenJournal(path string, logger *slog.Logger) (*Journal, error) {
 		if _, err := tx.CreateBucketIfNotExists(bucketJournal); err != nil {
 			return err
 		}
+		if _, err := tx.CreateBucketIfNotExists(bucketTrash); err != nil {
+			return err
+		}
 		_, err := tx.CreateBucketIfNotExists(bucketMeta)
 		return err
 	}); err != nil {
@@ -244,6 +247,29 @@ func (j *Journal) ForEach(fn func(JournalEntry) error) error {
 		}
 		return nil
 	})
+}
+
+// RemoteIDPaths returns, for every entry that records a Drive file ID, the
+// paths journaled under that ID (normally exactly one). It satisfies
+// rcloneclient.RemoteIDResolver (issue #163).
+//
+// This is one pass over the journal rather than a persistent secondary
+// index: it only runs when a Changes poll meets a Removed ID absent from the
+// path cache (after a restart), is shared by every such change in that
+// poll, and an index would add a write to every Put/Delete/rename plus a
+// backfill for existing databases. Entries without a RemoteID are skipped.
+func (j *Journal) RemoteIDPaths() (map[string][]string, error) {
+	out := make(map[string][]string)
+	err := j.ForEach(func(e JournalEntry) error {
+		if e.RemoteID != "" {
+			out[e.RemoteID] = append(out[e.RemoteID], e.Path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // hasPrefix checks whether key starts with prefix (byte-level comparison).

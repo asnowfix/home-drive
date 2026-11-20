@@ -24,6 +24,7 @@ import (
 	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 	"github.com/asnowfix/home-drive/homedrive/internal/store"
 	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
+	"github.com/asnowfix/home-drive/homedrive/internal/trash"
 	"github.com/asnowfix/home-drive/homedrive/internal/watcher"
 )
 
@@ -54,6 +55,10 @@ type Agent struct {
 	pushSyncer *syncer.Syncer
 	puller     *syncer.Puller
 	bisync     *syncer.Bisync
+
+	// trasher performs every local deletion made by sync (freedesktop.org
+	// trash, issue #155) and purges the entries it trashed.
+	trasher *trash.Trasher
 
 	// bisyncMu is shared between the push syncer (RLock), the pull loop
 	// (RLock, taken by this package around each PollOnce call since
@@ -125,6 +130,7 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 		Remote:     cfg.Remote,
 		ConfigPath: cfg.RcloneConfig,
 		Exclude:    cfg.Watcher.Exclude,
+		IDResolver: journal,
 		Log:        log,
 	})
 	if err != nil {
@@ -167,6 +173,8 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 	}
 	a.reloadedDryRun.Store(cfg.DryRun)
 
+	a.trasher = newTrasher(cfg, journal, auditor, log)
+
 	if err := a.buildWatcher(); err != nil {
 		a.closeResources()
 		return nil, err
@@ -180,6 +188,19 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 	}
 
 	return a, nil
+}
+
+// newTrasher builds the freedesktop.org trash used for every local deletion
+// made by sync, and for purging the entries it trashed (issue #155).
+func newTrasher(cfg *config.Config, j *store.Journal, auditor *store.Auditor, log *slog.Logger) *trash.Trasher {
+	return trash.New(trash.Config{
+		PurgeAge:  cfg.Trash.PurgeAfterOrDefault(),
+		DryRun:    cfg.DryRun,
+		LocalRoot: cfg.LocalRoot,
+		Records:   j,
+		Audit:     auditor,
+		Log:       log,
+	})
 }
 
 // buildAuditLog opens the JSONL audit log file (if configured) and returns
@@ -304,6 +325,7 @@ func (a *Agent) buildPuller(pub syncer.Publisher, audit syncer.AuditLogger, audi
 			Retention:      retentionPolicy(a.cfg.Conflict.Retention),
 			Auditor:        auditor,
 			Exclude:        a.cfg.Watcher.Exclude,
+			Remover:        a.trasher,
 			DryRun:         a.cfg.DryRun,
 		},
 		a.rfs,
@@ -335,6 +357,7 @@ func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer, auditor *s
 
 			MaxDeleteCount: derefInt(a.cfg.Bisync.MaxDeleteCount),
 			MaxDeletePct:   derefInt(a.cfg.Bisync.MaxDeletePct),
+			Remover:        a.trasher,
 		},
 		Remote:  a.rfs,
 		Journal: &bisyncJournalAdapter{j: a.journal},

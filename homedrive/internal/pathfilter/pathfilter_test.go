@@ -25,6 +25,13 @@ func TestExcluded_Cases(t *testing.T) {
 		{"normal file not excluded", []string{"**/.git/**", "**/*.swp"}, "Documents/notes.md", false},
 		{"tilde backup", []string{"**/*~"}, "file.txt~", true},
 		{"idea directory", []string{"**/.idea/**"}, "project/.idea/workspace.xml", true},
+		{"trash uid dir, no patterns", nil, ".Trash-1000", true},
+		{"trash uid content, no patterns", nil, ".Trash-1000/files/a.txt", true},
+		{"admin trash content", []string{"*.tmp"}, ".Trash/1000/info/a.trashinfo", true},
+		{"trash not at root is a normal dir", nil, "docs/.Trash-1000/a.txt", false},
+		{"trash lookalike: non-numeric uid", nil, ".Trash-foo/a.txt", false},
+		{"trash lookalike: no uid", nil, ".Trash-/a.txt", false},
+		{"trash lookalike: prefix only", nil, ".Trashed/a.txt", false},
 		{"multiple patterns second matches", []string{"*.tmp", "**/.git/**"}, ".git/HEAD", true},
 	}
 

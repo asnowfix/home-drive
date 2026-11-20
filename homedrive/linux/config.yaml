@@ -65,6 +65,13 @@ conflict:
     sweep_interval: 24h  # periodic full-journal sweep; 0s = disabled
   repair_chains: true  # one-time collapse of pre-existing nested chains, see PLAN.md §11.5
 
+# Local deletions made by sync (a file deleted on Drive) go to the
+# freedesktop.org Trash instead of being erased. homedrive purges only the
+# entries it trashed itself, once older than purge_after (judged by the
+# .trashinfo DeletionDate). 0s = never purge. Default 720h (30 days).
+trash:
+  purge_after: 720h
+
 state:
   # systemd StateDirectory=homedrive/%i creates /var/lib/homedrive/<user>/
   path: /var/lib/homedrive/fix/state.db

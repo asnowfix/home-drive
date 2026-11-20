@@ -50,6 +50,29 @@ conflict:
 	}
 }
 
+func TestLoad_TrashPurgeAfter_Cases(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want time.Duration
+	}{
+		{"omitted_defaults_to_30_days", "local_root: /tmp/sync\n", 30 * 24 * time.Hour},
+		{"explicit", "trash:\n  purge_after: 48h\n", 48 * time.Hour},
+		{"zero_disables", "trash:\n  purge_after: 0s\n", 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, tc.yaml))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got := cfg.Trash.PurgeAfterOrDefault(); got != tc.want {
+				t.Errorf("PurgeAfterOrDefault = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoad_ConflictRetentionExplicitValuesPreserved(t *testing.T) {
 	path := writeConfig(t, `
 local_root: /tmp/sync

@@ -57,6 +57,30 @@ func TestFilter_Excluded(t *testing.T) {
 			want:     false,
 		},
 		{
+			name:     "TrashUIDDirNoPatterns",
+			patterns: nil,
+			path:     filepath.Join(root, ".Trash-1000"),
+			want:     true,
+		},
+		{
+			name:     "TrashUIDContent",
+			patterns: []string{"**/*.swp"},
+			path:     filepath.Join(root, ".Trash-1000/files/a.txt"),
+			want:     true,
+		},
+		{
+			name:     "AdminTrashContent",
+			patterns: nil,
+			path:     filepath.Join(root, ".Trash/1000/files/a.txt"),
+			want:     true,
+		},
+		{
+			name:     "NestedTrashLookalikeNotExcluded",
+			patterns: nil,
+			path:     filepath.Join(root, "docs/.Trash-1000/a.txt"),
+			want:     false,
+		},
+		{
 			name:     "TmpFile",
 			patterns: []string{"**/*.tmp"},
 			path:     filepath.Join(root, "download.tmp"),

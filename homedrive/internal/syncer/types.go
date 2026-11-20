@@ -125,6 +125,9 @@ type BisyncConfig struct {
 	// the journaled entries). Zero means the defaults (50 and 10).
 	MaxDeleteCount int
 	MaxDeletePct   int
+	// Remover performs bisync's local deletions (trash, issue #155).
+	// Nil means os.Remove.
+	Remover LocalRemover
 }
 
 // ---------------------------------------------------------------------------

@@ -270,6 +270,7 @@ func newTestBisync(
 			Interval:  time.Hour,
 			LocalRoot: localRoot,
 			DryRun:    dryRun,
+			Remover:   osRemover{},
 		},
 		Remote:  remote,
 		Journal: journal,
