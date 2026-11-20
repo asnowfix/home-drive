@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -67,6 +68,10 @@ func newIntegrationTestAgent(t *testing.T) (*Agent, *fakeRemoteFS) {
 		startTime:   time.Now(),
 	}
 	a.reloadedDryRun.Store(cfg.DryRun)
+
+	// Same trasher + delete guard wiring as newAgent (issue #154).
+	a.trasher = newTrasher(cfg, journal, store.NewAuditor(io.Discard, slog.Default()), slog.Default())
+	a.buildDeleteGuard()
 
 	if err := a.buildWatcher(); err != nil {
 		t.Fatalf("build watcher: %v", err)
