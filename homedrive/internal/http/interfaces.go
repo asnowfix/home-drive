@@ -18,6 +18,26 @@ type StatusInfo struct {
 	BytesDown24h  int64  `json:"bytes_down_24h"`
 	DryRun        bool   `json:"dry_run"`
 	UptimeSeconds int64  `json:"uptime_seconds"`
+
+	// BisyncDeleteBlocked is set while the bisync mass-deletion guard is
+	// vetoing the deletions of the last run that planned any (issue #156).
+	// Under status v2 (#144) it maps to bisync.delete_blocked.
+	BisyncDeleteBlocked *DeleteBlock `json:"bisync_delete_blocked,omitempty"`
+}
+
+// DeleteBlock describes deletions vetoed by the bisync mass-deletion guard.
+type DeleteBlock struct {
+	Planned   int    `json:"planned"`
+	Threshold int    `json:"threshold"`
+	Reason    string `json:"reason"`
+	Since     string `json:"since"`
+}
+
+// DeleteOverrider is implemented by the syncer to arm the one-shot override
+// of the bisync mass-deletion guard: the next bisync run's deletions go
+// through once, then the override resets.
+type DeleteOverrider interface {
+	AllowNextDeletes(ctx context.Context) error
 }
 
 // ComponentHealth reports the health of a single subsystem.

@@ -74,6 +74,21 @@ type Bisync struct {
 	// the current pass; local files at those exact paths are left alone.
 	// Same locking as snapshot.
 	unrepresentable map[string]struct{}
+
+	// localCount and remoteCount are the sizes of the current pass's local
+	// walk and (filtered) remote listing; the delete guard treats an empty
+	// side as suspect (issue #156). Same locking as snapshot.
+	localCount, remoteCount int
+
+	// vetoed is the number of deletions the guard blocked in the current
+	// pass. Same locking as snapshot.
+	vetoed int
+
+	// guardMu protects allowOnce and block, which the HTTP control
+	// endpoint and /status read and write outside the bisync lock.
+	guardMu   sync.Mutex
+	allowOnce bool
+	block     *DeleteBlock
 }
 
 // markForPrune records base as needing a retention-GC pass once the
@@ -250,6 +265,7 @@ func (b *Bisync) execute(ctx context.Context) {
 	}
 
 	b.logPlannedDeletions(diffs)
+	diffs = b.applyDeleteGuard(diffs)
 	pushed, pulled, conflicts := b.syncDiffs(ctx, diffs)
 	b.runRetention(ctx)
 	elapsed := b.clock.Now().Sub(start)

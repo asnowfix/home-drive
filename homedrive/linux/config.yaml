@@ -46,6 +46,16 @@ pull:
   changes_api_interval: 30s
   bisync_interval: 1h
 
+bisync:
+  # Mass-deletion guard: a bisync run's deletions (local + Drive together) are
+  # blocked when there are more than 10 AND (more than max_delete_count OR more
+  # than max_delete_pct % of the journaled entries). An empty local walk or an
+  # empty Drive listing against a non-empty journal blocks them whatever the
+  # count. Pushes, pulls and conflicts of that run still happen. Allow one run:
+  # `homedrive ctl allow-deletes` then `homedrive ctl resync`.
+  max_delete_count: 50  # >= 1
+  max_delete_pct: 10    # 1..100
+
 conflict:
   policy: newer_wins
   old_suffix_format: ".old.%d"

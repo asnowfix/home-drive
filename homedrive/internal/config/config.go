@@ -26,6 +26,7 @@ type Config struct {
 	MQTT         MQTTConfig    `yaml:"mqtt"`
 	Logging      LoggingConfig `yaml:"logging"`
 	Quota        QuotaConfig   `yaml:"quota"`
+	Bisync       BisyncConfig  `yaml:"bisync"`
 	DryRun       bool          `yaml:"dry_run"`
 }
 
@@ -53,6 +54,16 @@ type RetryConfig struct {
 type PullConfig struct {
 	ChangesAPIInterval Duration `yaml:"changes_api_interval"`
 	BisyncInterval     Duration `yaml:"bisync_interval"`
+}
+
+// BisyncConfig configures the bisync mass-deletion guard (issue #156): a
+// run's deletions are blocked when there are more than 10 AND (more than
+// MaxDeleteCount OR more than MaxDeletePct percent of the journaled
+// entries). A nil field means its default (50 and 10); an explicit value
+// below 1, or a percentage above 100, is a configuration error.
+type BisyncConfig struct {
+	MaxDeleteCount *int `yaml:"max_delete_count"`
+	MaxDeletePct   *int `yaml:"max_delete_pct"`
 }
 
 // ConflictCfg configures conflict resolution.
@@ -161,6 +172,10 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 const (
 	defaultMaxPerFile    = 3
 	defaultSweepInterval = 24 * time.Hour
+
+	// Bisync mass-deletion guard defaults (issue #156).
+	defaultMaxDeleteCount = 50
+	defaultMaxDeletePct   = 10
 )
 
 // Load reads and parses the YAML config file at path, validates
@@ -178,8 +193,22 @@ func Load(path string) (*Config, error) {
 	if _, err := oldsuffix.New(cfg.Conflict.OldSuffixFormat); err != nil {
 		return nil, fmt.Errorf("config: conflict.old_suffix_format: %w", err)
 	}
+	if err := cfg.Bisync.validate(); err != nil {
+		return nil, err
+	}
 	cfg.applyDefaults()
 	return &cfg, nil
+}
+
+// validate rejects out-of-range guard bounds.
+func (b BisyncConfig) validate() error {
+	if b.MaxDeleteCount != nil && *b.MaxDeleteCount < 1 {
+		return fmt.Errorf("config: bisync.max_delete_count must be at least 1, got %d", *b.MaxDeleteCount)
+	}
+	if b.MaxDeletePct != nil && (*b.MaxDeletePct < 1 || *b.MaxDeletePct > 100) {
+		return fmt.Errorf("config: bisync.max_delete_pct must be between 1 and 100, got %d", *b.MaxDeletePct)
+	}
+	return nil
 }
 
 // applyDefaults fills in zero-valued fields of Config with their
@@ -205,6 +234,15 @@ func (c *Config) applyDefaults() {
 		c.Conflict.Retention.SweepInterval = Duration{Duration: defaultSweepInterval}
 	} else if c.Conflict.Retention.MaxPerFile <= 0 {
 		c.Conflict.Retention.MaxPerFile = 1
+	}
+
+	if c.Bisync.MaxDeleteCount == nil {
+		n := defaultMaxDeleteCount
+		c.Bisync.MaxDeleteCount = &n
+	}
+	if c.Bisync.MaxDeletePct == nil {
+		n := defaultMaxDeletePct
+		c.Bisync.MaxDeletePct = &n
 	}
 
 	if c.Conflict.RepairChains == nil {

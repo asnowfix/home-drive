@@ -23,15 +23,16 @@ func (b *Bisync) writeAudit(
 
 	elapsed := b.clock.Now().Sub(start)
 	entry := BisyncAuditEntry{
-		Timestamp:    start.UTC().Format(time.RFC3339),
-		Op:           "bisync",
-		Duration:     fmt.Sprintf("%d", elapsed.Milliseconds()),
-		FilesChanged: pushed + pulled + b.deleted,
-		FilesPushed:  pushed,
-		FilesPulled:  pulled,
-		Conflicts:    conflicts,
-		FilesDeleted: b.deleted,
-		DryRun:       b.cfg.DryRun,
+		Timestamp:      start.UTC().Format(time.RFC3339),
+		Op:             "bisync",
+		Duration:       fmt.Sprintf("%d", elapsed.Milliseconds()),
+		FilesChanged:   pushed + pulled + b.deleted,
+		FilesPushed:    pushed,
+		FilesPulled:    pulled,
+		Conflicts:      conflicts,
+		FilesDeleted:   b.deleted,
+		DeletesBlocked: b.vetoed,
+		DryRun:         b.cfg.DryRun,
 	}
 	if syncErr != nil {
 		entry.Error = syncErr.Error()
@@ -47,6 +48,23 @@ func (b *Bisync) writeAudit(
 	if _, err := b.audit.Write([]byte(line)); err != nil {
 		b.log.Error("failed to write audit entry", "error", err)
 	}
+}
+
+// auditBlocked appends the audit line of a run whose deletions the guard
+// vetoed: planned count, threshold, reason and the first few paths.
+func (b *Bisync) auditBlocked(blk *DeleteBlock, paths []string) {
+	if b.auditor == nil {
+		return
+	}
+	b.auditor.Log(store.AuditEntry{
+		Timestamp:  b.clock.Now(),
+		Op:         "delete_blocked",
+		FilesCount: blk.Planned,
+		Threshold:  blk.Threshold,
+		Reason:     blk.Reason,
+		Paths:      paths,
+		DryRun:     b.cfg.DryRun,
+	})
 }
 
 // auditFile appends one per-file line (op "push", "pull" or "conflict") to

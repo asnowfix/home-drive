@@ -58,6 +58,25 @@ func TestAgent_ForceResync_SucceedsOnce(t *testing.T) {
 	}
 }
 
+func TestAgent_AllowNextDeletes_AndStatusBlock(t *testing.T) {
+	a := newBisyncTestAgent(t)
+
+	if err := a.AllowNextDeletes(context.Background()); err != nil {
+		t.Fatalf("AllowNextDeletes: %v", err)
+	}
+	if blk := a.bisyncDeleteBlock(); blk != nil {
+		t.Errorf("block = %+v, want nil before any blocked run", blk)
+	}
+	// An agent without bisync cannot arm the override, and never panics.
+	bare := &Agent{log: slog.Default()}
+	if err := bare.AllowNextDeletes(context.Background()); err == nil {
+		t.Error("expected an error arming the override without bisync")
+	}
+	if blk := bare.bisyncDeleteBlock(); blk != nil {
+		t.Errorf("block = %+v, want nil without bisync", blk)
+	}
+}
+
 func TestAgent_Reload_AppliesLogLevelAndDryRun(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")

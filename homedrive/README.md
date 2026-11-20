@@ -40,7 +40,7 @@ Key properties:
 | Conflict handling | `newer_wins` / `local_wins` / `remote_wins` policies, `.old.<N>` archive |
 | Loop prevention | mtime-based echo suppression via the local journal |
 | Quota awareness | MQTT warning at 90%, push pause at 99%, hysteresis resume |
-| HTTP control | `/status`, `/pause`, `/resume`, `/resync`, `/reload`, `/healthz`, `/metrics` |
+| HTTP control | `/status`, `/pause`, `/resume`, `/resync`, `/bisync/allow-deletes`, `/reload`, `/healthz`, `/metrics` |
 | MQTT publishing | HA Discovery, state sensors, event stream, LWT |
 | Dry-run mode | `--dry-run` flag logs intended actions without remote writes |
 | Exclusion filters | Glob patterns for `.git`, editor temps, `node_modules`, etc. (exclude-only, no includes -- see [migration doc](docs/migrating-rclone-filters.md)) |
@@ -305,6 +305,16 @@ pull:
   changes_api_interval: 30s
   bisync_interval: 1h
 
+bisync:
+  # Mass-deletion guard: a bisync run's deletions (local + Drive together) are
+  # blocked when there are more than 10 AND (more than max_delete_count OR more
+  # than max_delete_pct % of the journaled entries). An empty local walk or an
+  # empty Drive listing against a non-empty journal blocks them whatever the
+  # count. Pushes, pulls and conflicts of that run still happen. Allow one run:
+  # `homedrive ctl allow-deletes` then `homedrive ctl resync`.
+  max_delete_count: 50  # >= 1
+  max_delete_pct: 10    # 1..100
+
 conflict:
   policy: newer_wins
   retention:
@@ -333,6 +343,42 @@ dry_run: false
 
 See [PLAN.md](PLAN.md) section 4 for the full configuration reference
 with all available fields.
+
+### Bisync mass-deletion guard
+
+Bisync propagates deletions both ways from the journal, so a bad listing, a
+stale journal or an unmounted `local_root` could plan many at once. Before it
+executes anything, bisync counts the deletions it planned (local deletions of
+files removed on Drive, plus Drive deletions of files removed locally) as `n`
+and vetoes all of them when
+
+- `n > 10` **and** (`n > bisync.max_delete_count` **or** `n` is more than
+  `bisync.max_delete_pct` percent of the journaled entries); or
+- the local walk, or the Drive listing, is empty while `n > 0` (the journal
+  is non-empty by construction): an unmounted or emptied `local_root`, or a
+  replaced root folder or an rclone remote re-pointed to another account.
+  This blocks whatever the count.
+
+Runs with 10 deletions or fewer are blocked only by the empty-side rule. A
+blocked run still pushes, pulls and resolves conflicts, and leaves the
+journal untouched for the vetoed paths, so the next run plans the same
+deletions. It writes a `delete_blocked` audit line (planned count, threshold,
+reason, first 20 paths), publishes `<base_topic>/.../events/bisync/delete_blocked`
+(`{ts,type,planned,threshold,reason,paths,dry_run}`; `reason` is `threshold`,
+`empty_local` or `empty_remote`) and shows `bisync_delete_blocked`
+(`planned`, `threshold`, `reason`, `since`) in `/status` until a run is no
+longer vetoed. In dry-run mode the same report is made and nothing is deleted.
+
+To allow the deletions once, after checking they are intended:
+
+```bash
+homedrive ctl allow-deletes   # POST /bisync/allow-deletes (loopback, like /resync)
+homedrive ctl resync
+```
+
+The override is consumed by the next bisync run (hourly or forced), whether
+or not that run had anything to delete, and it also lifts the empty-side
+rule. The Changes API pull path has no count guard.
 
 ### HTTP control endpoint auth
 
@@ -383,6 +429,8 @@ Commands:
   ctl pause         Pause sync operations
   ctl resume        Resume sync operations
   ctl resync        Force an immediate bisync
+  ctl allow-deletes Allow the next bisync run's deletions once, bypassing
+                    the mass-deletion guard
   ctl conflict repair [--dry-run]
                     Collapse pre-existing nested .old.<N> chains onto
                     their base file (PLAN.md §11.5); runs automatically

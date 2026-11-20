@@ -92,6 +92,7 @@ func TestBisync_Delete_Cases(t *testing.T) {
 			b, _, remote, journal, _, _ := newTestBisync(t, root, false)
 			buf := &threadSafeBuffer{}
 			b.auditor = store.NewAuditor(buf, newDiscardLogger())
+			seedBystander(t, root, remote, journal)
 			if !tc.localMtime.IsZero() {
 				createLocalFile(t, root, rel, tc.localMtime)
 			}
@@ -146,7 +147,8 @@ func TestBisync_Delete_Cases(t *testing.T) {
 // go, and so do the directories that held them.
 func TestBisync_Delete_RemovesEmptiedDirs(t *testing.T) {
 	root := t.TempDir()
-	b, _, _, journal, _, _ := newTestBisync(t, root, false)
+	b, _, remote, journal, _, _ := newTestBisync(t, root, false)
+	seedBystander(t, root, remote, journal)
 	for _, rel := range []string{"top/a.txt", "top/mid/b.txt", "top/mid/low/c.txt"} {
 		createLocalFile(t, root, rel, deleteT0)
 		seedBaseline(journal, rel)

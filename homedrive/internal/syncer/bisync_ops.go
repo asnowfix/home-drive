@@ -39,6 +39,7 @@ func (b *Bisync) diff(ctx context.Context) ([]FileDiff, error) {
 		localMap[l.Path] = l
 	}
 
+	b.localCount, b.remoteCount = len(localMap), len(remoteMap)
 	b.snapshot = make(map[string]struct{}, len(localMap)+len(remoteMap))
 	for p := range localMap {
 		b.snapshot[p] = struct{}{}

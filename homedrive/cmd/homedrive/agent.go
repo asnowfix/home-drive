@@ -332,6 +332,9 @@ func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer, auditor *s
 			SweepInterval: a.cfg.Conflict.Retention.SweepInterval.Duration,
 			RepairChains:  a.cfg.Conflict.RepairChains == nil || *a.cfg.Conflict.RepairChains,
 			Exclude:       a.cfg.Watcher.Exclude,
+
+			MaxDeleteCount: derefInt(a.cfg.Bisync.MaxDeleteCount),
+			MaxDeletePct:   derefInt(a.cfg.Bisync.MaxDeletePct),
 		},
 		Remote:  a.rfs,
 		Journal: &bisyncJournalAdapter{j: a.journal},
@@ -342,6 +345,14 @@ func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer, auditor *s
 		Auditor: auditor,
 	})
 	a.bisync = b
+}
+
+// derefInt returns *p, or 0 (meaning "use the default") for nil.
+func derefInt(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
 
 // retentionPolicy converts config.RetentionCfg (YAML-facing) to
@@ -364,12 +375,13 @@ func (a *Agent) buildHTTPServer() error {
 			AuthToken:     a.cfg.HTTP.AuthToken,
 		},
 		httpctl.Deps{
-			Pausable:       a,
-			Resyncable:     a,
-			Reloadable:     a,
-			StatusProvider: a,
-			HealthChecker:  a,
-			ChainRepairer:  a,
+			Pausable:        a,
+			Resyncable:      a,
+			DeleteOverrider: a,
+			Reloadable:      a,
+			StatusProvider:  a,
+			HealthChecker:   a,
+			ChainRepairer:   a,
 		},
 		nil,
 		a.log,
