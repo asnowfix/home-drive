@@ -1,0 +1,53 @@
+# homedrive desktop mode, interim baseline D0 (issue #175): a plain
+# `rclone mount` of the Google Drive root, bound to the graphical session.
+# Docs: homedrive/docs/desktop-rclone-mount.md  Design: homedrive/docs/design/desktop-mode.md
+#
+# USER unit. Copy to ~/.config/systemd/user/ and enable with `systemctl --user`.
+# Never WantedBy=default.target: with linger that would mount at boot, without a session.
+#
+# Paths, each written once (user-manager specifiers):
+#   %h/GoogleDrive              mount point
+#   %C/home-drive               rclone cache ($XDG_CACHE_HOME/home-drive, default ~/.cache/home-drive)
+#   %E/homedrive/rclone.conf    private token file ($XDG_CONFIG_HOME/..., default ~/.config/...)
+# This unit expects a remote named "gdrive" in that token file.
+[Unit]
+Description=homedrive desktop mode baseline: rclone mount of Google Drive on %h/GoogleDrive
+Documentation=https://github.com/asnowfix/home-drive/blob/main/homedrive/docs/desktop-rclone-mount.md
+PartOf=graphical-session.target
+After=graphical-session.target network-online.target
+Requisite=graphical-session.target
+# Never start without the private token file; never fall back to ~/.config/rclone/rclone.conf.
+ConditionPathExists=%E/homedrive/rclone.conf
+# Retry forever (a lost network is not a reason to give up), like the NAS unit (#88).
+StartLimitIntervalSec=0
+
+[Service]
+# rclone v1.76.0 foreground mount calls sd_notify READY=1 once the mount is live
+# (cmd/mountlib/mount.go -> lib/systemd.Notify), and STOPPING=1 on exit.
+Type=notify
+# Optional, user-owned: RCLONE_VFS_CACHE_MAX_SIZE=<size> (the cache cap, see the docs).
+EnvironmentFile=-%E/homedrive/desktop-rclone.env
+ExecStartPre=/bin/mkdir -p %h/GoogleDrive
+# Clear a stale mount left by a crash ("Transport endpoint is not connected"); failure is fine.
+ExecStartPre=-/bin/sh -c 'fusermount3 -u "$1" || fusermount3 -uz "$1"' sh %h/GoogleDrive
+# --vfs-cache-max-age is 10 years: rclone's 1 h default would empty the cache hourly.
+# Eviction is by size cap (RCLONE_VFS_CACHE_MAX_SIZE) and --vfs-cache-min-free-space only.
+ExecStart=/usr/bin/rclone mount gdrive: %h/GoogleDrive \
+    --config %E/homedrive/rclone.conf \
+    --cache-dir %C/home-drive \
+    --vfs-cache-mode full \
+    --vfs-cache-min-free-space 5G \
+    --vfs-cache-max-age 87600h \
+    --vfs-cache-poll-interval 10s \
+    --poll-interval 15s \
+    --dir-cache-time 1h
+# SIGTERM makes rclone unmount and flush queued uploads; allow time for that.
+# Afterwards (also after a kill or crash) make sure nothing stays mounted: plain, then lazy.
+ExecStopPost=-/bin/sh -c 'fusermount3 -u "$1" || fusermount3 -uz "$1"' sh %h/GoogleDrive
+TimeoutStopSec=90
+Restart=on-failure
+RestartSec=10
+# No NoNewPrivileges/ProtectHome: fusermount3 is setuid and the mount lives under $HOME.
+
+[Install]
+WantedBy=graphical-session.target
