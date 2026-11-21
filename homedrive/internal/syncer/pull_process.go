@@ -50,8 +50,8 @@ func (e recordedErr) Unwrap() error { return e.error }
 // recordUnrecordedDelete is recordUnrecorded for the delete path.
 func (p *Puller) recordUnrecordedDelete(ch Change, err error) error {
 	var rec recordedErr
-	if err == nil || errors.As(err, &rec) {
-		return err
+	if err == nil || errors.As(err, &rec) || p.cfg.DryRun {
+		return err // dry runs record nothing
 	}
 	return p.recordFail(Outcome{Op: OutPullDelete, Path: ch.Path, Err: err})
 }
