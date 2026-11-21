@@ -1077,6 +1077,21 @@ two independent copies of one algorithm that could silently drift apart.
 - [x] MQTT reconnect gap capped at 2 min (paho defaults to 10 min).
 - [ ] #142: auth observer, non-fatal MQTT connect, `state:"error"` on failed start.
 
+### Desktop mode (epic #147, design `docs/design/desktop-mode.md` section 11)
+
+One PR per phase. Desktop mode is `homedrive mount`, beside NAS mode's
+`homedrive run`, in the same binary.
+
+- [ ] D0: supported `rclone mount` unit + docs (no Go).
+- [x] D1: `homedrive mount` skeleton on rclone vfs + mount2: `desktop.yaml`,
+  XDG paths, start-up checks, token-file lock shared with NAS mode,
+  flush-then-unmount, `Type=notify`, allow-list CI grep, NAS-mode footprint
+  recorded (design section 7). Issue #176.
+- [ ] D2: `GuardFs` + bounded timeouts.
+- [ ] D3: session unit, suspend/resume.
+- [ ] D4: conflicts (`newer_wins`, `.old.<N>`).
+- [ ] D5: pinning + observability.
+
 ---
 
 ## 15. Packaging

@@ -51,6 +51,10 @@ du -h homedrive-bin
 # reliable check -- verify at the source-import level instead)
 grep -rn '"github.com/rclone/rclone/backend/' homedrive/ --include='*.go' \
   | grep -v '_test.go' | grep -v 'rclone/backend/drive'  # must print nothing
+
+# Desktop-only rclone packages only inside internal/desktop and cmd/homedrive/mount*.go
+grep -rnE '"github.com/rclone/rclone/(vfs|vfs/[^"]*|cmd/[^"]*|fs/rc[^"]*)"' homedrive/ --include='*.go' \
+  | grep -v '^homedrive/internal/desktop/' | grep -v '^homedrive/cmd/homedrive/mount[^/]*\.go:'  # must print nothing
 ```
 
 ## Target hardware
@@ -87,6 +91,15 @@ _ "github.com/rclone/rclone/backend/drive"
 "github.com/rclone/rclone/fs/config/configfile"
 "github.com/rclone/rclone/fs/operations"
 "github.com/rclone/rclone/fs/sync"
+```
+
+**Desktop mode only** (`homedrive mount`, design `homedrive/docs/design/desktop-mode.md` §6): the package `homedrive/internal/desktop` and the wiring `homedrive/cmd/homedrive/mount*.go` may additionally import the four packages below (and `fs/rc` if needed). A CI grep fails on any import of them elsewhere. Still exactly one backend (`backend/drive`).
+```go
+"github.com/rclone/rclone/vfs"
+"github.com/rclone/rclone/vfs/vfscommon"
+"github.com/rclone/rclone/cmd/mountlib"
+_ "github.com/rclone/rclone/cmd/mount2"
+"github.com/rclone/rclone/fs/rc"
 ```
 
 ## Code conventions (binding)

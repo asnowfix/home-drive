@@ -23,6 +23,26 @@ import (
 )
 ```
 
+**Desktop mode only.** `homedrive/internal/desktop/` and
+`homedrive/cmd/homedrive/mount*.go` (`homedrive mount`, design
+`docs/design/desktop-mode.md` section 6) may additionally import:
+
+```go
+import (
+    "github.com/rclone/rclone/vfs"
+    "github.com/rclone/rclone/vfs/vfscommon"
+    "github.com/rclone/rclone/cmd/mountlib"
+    _ "github.com/rclone/rclone/cmd/mount2"
+    "github.com/rclone/rclone/fs/rc"
+)
+```
+
+A CI grep (`.github/workflows/homedrive.yml`) fails on any import of `vfs*`,
+`cmd/*` or `fs/rc*` outside those paths. There is still exactly one backend
+(`backend/drive`); test files may import `backend/local` for in-process FUSE
+tests. In desktop code the `internal/rcloneclient`-only wrapper rule below does
+not apply: `internal/desktop` talks to vfs and mountlib directly.
+
 Adding **any** other rclone package requires:
 1. User approval.
 2. The measured `linux/arm64` stripped binary size before and after.
