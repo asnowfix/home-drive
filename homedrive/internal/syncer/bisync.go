@@ -308,7 +308,7 @@ func (b *Bisync) execute(ctx context.Context) {
 	)
 
 	b.writeAudit(start, pushed, pulled, conflicts, nil)
-	b.recordPass(start, pushed+pulled, nil)
+	b.recordPass(start, pushed+pulled+b.deleted, nil)
 	b.publishEvent(BisyncEvent{
 		Timestamp:    b.clock.Now().UTC().Format(time.RFC3339),
 		Type:         "bisync.completed",
@@ -398,11 +398,25 @@ func (b *Bisync) recordDiff(op, dir string, size int64, d FileDiff, err error) {
 	if b.cfg.DryRun {
 		return
 	}
+	// The transfer that settles a delete-vs-modify conflict counts in
+	// conflicts only (recordConflict), never in files_* / bytes_*.
+	if d.DeleteConflict && err == nil {
+		return
+	}
 	o := Outcome{Op: op, Dir: dir, Path: d.Path, Err: err, At: b.clock.Now()}
 	if err == nil {
 		o.Bytes = size
 	}
 	emitOutcome(b.rec, o)
+}
+
+// recordConflict reports a delete-vs-modify conflict, matching the
+// conflict event reportDeleteConflict publishes. Dry runs record nothing.
+func (b *Bisync) recordConflict(d FileDiff) {
+	if b.cfg.DryRun {
+		return
+	}
+	emitOutcome(b.rec, Outcome{Op: OutConflict, Path: d.Path, At: b.clock.Now()})
 }
 
 // recordPass reports the result of one whole bisync pass.

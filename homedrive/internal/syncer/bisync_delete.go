@@ -190,6 +190,7 @@ func (b *Bisync) reportDeleteConflict(d FileDiff) {
 		"dry_run", b.cfg.DryRun)
 	b.auditFile("conflict", d.Path, deleteConflictResolution, "")
 	publishDeleteConflict(b.mqtt, b.log, b.clock.Now(), d.Path, b.cfg.DryRun)
+	b.recordConflict(d)
 }
 
 // removeEmptyParents removes now-empty directories above localPath, up to
@@ -215,9 +216,17 @@ func (b *Bisync) syncDelete(ctx context.Context, d FileDiff) bool {
 	} else {
 		applied, err = b.deleteRemote(ctx, d)
 	}
+	op, dir := OutPushDelete, DirUp
+	if d.Kind == DiffRemoteDeleted {
+		op, dir = OutPullDelete, DirDown
+	}
 	if err != nil {
 		b.log.Error("bisync delete failed", "path", d.Path, "error", err)
+		b.recordDiff(op, dir, 0, d, err)
 		return false
+	}
+	if applied {
+		b.recordDiff(op, dir, 0, d, nil)
 	}
 	return applied
 }
