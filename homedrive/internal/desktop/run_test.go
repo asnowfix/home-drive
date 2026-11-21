@@ -90,8 +90,8 @@ func TestRun_MountEndedExternally(t *testing.T) {
 	if !errors.Is(err, ErrMountEnded) {
 		t.Fatalf("err = %v, want ErrMountEnded", err)
 	}
-	if got := f.Calls(); !reflect.DeepEqual(got, []string{"close"}) {
-		t.Errorf("calls = %v", got)
+	if got := f.Calls(); !reflect.DeepEqual(got, []string{"wait", "close"}) {
+		t.Errorf("calls = %v (pending uploads must be flushed before close)", got)
 	}
 }
 

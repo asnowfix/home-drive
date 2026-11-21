@@ -153,6 +153,9 @@ func TestParseByteSize_Cases(t *testing.T) {
 		{"2TiB", 2 << 40, false},
 		{"-1G", 0, true},
 		{"abc", 0, true},
+		{"nan", 0, true},
+		{"inf", 0, true},
+		{"99999999TiB", 0, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.in, func(t *testing.T) {

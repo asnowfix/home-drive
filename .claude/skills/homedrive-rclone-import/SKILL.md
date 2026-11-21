@@ -17,6 +17,7 @@ Only these rclone packages may be imported anywhere in `homedrive/`:
 import (
     _ "github.com/rclone/rclone/backend/drive"   // single backend registered
     "github.com/rclone/rclone/fs"
+    "github.com/rclone/rclone/fs/config"
     "github.com/rclone/rclone/fs/config/configfile"
     "github.com/rclone/rclone/fs/operations"
     "github.com/rclone/rclone/fs/sync"

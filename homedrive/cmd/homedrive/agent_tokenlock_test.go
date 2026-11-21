@@ -92,3 +92,27 @@ func TestAcquireTokenLock_DefaultRclonePath(t *testing.T) {
 		t.Fatalf("expected lock at rclone's default location %q: %v", want, err)
 	}
 }
+
+func TestAcquireTokenLock_UnwritableDirIsNotFatal(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	ro := filepath.Join(dir, "ro")
+	if err := os.Mkdir(ro, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(ro, 0o700) })
+	token := filepath.Join(ro, "rclone.conf")
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("remote: \"gdrive:\"\nrclone_config: "+token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireTokenLock(cfgPath, slog.Default())
+	if err != nil {
+		t.Fatalf("acquireTokenLock: %v, want a warning only", err)
+	}
+	if lock != nil {
+		t.Fatal("want a nil lock when the lock file cannot be created")
+	}
+}

@@ -88,6 +88,7 @@ daemon, an MQTT broker, other sync clients). In practice:
 ```go
 _ "github.com/rclone/rclone/backend/drive"
 "github.com/rclone/rclone/fs"
+"github.com/rclone/rclone/fs/config"
 "github.com/rclone/rclone/fs/config/configfile"
 "github.com/rclone/rclone/fs/operations"
 "github.com/rclone/rclone/fs/sync"

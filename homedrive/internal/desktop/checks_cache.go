@@ -60,7 +60,7 @@ func CheckCacheDir(dir string, fsID fsIDFunc, now func() time.Time) error {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return fmt.Errorf("desktop: parse cache marker %q: %w", markerPath, err)
 	}
-	if m.FilesystemID != id {
+	if id != "" && m.FilesystemID != "" && m.FilesystemID != id {
 		return fmt.Errorf("%w: %q was created on filesystem %q, now on %q (disk unmounted or swapped?); "+
 			"fix the mount or remove %q to adopt the new location",
 			ErrCacheFilesystemChanged, dir, m.FilesystemID, id, markerPath)

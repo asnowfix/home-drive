@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -126,7 +127,7 @@ func ParseByteSize(s string) (ByteSize, error) {
 		}
 	}
 	f, err := strconv.ParseFloat(t, 64)
-	if err != nil || f < 0 {
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < 0 || f*float64(mult) >= math.MaxInt64 {
 		return 0, fmt.Errorf("invalid size %q", s)
 	}
 	return ByteSize(f * float64(mult)), nil
@@ -179,7 +180,10 @@ func LoadOrDefault(path string, env Env, explicit bool) (*Config, error) {
 	return c, nil
 }
 
-// ApplyDefaults fills every unset key with its decided default.
+// ApplyDefaults fills every unset key with its decided default. For the
+// numeric and duration keys, 0 is "unset": it cannot be told apart from an
+// omitted key, so an explicit 0 also selects the default. (Telling them apart
+// would need pointer fields; not worth it while no key needs 0 to mean "off".)
 func (c *Config) ApplyDefaults(env Env) {
 	setStr(&c.Remote, DefaultRemote)
 	setStr(&c.MountPoint, env.DefaultMountPoint())

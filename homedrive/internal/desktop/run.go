@@ -113,6 +113,9 @@ func serve(ctx context.Context, m Mount, deps Deps, flushTimeout time.Duration) 
 	case err := <-m.Done():
 		// Unmounted from outside (fusermount3 -u) or the server died.
 		_ = deps.Notifier.Stopping()
+		// Same promise as the SIGTERM path: queued uploads are flushed
+		// (bounded) before the cache is shut down, not dropped.
+		m.WaitForWriters(flushTimeout)
 		m.Close()
 		if err != nil {
 			return fmt.Errorf("desktop: mount ended: %w", err)
@@ -136,6 +139,9 @@ func startupChecks(cfg *Config, deps *Deps) (func(), error) {
 		return nil, err
 	}
 	if err := CheckNASOverlap(cfg.MountPoint, nas); err != nil {
+		return nil, err
+	}
+	if err := CheckPathsOutsideMount(cfg, nas); err != nil {
 		return nil, err
 	}
 	if err := CheckTokenNotNAS(cfg.TokenFile, nas, deps.Env.RcloneDefaultConfig()); err != nil {

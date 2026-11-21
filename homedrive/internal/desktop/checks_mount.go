@@ -14,6 +14,8 @@ var (
 	ErrMountPointNotEmpty = errors.New("desktop: mount point is not empty")
 	ErrMountPointMounted  = errors.New("desktop: mount point is already a mount")
 	ErrMountPointNotDir   = errors.New("desktop: mount point is not a directory")
+	ErrPathInsideMount    = errors.New("desktop: a private path lies inside the mount point")
+	ErrCacheInsideNASRoot = errors.New("desktop: cache directory lies inside the NAS-mode local_root")
 )
 
 // isMountFunc reports whether path is a mount point.
@@ -85,4 +87,25 @@ func statDev(path string) (uint64, error) {
 		return 0, fmt.Errorf("stat %q: %w", path, err)
 	}
 	return uint64(st.Dev), nil //nolint:gosec // device numbers are opaque identifiers
+}
+
+// CheckPathsOutsideMount refuses configurations where homedrive's own files
+// would be hidden by, or fed back through, the mount: the cache dir, token
+// file (and its lock), state dir and runtime dir must not lie inside the
+// mount point, and the cache dir must not lie inside the NAS-mode local_root
+// (nas may be nil).
+func CheckPathsOutsideMount(cfg *Config, nas *NASInfo) error {
+	mp := canonical(cfg.MountPoint)
+	for _, p := range []struct{ field, value string }{
+		{"cache.dir", cfg.Cache.Dir}, {"token_file", cfg.TokenFile},
+		{"state_dir", cfg.StateDir}, {"runtime_dir", cfg.RuntimeDir},
+	} {
+		if within(canonical(p.value), mp) {
+			return fmt.Errorf("%w: %s %q is inside mount point %q", ErrPathInsideMount, p.field, p.value, cfg.MountPoint)
+		}
+	}
+	if nas != nil && nas.LocalRoot != "" && within(canonical(cfg.Cache.Dir), canonical(nas.LocalRoot)) {
+		return fmt.Errorf("%w: %q is inside %q", ErrCacheInsideNASRoot, cfg.Cache.Dir, nas.LocalRoot)
+	}
+	return nil
 }

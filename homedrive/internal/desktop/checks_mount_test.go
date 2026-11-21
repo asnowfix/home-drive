@@ -134,3 +134,39 @@ func mustTempSubdir(t *testing.T) string {
 	mustMkdir(t, p)
 	return p
 }
+
+func TestCheckPathsOutsideMount_Cases(t *testing.T) {
+	root := t.TempDir()
+	base := func() *Config {
+		c := &Config{
+			MountPoint: filepath.Join(root, "mnt"),
+			TokenFile:  filepath.Join(root, "cfg", "rclone.conf"),
+			StateDir:   filepath.Join(root, "state"),
+			RuntimeDir: filepath.Join(root, "run"),
+		}
+		c.Cache.Dir = filepath.Join(root, "cache")
+		return c
+	}
+	tests := []struct {
+		name string
+		edit func(c *Config)
+		nas  *NASInfo
+		want error
+	}{
+		{"AllOutside", func(*Config) {}, nil, nil},
+		{"CacheInsideMount", func(c *Config) { c.Cache.Dir = filepath.Join(c.MountPoint, ".cache") }, nil, ErrPathInsideMount},
+		{"TokenInsideMount", func(c *Config) { c.TokenFile = filepath.Join(c.MountPoint, "rclone.conf") }, nil, ErrPathInsideMount},
+		{"StateInsideMount", func(c *Config) { c.StateDir = filepath.Join(c.MountPoint, "state") }, nil, ErrPathInsideMount},
+		{"CacheInsideNASRoot", func(*Config) {}, &NASInfo{LocalRoot: root}, ErrCacheInsideNASRoot},
+		{"CacheOutsideNASRoot", func(*Config) {}, &NASInfo{LocalRoot: filepath.Join(root, "nas")}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := base()
+			tc.edit(c)
+			if err := CheckPathsOutsideMount(c, tc.nas); !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}

@@ -39,6 +39,15 @@ func TestCheckCacheDir_Cases(t *testing.T) {
 			want: ErrCacheFilesystemChanged,
 		},
 		{
+			name: "UnidentifiableFilesystemSkipsComparison",
+			setup: func(t *testing.T, dir string) {
+				if err := CheckCacheDir(dir, fixedFS("A"), now); err != nil {
+					t.Fatal(err)
+				}
+			},
+			fsID: fixedFS(""),
+		},
+		{
 			name: "NonEmptyWithoutMarkerRefused",
 			setup: func(t *testing.T, dir string) {
 				mustMkdir(t, filepath.Join(dir, "vfs"))
@@ -94,7 +103,7 @@ func TestCheckCacheDir_FSIDError(t *testing.T) {
 func TestFilesystemInfo_Real(t *testing.T) {
 	dir := t.TempDir()
 	id, err := FilesystemID(dir)
-	if err != nil || id == "" {
+	if err != nil { // id may be "" on filesystems with no stable fsid
 		t.Fatalf("FilesystemID = %q, %v", id, err)
 	}
 	size, err := FilesystemSize(dir)
