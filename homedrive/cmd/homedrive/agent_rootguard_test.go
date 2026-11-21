@@ -125,7 +125,7 @@ func TestAgent_RootGuardWiring(t *testing.T) {
 func TestPollOnceGuarded_RootBlocked(t *testing.T) {
 	a, _, logs := newBlockedRootAgent(t)
 	a.pollOnceGuarded(context.Background())
-	if a.lastPullUnixNano.Load() != 0 {
+	if !a.stats.Snapshot(time.Now()).LastPull.IsZero() {
 		t.Error("a blocked cycle must not count as a successful pull")
 	}
 	if strings.Contains(logs.String(), "poll error") {
@@ -211,7 +211,7 @@ func TestAgent_Run_BlockedOnlyThenExitsOnRecovery(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if a.lastPullUnixNano.Load() != 0 {
+	if !a.stats.Snapshot(time.Now()).LastPull.IsZero() {
 		t.Error("the pull loop ran in blocked-only mode")
 	}
 	if !strings.Contains(logs.String(), "blocked-only mode") {

@@ -2,296 +2,105 @@ package mqtt
 
 import (
 	"context"
-	"log/slog"
-	"os"
-	"sync"
+	"encoding/json"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/asnowfix/home-drive/homedrive/pkg/homedrive"
 )
 
-// mockStatusProvider implements StatusProvider for tests.
-type mockStatusProvider struct {
-	mu       sync.Mutex
-	status   string
-	lastPush time.Time
-	lastPull time.Time
-}
-
-func (m *mockStatusProvider) Status() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.status
-}
-
-func (m *mockStatusProvider) LastPush() time.Time {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.lastPush
-}
-
-func (m *mockStatusProvider) LastPull() time.Time {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.lastPull
-}
-
-// mockMetricsProvider implements MetricsProvider for tests.
-type mockMetricsProvider struct {
-	mu           sync.Mutex
-	pendingUp    int
-	pendingDown  int
-	conflicts24h int
-	bytesUp24h   int64
-	bytesDown24h int64
-	quotaUsedPct float64
-}
-
-func (m *mockMetricsProvider) PendingUploads() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.pendingUp
-}
-
-func (m *mockMetricsProvider) PendingDownloads() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.pendingDown
-}
-
-func (m *mockMetricsProvider) Conflicts24h() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.conflicts24h
-}
-
-func (m *mockMetricsProvider) BytesUploaded24h() int64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.bytesUp24h
-}
-
-func (m *mockMetricsProvider) BytesDownloaded24h() int64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.bytesDown24h
-}
-
-func (m *mockMetricsProvider) QuotaUsedPct() float64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.quotaUsedPct
-}
-
-func TestStatePublisher_PublishesOnStart(t *testing.T) {
-	brokerAddr, srv := startEmbeddedBroker(t)
-	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-
-	cfg := testConfig(brokerAddr)
-	client, err := New(cfg, "sthost", "stuser", log)
-	if err != nil {
-		t.Fatalf("New() error: %v", err)
+func testSnapshot() homedrive.StatusV2 {
+	now := time.Date(2026, 11, 15, 12, 33, 13, 0, time.FixedZone("CET", 3600))
+	pull := now.Add(-time.Minute)
+	return homedrive.StatusV2{
+		TS:        homedrive.Timestamp{Time: now},
+		Version:   "test",
+		State:     homedrive.StateRunning,
+		StartedAt: homedrive.Timestamp{Time: now.Add(-time.Hour)},
+		LastPull:  homedrive.TS(pull),
+		Counts:    map[string]homedrive.Counts{homedrive.Window24h: {BytesDown: 42}},
 	}
-	defer func() { _ = client.Close(context.Background()) }()
+}
 
-	status := &mockStatusProvider{
-		status:   "running",
-		lastPush: time.Date(2026, 4, 28, 14, 0, 0, 0, time.UTC),
-		lastPull: time.Date(2026, 4, 28, 14, 1, 0, 0, time.UTC),
-	}
-	metrics := &mockMetricsProvider{
-		pendingUp:    5,
-		pendingDown:  3,
-		conflicts24h: 1,
-		bytesUp24h:   1024000,
-		bytesDown24h: 2048000,
-		quotaUsedPct: 42.5,
-	}
-
-	// Subscribe to state topics to verify publishing.
-	type topicVal struct {
-		mu    sync.Mutex
-		value string
-	}
-	received := make(map[string]*topicVal)
-	topics := []string{
-		"status", "last_push", "last_pull",
-		"queue/pending_up", "queue/pending_down",
-		"conflicts_24h", "bytes_up_24h", "bytes_down_24h",
-		"quota_used_pct",
-	}
-	for _, sub := range topics {
-		fullTopic := client.Topic(sub)
-		tv := &topicVal{}
-		received[fullTopic] = tv
-		ch := subscribeInline(t, srv, fullTopic)
-		// Drain into the map in a goroutine.
-		go func(ft string, tv *topicVal, ch <-chan []byte) {
-			for payload := range ch {
-				tv.mu.Lock()
-				tv.value = string(payload)
-				tv.mu.Unlock()
-			}
-		}(fullTopic, tv, ch)
-	}
-
-	sp := NewStatePublisher(client, status, metrics, 10*time.Second, log)
-
-	// Run in background with a short-lived context.
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	go sp.Run(ctx)
-
-	// Wait for first publish cycle.
-	time.Sleep(400 * time.Millisecond)
-
-	// Verify key state values were published.
+func TestStatePublisher_PublishOnceRetained(t *testing.T) {
 	tests := []struct {
-		subtopic string
-		want     string
+		name     string
+		interval time.Duration
+		wantSecs int
 	}{
-		{"status", "running"},
-		{"last_push", "2026-04-28T14:00:00Z"},
-		{"last_pull", "2026-04-28T14:01:00Z"},
-		{"queue/pending_up", "5"},
-		{"queue/pending_down", "3"},
-		{"conflicts_24h", "1"},
-		{"bytes_up_24h", "1024000"},
-		{"bytes_down_24h", "2048000"},
-		{"quota_used_pct", "42.5"},
+		{"configured", 45 * time.Second, 45},
+		{"zero_defaults", 0, 30},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.subtopic, func(t *testing.T) {
-			fullTopic := client.Topic(tt.subtopic)
-			tv, ok := received[fullTopic]
-			if !ok {
-				t.Errorf("no subscription for %s", tt.subtopic)
-				return
-			}
-			tv.mu.Lock()
-			got := tv.value
-			tv.mu.Unlock()
-			if got != tt.want {
-				t.Errorf("topic %s: got %q, want %q", tt.subtopic, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestStatePublisher_PublishesAtInterval(t *testing.T) {
-	brokerAddr, srv := startEmbeddedBroker(t)
-	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-
-	cfg := testConfig(brokerAddr)
-	client, err := New(cfg, "inthost", "intuser", log)
-	if err != nil {
-		t.Fatalf("New() error: %v", err)
-	}
-	defer func() { _ = client.Close(context.Background()) }()
-
-	status := &mockStatusProvider{status: "running"}
-	metrics := &mockMetricsProvider{pendingUp: 1}
-
-	// Track publish count for a specific topic.
-	statusTopic := client.Topic("status")
-	ch := subscribeInline(t, srv, statusTopic)
-
-	var publishCount int
-	var mu sync.Mutex
-	go func() {
-		for range ch {
-			mu.Lock()
-			publishCount++
-			mu.Unlock()
-		}
-	}()
-
-	// Use a very short interval so we can observe multiple publishes quickly.
-	sp := NewStatePublisher(client, status, metrics, 100*time.Millisecond, log)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 550*time.Millisecond)
-	defer cancel()
-	go sp.Run(ctx)
-
-	// Wait for context to expire plus a bit.
-	time.Sleep(600 * time.Millisecond)
-
-	mu.Lock()
-	count := publishCount
-	mu.Unlock()
-
-	// Should have at least 3 publishes: 1 immediate + ticks.
-	if count < 3 {
-		t.Errorf("expected at least 3 publishes at 100ms interval, got %d", count)
-	}
-}
-
-func TestStatePublisher_EmptyTimestamp(t *testing.T) {
-	brokerAddr, srv := startEmbeddedBroker(t)
-	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-
-	cfg := testConfig(brokerAddr)
-	client, err := New(cfg, "emhost", "emuser", log)
-	if err != nil {
-		t.Fatalf("New() error: %v", err)
-	}
-	defer func() { _ = client.Close(context.Background()) }()
-
-	// Zero timestamps should publish empty strings.
-	status := &mockStatusProvider{status: "running"}
-	metrics := &mockMetricsProvider{}
-
-	pushCh := subscribeInline(t, srv, client.Topic("last_push"))
-	pullCh := subscribeInline(t, srv, client.Topic("last_pull"))
-
-	sp := NewStatePublisher(client, status, metrics, time.Minute, log)
-	sp.PublishOnce()
-
-	for _, tc := range []struct {
-		name string
-		ch   <-chan []byte
-	}{
-		{"last_push", pushCh},
-		{"last_pull", pullCh},
-	} {
+	tsRe := regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$`)
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			addr, srv := startEmbeddedBroker(t)
+			client, err := New(testConfig(addr), "h", "u", testLogger())
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			t.Cleanup(func() { _ = client.Close(context.Background()) })
+
+			sp := NewStatePublisher(client, testSnapshot, tc.interval, testLogger())
+			sp.PublishOnce()
+			time.Sleep(200 * time.Millisecond)
+
+			// Subscribing after the publish only receives it if retained.
+			ch := subscribeInlineWithTopic(t, srv, "homedrive/h/u/status")
 			select {
-			case payload := <-tc.ch:
-				if string(payload) != "" {
-					t.Errorf("got %q, want empty string for zero time", string(payload))
+			case msg := <-ch:
+				var raw map[string]json.RawMessage
+				if err := json.Unmarshal(msg.payload, &raw); err != nil {
+					t.Fatalf("unmarshal: %v", err)
+				}
+				var schema string
+				_ = json.Unmarshal(raw["schema"], &schema)
+				if schema != homedrive.StatusSchema {
+					t.Errorf("schema = %q, want 2.1", schema)
+				}
+				var secs int
+				_ = json.Unmarshal(raw["publish_interval_s"], &secs)
+				if secs != tc.wantSecs {
+					t.Errorf("publish_interval_s = %d, want %d", secs, tc.wantSecs)
+				}
+				for _, k := range []string{"ts", "started_at", "last_pull"} {
+					var s string
+					_ = json.Unmarshal(raw[k], &s)
+					if !tsRe.MatchString(s) {
+						t.Errorf("%s = %q, want RFC3339 UTC Z", k, s)
+					}
+				}
+				if string(raw["last_push"]) != "null" {
+					t.Errorf("last_push = %s, want null", raw["last_push"])
 				}
 			case <-time.After(3 * time.Second):
-				t.Error("timeout waiting for empty timestamp")
+				t.Fatal("no retained status received")
 			}
 		})
 	}
 }
 
-func TestStatePublisher_PublishOnce(t *testing.T) {
-	brokerAddr, srv := startEmbeddedBroker(t)
-	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-
-	cfg := testConfig(brokerAddr)
-	client, err := New(cfg, "oncehost", "onceuser", log)
+func TestStatePublisher_OneDocumentPerTick(t *testing.T) {
+	addr, srv := startEmbeddedBroker(t)
+	client, err := New(testConfig(addr), "h", "u", testLogger())
 	if err != nil {
-		t.Fatalf("New() error: %v", err)
+		t.Fatalf("New: %v", err)
 	}
-	defer func() { _ = client.Close(context.Background()) }()
+	t.Cleanup(func() { _ = client.Close(context.Background()) })
 
-	status := &mockStatusProvider{status: "paused"}
-	metrics := &mockMetricsProvider{pendingUp: 10}
-
-	received := subscribeInline(t, srv, client.Topic("status"))
-
-	sp := NewStatePublisher(client, status, metrics, time.Minute, log)
-	sp.PublishOnce()
-
-	select {
-	case msg := <-received:
-		if string(msg) != "paused" {
-			t.Errorf("got %q, want %q", string(msg), "paused")
+	ch := subscribeInlineWithTopic(t, srv, "homedrive/h/u/status")
+	sp := NewStatePublisher(client, testSnapshot, time.Second, testLogger())
+	for i := 0; i < 3; i++ {
+		sp.PublishOnce()
+		select {
+		case msg := <-ch:
+			if !strings.HasSuffix(msg.topic, "/status") {
+				t.Errorf("topic = %q, want .../status", msg.topic)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("tick %d: no status", i)
 		}
-	case <-time.After(3 * time.Second):
-		t.Error("timeout waiting for PublishOnce message")
 	}
 }

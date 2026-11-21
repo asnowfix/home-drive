@@ -5,6 +5,14 @@ auto-discovery protocol. When MQTT is enabled and a broker is configured,
 Home Assistant automatically creates entities for sync status, queue
 depth, quota usage, and events.
 
+> **Note (issue #141).** The per-entity topics and discovery configs below
+> describe the original design and are **not currently published**: the
+> state publisher and `PublishDiscovery` were never wired into the agent.
+> What the agent publishes today is one retained JSON document on
+> `<base_topic>/<hostname>/<user>/status` (schema 2.1, see
+> `docs/design/status-v2.md`). Wiring HA Discovery against it (with
+> `value_template`s over that JSON) is a follow-up.
+
 ## Prerequisites
 
 - An MQTT broker accessible from both the Pi and the Home Assistant

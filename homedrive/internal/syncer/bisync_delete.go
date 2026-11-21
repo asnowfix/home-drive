@@ -160,7 +160,14 @@ func (b *Bisync) deleteRemote(ctx context.Context, d FileDiff) (bool, error) {
 		remoteChangedSince(*entry, obj) {
 		pull := FileDiff{Path: d.Path, Kind: DiffRemoteOnly, RemoteInfo: &obj, DeleteConflict: true}
 		b.reportDeleteConflict(pull)
-		return false, b.syncRemoteToLocal(ctx, pull)
+		perr := b.syncRemoteToLocal(ctx, pull)
+		if perr != nil {
+			// A pull failure, not a push_delete one: record it as such and
+			// mark it so syncDelete does not record it again.
+			b.recordDiff(OutBisyncPull, DirDown, 0, pull, perr)
+			return false, recordedErr{perr}
+		}
+		return false, nil
 	}
 
 	b.log.Info("bisync deleting Drive file removed locally",
@@ -190,6 +197,7 @@ func (b *Bisync) reportDeleteConflict(d FileDiff) {
 		"dry_run", b.cfg.DryRun)
 	b.auditFile("conflict", d.Path, deleteConflictResolution, "")
 	publishDeleteConflict(b.mqtt, b.log, b.clock.Now(), d.Path, b.cfg.DryRun)
+	b.recordConflict(d)
 }
 
 // removeEmptyParents removes now-empty directories above localPath, up to
@@ -215,9 +223,22 @@ func (b *Bisync) syncDelete(ctx context.Context, d FileDiff) bool {
 	} else {
 		applied, err = b.deleteRemote(ctx, d)
 	}
+	// Dir stays empty: a delete is not a content transfer, so it must not
+	// count in files_up/files_down (the error side comes from the op).
+	op := OutPushDelete
+	if d.Kind == DiffRemoteDeleted {
+		op = OutPullDelete
+	}
 	if err != nil {
 		b.log.Error("bisync delete failed", "path", d.Path, "error", err)
+		var rec recordedErr
+		if !errors.As(err, &rec) {
+			b.recordDiff(op, "", 0, d, err)
+		}
 		return false
+	}
+	if applied {
+		b.recordDiff(op, "", 0, d, nil)
 	}
 	return applied
 }

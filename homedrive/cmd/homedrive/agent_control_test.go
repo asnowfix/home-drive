@@ -12,6 +12,7 @@ import (
 
 	httpctl "github.com/asnowfix/home-drive/homedrive/internal/http"
 	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
+	"github.com/asnowfix/home-drive/homedrive/internal/stats"
 	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
 )
 
@@ -122,6 +123,7 @@ func TestAgent_Status_ReportsRealState(t *testing.T) {
 		pushEvents:  make(chan syncer.Event, 4),
 		pushRenames: make(chan syncer.DirRename, 4),
 		startTime:   time.Now().Add(-10 * time.Second),
+		stats:       stats.New(stats.Config{}),
 	}
 	a.reloadedDryRun.Store(true)
 	a.pushEvents <- syncer.Event{Path: "x"}
@@ -286,12 +288,35 @@ func TestAgent_RcloneHealth_NoOAuthStatusCapability(t *testing.T) {
 	}
 }
 
-func TestUnixNanoToRFC3339_ZeroIsEmpty(t *testing.T) {
-	if got := unixNanoToRFC3339(0); got != "" {
-		t.Errorf("expected empty string for 0, got %q", got)
+func TestTimeToRFC3339_ZeroIsEmpty(t *testing.T) {
+	if got := timeToRFC3339(time.Time{}); got != "" {
+		t.Errorf("expected empty string for zero time, got %q", got)
 	}
-	if got := unixNanoToRFC3339(1); got == "" {
-		t.Error("expected a non-empty timestamp for a non-zero value")
+	got := timeToRFC3339(time.Date(2026, 11, 15, 12, 0, 0, 0, time.FixedZone("CET", 3600)))
+	if got != "2026-11-15T11:00:00Z" {
+		t.Errorf("got %q, want UTC Z form", got)
+	}
+}
+
+// TestAgent_Status_Reports24hCounters is the regression test for bug (a):
+// bytes_*_24h and conflicts_24h were hard-coded to 0.
+func TestAgent_Status_Reports24hCounters(t *testing.T) {
+	now := time.Now()
+	tr := stats.New(stats.Config{})
+	tr.Record(syncer.Outcome{Op: syncer.OutPull, Dir: syncer.DirDown, Bytes: 20 << 20, At: now})
+	tr.Record(syncer.Outcome{Op: syncer.OutPush, Dir: syncer.DirUp, Bytes: 7, At: now})
+	tr.Record(syncer.Outcome{Op: syncer.OutConflict, At: now})
+
+	a := &Agent{log: slog.Default(), rfs: newFakeRemoteFS(), stats: tr, startTime: now}
+	info, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if info.BytesDown24h != 20<<20 || info.BytesUp24h != 7 || info.Conflicts24h != 1 {
+		t.Errorf("24h counters = down %d up %d conflicts %d", info.BytesDown24h, info.BytesUp24h, info.Conflicts24h)
+	}
+	if info.LastPull == "" || info.LastPush == "" {
+		t.Errorf("last_pull/last_push should come from the tracker: %+v", info)
 	}
 }
 

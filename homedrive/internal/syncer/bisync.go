@@ -8,10 +8,7 @@ package syncer
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +61,9 @@ type Bisync struct {
 	// pulling it back down. Only touched within execute(), which holds
 	// b.mu exclusively, so it needs no separate lock.
 	pendingPrune map[string]struct{}
+
+	// rec receives one Outcome per final bisync result; nil disables.
+	rec Recorder
 
 	// snapshot is the set of paths seen on either side by the current
 	// pass's diff(), so conflict-loser names avoid existing files.
@@ -125,6 +125,10 @@ type BisyncOpts struct {
 	// Gate, if non-nil, is consulted before every pass; a refusal skips the
 	// pass entirely (issue #170).
 	Gate RootGate
+
+	// Recorder, if non-nil, receives one Outcome per final per-file
+	// result and one per pass (OutBisync), plus the local tree size.
+	Recorder Recorder
 }
 
 // NewBisync creates a new bisync runner. The returned ForceCh can be
@@ -161,6 +165,7 @@ func NewBisync(opts BisyncOpts) (*Bisync, chan<- struct{}) {
 		forceCh: forceCh,
 		auditor: opts.Auditor,
 		gate:    opts.Gate,
+		rec:     opts.Recorder,
 	}
 	return b, forceCh
 }
@@ -303,6 +308,7 @@ func (b *Bisync) execute(ctx context.Context) {
 	)
 
 	b.writeAudit(start, pushed, pulled, conflicts, nil)
+	b.recordPass(start, pushed+pulled+b.deleted, nil)
 	b.publishEvent(BisyncEvent{
 		Timestamp:    b.clock.Now().UTC().Format(time.RFC3339),
 		Type:         "bisync.completed",
@@ -318,6 +324,9 @@ func (b *Bisync) execute(ctx context.Context) {
 func (b *Bisync) finishEarly(start time.Time, err error) {
 	b.deleted = 0
 	b.writeAudit(start, 0, 0, 0, err)
+	if err != nil {
+		b.recordPass(start, 0, err)
+	}
 	ev := BisyncEvent{
 		Timestamp: b.clock.Now().UTC().Format(time.RFC3339),
 		Type:      "bisync.completed",
@@ -348,14 +357,18 @@ func (b *Bisync) syncDiffs(
 				b.deleted++
 			}
 		case DiffLocalOnly, DiffLocalChanged:
-			if err := b.syncLocalToRemote(ctx, d); err != nil {
+			err := b.syncLocalToRemote(ctx, d)
+			b.recordDiff(OutBisyncPush, DirUp, d.LocalInfo.Size, d, err)
+			if err != nil {
 				b.log.Error("bisync push failed",
 					"path", d.Path, "error", err)
 				continue
 			}
 			pushed++
 		case DiffRemoteOnly, DiffRemoteChanged:
-			if err := b.syncRemoteToLocal(ctx, d); err != nil {
+			err := b.syncRemoteToLocal(ctx, d)
+			b.recordDiff(OutBisyncPull, DirDown, d.RemoteInfo.Size, d, err)
+			if err != nil {
 				if errors.Is(err, ErrDanglingShortcut) {
 					b.log.Warn("bisync skipping dangling Drive shortcut",
 						"path", d.Path, "error", err)
@@ -367,7 +380,9 @@ func (b *Bisync) syncDiffs(
 			}
 			pulled++
 		case DiffConflict:
-			if err := b.resolveConflict(ctx, d); err != nil {
+			err := b.resolveConflict(ctx, d)
+			b.recordDiff(OutConflict, "", 0, d, err)
+			if err != nil {
 				b.log.Error("bisync conflict resolution failed",
 					"path", d.Path, "error", err)
 			}
@@ -375,6 +390,42 @@ func (b *Bisync) syncDiffs(
 		}
 	}
 	return pushed, pulled, conflicts
+}
+
+// recordDiff reports the final result of one per-file bisync operation.
+// Dry-run passes only detect, so they record nothing.
+func (b *Bisync) recordDiff(op, dir string, size int64, d FileDiff, err error) {
+	if b.cfg.DryRun {
+		return
+	}
+	// The transfer that settles a delete-vs-modify conflict counts in
+	// conflicts only (recordConflict), never in files_* / bytes_*.
+	if d.DeleteConflict && err == nil {
+		return
+	}
+	o := Outcome{Op: op, Dir: dir, Path: d.Path, Err: err, At: b.clock.Now()}
+	if err == nil {
+		o.Bytes = size
+	}
+	emitOutcome(b.rec, o)
+}
+
+// recordConflict reports a delete-vs-modify conflict, matching the
+// conflict event reportDeleteConflict publishes. Dry runs record nothing.
+func (b *Bisync) recordConflict(d FileDiff) {
+	if b.cfg.DryRun {
+		return
+	}
+	emitOutcome(b.rec, Outcome{Op: OutConflict, Path: d.Path, At: b.clock.Now()})
+}
+
+// recordPass reports the result of one whole bisync pass.
+func (b *Bisync) recordPass(start time.Time, files int, err error) {
+	now := b.clock.Now()
+	emitOutcome(b.rec, Outcome{
+		Op: OutBisync, Files: files, Err: err,
+		Duration: now.Sub(start), At: now,
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -396,91 +447,4 @@ func (b *Bisync) publishEvent(event BisyncEvent) {
 			"error", err,
 		)
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Chain repair (PLAN.md §11.5, issue #65 §3)
-// ---------------------------------------------------------------------------
-
-// keyChainRepair guards the one-time nested .old.<N> chain repair pass so
-// it runs at most once automatically, on the first bisync pass after
-// upgrade.
-var keyChainRepair = []byte("old_chain_repair_v1")
-
-// shouldRepairChains reports whether the automatic one-time chain repair
-// pass is due: enabled in config and not yet marked done.
-func (b *Bisync) shouldRepairChains() bool {
-	if !b.cfg.RepairChains {
-		return false
-	}
-	val, err := b.journal.GetMeta(keyChainRepair)
-	if err != nil {
-		b.log.Error("chain repair: failed to read completion marker, skipping this pass", "error", err)
-		return false
-	}
-	return val != "done"
-}
-
-// RunChainRepair runs the nested .old.<N> chain repair pass on demand
-// (POST /conflict/repair, `homedrive ctl conflict repair`), independent of
-// whether the automatic first-pass-after-upgrade repair already ran. It
-// takes the bisync lock like a normal pass, so it cannot run concurrently
-// with one.
-func (b *Bisync) RunChainRepair(ctx context.Context, dryRun bool) (Report, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if err := b.gateErr(); err != nil {
-		return Report{}, err
-	}
-	return b.runChainRepair(ctx, dryRun, !dryRun)
-}
-
-// runChainRepair walks the local root and remote listing, runs
-// RepairChains, and -- if markDone is true and the pass did not error --
-// records completion so the automatic pass (execute, via
-// shouldRepairChains) does not repeat it. Callers must already hold b.mu.
-func (b *Bisync) runChainRepair(ctx context.Context, dryRun, markDone bool) (Report, error) {
-	locals, err := b.walkLocal(ctx)
-	if err != nil {
-		return Report{}, fmt.Errorf("chain repair: walk local: %w", err)
-	}
-	remotes, err := b.listRemote(ctx)
-	if err != nil {
-		return Report{}, fmt.Errorf("chain repair: list remote: %w", err)
-	}
-
-	deps := RepairDeps{
-		Matcher: b.cfg.Matcher,
-		RenameLocal: func(oldPath, newPath string) error {
-			return os.Rename(
-				filepath.Join(b.cfg.LocalRoot, filepath.FromSlash(oldPath)),
-				filepath.Join(b.cfg.LocalRoot, filepath.FromSlash(newPath)),
-			)
-		},
-		RenameRemote: func(ctx context.Context, oldPath, newPath string) error {
-			return b.remote.MoveFile(ctx, oldPath, newPath)
-		},
-		JournalGet:    b.journal.Get,
-		JournalDelete: b.journal.Delete,
-		JournalPut:    b.journal.Put,
-		Auditor:       b.auditor,
-		Log:           b.log,
-		DryRun:        dryRun,
-	}
-
-	report, err := RepairChains(ctx, deps, locals, remotes)
-	if err != nil {
-		return report, fmt.Errorf("chain repair: %w", err)
-	}
-
-	b.log.Info("chain repair pass complete",
-		"op", "conflict_repair", "scanned", report.Scanned, "repaired", len(report.Links), "dry_run", dryRun)
-
-	if dryRun || !markDone {
-		return report, nil
-	}
-	if err := b.journal.SetMeta(keyChainRepair, "done"); err != nil {
-		b.log.Error("chain repair: failed to persist completion marker, will retry next pass", "error", err)
-	}
-	return report, nil
 }

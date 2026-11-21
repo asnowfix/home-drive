@@ -67,6 +67,11 @@ type PullerConfig struct {
 
 	// DryRun when true logs intended actions without writing.
 	DryRun bool
+
+	// Recorder, if non-nil, receives one Outcome per final pull result
+	// (download, delete, conflict, Changes API poll). Dry-run records
+	// nothing.
+	Recorder Recorder
 }
 
 // Puller polls the Drive Changes API and downloads remote modifications.
@@ -234,11 +239,13 @@ func (p *Puller) poll(ctx context.Context) error {
 			"op", "pull",
 			"error", err,
 		)
+		p.recordOutcome(Outcome{Op: OutPoll, Err: err})
 		return fmt.Errorf("getting page token: %w", err)
 	}
 
 	changes, err := p.fetchChanges(ctx, token)
 	if err != nil {
+		p.recordOutcome(Outcome{Op: OutPoll, Err: err})
 		return err
 	}
 
@@ -247,8 +254,12 @@ func (p *Puller) poll(ctx context.Context) error {
 			"op", "pull",
 			"page_token", token,
 		)
-		// Still persist the next token even if no changes.
-		return p.persistToken(ctx, changes.NextPageToken)
+		// Still persist the next token even if no changes. The poll only
+		// counts as successful once the token is persisted, else the same
+		// page would replay forever while last_poll kept advancing.
+		err := p.persistToken(ctx, changes.NextPageToken)
+		p.recordOutcome(Outcome{Op: OutPoll, Err: err})
+		return err
 	}
 
 	p.log.Info("processing remote changes",
@@ -276,8 +287,10 @@ func (p *Puller) poll(ctx context.Context) error {
 		return err
 	}
 	if err := p.persistToken(ctx, changes.NextPageToken); err != nil {
+		p.recordOutcome(Outcome{Op: OutPoll, Err: err})
 		return err
 	}
+	p.recordOutcome(Outcome{Op: OutPoll})
 
 	return lastErr
 }
@@ -403,6 +416,13 @@ func (p *Puller) persistToken(ctx context.Context, token string) error {
 		return fmt.Errorf("persisting page token: %w", err)
 	}
 	return nil
+}
+
+// recordOutcome forwards o to the configured Recorder (if any),
+// stamping At with the puller clock.
+func (p *Puller) recordOutcome(o Outcome) {
+	o.At = p.clock()
+	emitOutcome(p.cfg.Recorder, o)
 }
 
 // emitPullSuccess publishes a pull.success MQTT event.

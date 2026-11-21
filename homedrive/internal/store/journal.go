@@ -57,6 +57,9 @@ func OpenJournal(path string, logger *slog.Logger) (*Journal, error) {
 		if _, err := tx.CreateBucketIfNotExists(bucketJournal); err != nil {
 			return err
 		}
+		if _, err := tx.CreateBucketIfNotExists(bucketStats); err != nil {
+			return err
+		}
 		if _, err := tx.CreateBucketIfNotExists(bucketTrash); err != nil {
 			return err
 		}

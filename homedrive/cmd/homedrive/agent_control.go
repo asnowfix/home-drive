@@ -16,6 +16,7 @@ import (
 	"github.com/asnowfix/home-drive/homedrive/internal/config"
 	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
+	"github.com/asnowfix/home-drive/homedrive/pkg/homedrive"
 )
 
 // Pause stops the watcher pump from forwarding events to the push worker
@@ -123,6 +124,9 @@ func (a *Agent) Reload(_ context.Context) error {
 		a.logLevel.Set(parseLogLevel(newCfg.Logging.Level))
 	}
 	a.reloadedDryRun.Store(newCfg.DryRun)
+	if a.statePub != nil {
+		a.statePub.PublishOnce() // dry_run may have changed
+	}
 
 	a.log.Info("config reloaded",
 		"op", "reload",
@@ -143,6 +147,8 @@ func (a *Agent) Status(ctx context.Context) (httpctl.StatusInfo, error) {
 		state = "paused"
 	}
 
+	snap := a.stats.Snapshot(time.Now())
+	c24 := snap.Counts[homedrive.Window24h]
 	rootBlock := a.localRootBlock()
 	if rootBlock != nil {
 		state = "root_blocked"
@@ -153,12 +159,12 @@ func (a *Agent) Status(ctx context.Context) (httpctl.StatusInfo, error) {
 		Version:       a.version,
 		PendingUp:     len(a.pushEvents) + len(a.pushRenames),
 		PendingDown:   0, // pull applies each Changes API page synchronously; no queue to report
-		LastPush:      unixNanoToRFC3339(a.lastPushUnixNano.Load()),
-		LastPull:      unixNanoToRFC3339(a.lastPullUnixNano.Load()),
+		LastPush:      timeToRFC3339(snap.LastPush),
+		LastPull:      timeToRFC3339(snap.LastPull),
 		QuotaUsedPct:  a.quotaUsedPct(ctx),
-		Conflicts24h:  0, // not yet tracked; requires a metrics/quota follow-up
-		BytesUp24h:    0, // not yet tracked; requires a metrics/quota follow-up
-		BytesDown24h:  0, // not yet tracked; requires a metrics/quota follow-up
+		Conflicts24h:  int(c24.Conflicts),
+		BytesUp24h:    c24.BytesUp,
+		BytesDown24h:  c24.BytesDown,
 		DryRun:        a.reloadedDryRun.Load(),
 		UptimeSeconds: int64(time.Since(a.startTime).Seconds()),
 
@@ -268,13 +274,13 @@ func (a *Agent) mqttHealth() httpctl.ComponentHealth {
 	return httpctl.ComponentHealth{Name: "mqtt", Healthy: false, Message: "disconnected"}
 }
 
-// unixNanoToRFC3339 renders a unix-nano timestamp (0 meaning "never") as
-// an RFC3339 string, or "" for 0 so the JSON field is omitted.
-func unixNanoToRFC3339(n int64) string {
-	if n == 0 {
+// timeToRFC3339 renders t as an RFC3339 UTC string, or "" for the zero
+// time so the JSON field is omitted.
+func timeToRFC3339(t time.Time) string {
+	if t.IsZero() {
 		return ""
 	}
-	return time.Unix(0, n).UTC().Format(time.RFC3339)
+	return t.UTC().Format(time.RFC3339)
 }
 
 // parseLogLevel maps a config log level string to a slog.Level, defaulting

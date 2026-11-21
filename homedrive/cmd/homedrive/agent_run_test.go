@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/asnowfix/home-drive/homedrive/internal/config"
+	"github.com/asnowfix/home-drive/homedrive/internal/stats"
 	"github.com/asnowfix/home-drive/homedrive/internal/store"
 	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
 	"github.com/asnowfix/home-drive/homedrive/internal/watcher"
@@ -57,9 +58,6 @@ func TestDispatchWatchEvent_ForwardsFileEvent(t *testing.T) {
 	default:
 		t.Fatal("expected an event on pushEvents")
 	}
-	if a.lastPushUnixNano.Load() == 0 {
-		t.Error("expected lastPushUnixNano to be recorded")
-	}
 }
 
 func TestDispatchWatchEvent_ForwardsDirRename(t *testing.T) {
@@ -90,9 +88,6 @@ func TestDispatchWatchEvent_DroppedWhilePaused(t *testing.T) {
 		t.Fatalf("expected no event while paused, got %+v", got)
 	default:
 	}
-	if a.lastPushUnixNano.Load() != 0 {
-		t.Error("expected lastPushUnixNano to stay unset while paused")
-	}
 }
 
 func TestDispatchWatchEvent_ResumeForwardsAgain(t *testing.T) {
@@ -120,11 +115,13 @@ func TestPollOnceGuarded_BlocksDuringBisyncLock(t *testing.T) {
 	j := newTestJournal(t)
 	remote := newFakeRemoteFS()
 
+	tr := stats.New(stats.Config{})
 	a := &Agent{
 		log:      slog.Default(),
 		bisyncMu: &sync.RWMutex{},
+		stats:    tr,
 		puller: syncer.NewPuller(
-			syncer.PullerConfig{LocalRoot: t.TempDir()},
+			syncer.PullerConfig{LocalRoot: t.TempDir(), Recorder: tr},
 			remote,
 			store.NewJournalStore(j, slog.Default()),
 			nil,
@@ -156,8 +153,8 @@ func TestPollOnceGuarded_BlocksDuringBisyncLock(t *testing.T) {
 		t.Fatal("pollOnceGuarded did not complete after the bisync lock was released")
 	}
 
-	if a.lastPullUnixNano.Load() == 0 {
-		t.Error("expected lastPullUnixNano to be recorded after a successful poll")
+	if a.stats.Snapshot(time.Now()).LastPoll.IsZero() {
+		t.Error("expected last_poll to be recorded after a successful poll")
 	}
 }
 
@@ -255,16 +252,18 @@ func TestRunPullLoop_NoBackoffWhenOAuthClientConfigured(t *testing.T) {
 	remote := newFakeRemoteFS() // default ListChanges: succeeds, no error
 
 	const baseInterval = 20 * time.Millisecond
+	tr := stats.New(stats.Config{})
 	a := &Agent{
 		log:      slog.Default(),
 		bisyncMu: &sync.RWMutex{},
+		stats:    tr,
 		cfg: &config.Config{
 			Pull: config.PullConfig{
 				ChangesAPIInterval: config.Duration{Duration: baseInterval},
 			},
 		},
 		puller: syncer.NewPuller(
-			syncer.PullerConfig{Interval: baseInterval, LocalRoot: t.TempDir()},
+			syncer.PullerConfig{Interval: baseInterval, LocalRoot: t.TempDir(), Recorder: tr},
 			remote,
 			store.NewJournalStore(j, slog.Default()),
 			nil,
@@ -281,7 +280,7 @@ func TestRunPullLoop_NoBackoffWhenOAuthClientConfigured(t *testing.T) {
 	if got := a.puller.NextPollInterval(); got != baseInterval {
 		t.Errorf("a.puller.NextPollInterval() = %v after a healthy run, want unchanged base interval %v", got, baseInterval)
 	}
-	if a.lastPullUnixNano.Load() == 0 {
-		t.Error("expected lastPullUnixNano to be recorded by a successful poll")
+	if a.stats.Snapshot(time.Now()).LastPoll.IsZero() {
+		t.Error("expected last_poll to be recorded by a successful poll")
 	}
 }

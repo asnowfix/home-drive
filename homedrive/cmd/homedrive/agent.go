@@ -22,6 +22,7 @@ import (
 	"github.com/asnowfix/home-drive/homedrive/internal/mqtt"
 	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
+	"github.com/asnowfix/home-drive/homedrive/internal/stats"
 	"github.com/asnowfix/home-drive/homedrive/internal/store"
 	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
 	"github.com/asnowfix/home-drive/homedrive/internal/trash"
@@ -89,8 +90,11 @@ type Agent struct {
 	reloadedDryRun atomic.Bool
 	startTime      time.Time
 
-	lastPushUnixNano atomic.Int64
-	lastPullUnixNano atomic.Int64
+	// stats backs both GET /status and the status v2 MQTT document;
+	// statePub is nil when MQTT is disabled (status_v2.go).
+	stats    *stats.Tracker
+	statePub *mqtt.StatePublisher
+	quota    quotaCache
 }
 
 // AgentOpts groups the inputs needed to build an Agent, kept separate from
@@ -178,6 +182,7 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 	}
 	a.reloadedDryRun.Store(cfg.DryRun)
 
+	a.buildStats()
 	a.rootGuard = a.newRootGuard(journal, auditor, pub)
 
 	a.trasher = newTrasher(cfg, journal, auditor, log)
@@ -313,6 +318,7 @@ func (a *Agent) buildPushSyncer(pub syncer.Publisher, audit syncer.AuditLogger) 
 		pub,
 		a.log,
 		syncer.WithBisyncMutex(a.bisyncMu),
+		syncer.WithRecorder(a.stats),
 		syncer.WithRootGate(a.rootGuard),
 		syncer.WithDeleteGuard(a.deleteGuard),
 	)
@@ -338,6 +344,7 @@ func (a *Agent) buildPuller(pub syncer.Publisher, audit syncer.AuditLogger, audi
 			Remover:        a.localRemover(),
 			Gate:           a.rootGuard,
 			DryRun:         a.cfg.DryRun,
+			Recorder:       a.stats,
 		},
 		a.rfs,
 		js,
@@ -370,14 +377,15 @@ func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer, auditor *s
 			MaxDeletePct:   derefInt(a.cfg.Bisync.MaxDeletePct),
 			Remover:        a.localRemover(),
 		},
-		Remote:  a.rfs,
-		Journal: &bisyncJournalAdapter{j: a.journal},
-		MQTT:    pub,
-		Audit:   rawAudit,
-		Logger:  a.log,
-		Mu:      a.bisyncMu,
-		Auditor: auditor,
-		Gate:    a.rootGuard,
+		Remote:   a.rfs,
+		Journal:  &bisyncJournalAdapter{j: a.journal},
+		MQTT:     pub,
+		Audit:    rawAudit,
+		Logger:   a.log,
+		Mu:       a.bisyncMu,
+		Auditor:  auditor,
+		Gate:     a.rootGuard,
+		Recorder: a.stats,
 	})
 	a.bisync = b
 }

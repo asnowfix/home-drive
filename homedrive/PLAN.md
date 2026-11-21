@@ -495,6 +495,25 @@ RPC features — `homedrive`'s `Publisher` interface stays stable.
 
 ## 9. MQTT structure for Home Assistant
 
+### 9.0 Status document (v2, issue #141)
+
+> **Correction.** Phases 9 and 13 recorded per-entity state publishing and HA
+> Discovery as shipped, but `mqtt.NewStatePublisher` and `PublishDiscovery`
+> had no non-test callers: no state was ever published (found by the status
+> v2 design, issue #141). The per-entity topics of §9.1 are **not
+> published**. HA Discovery remains unwired (follow-up).
+
+The agent publishes ONE retained JSON document, schema `"2.0"`, on
+`homedrive/<host>/<user>/status` (QoS 1) every `mqtt.publish_interval`
+(default 30s), at start and on `/reload`. It carries 1h/24h/7d counters
+(files/bytes up/down, errors with `errors_up`/`errors_down`, conflicts,
+starts) backed by 5-minute buckets persisted in the Bolt `stats` bucket
+(8-day retention, flushed every tick and on shutdown), `last_push`/
+`last_pull`/`last_poll`/`last_activity`, `last_error`, `bisync`, `local`
+and a cached `quota_used_pct`. The wire contract, field table, consumer
+rules and example documents are in `docs/design/status-v2.md`. The `auth`
+object and the startup reorder (`state:"starting"`/`"error"`) are #142.
+
 ### 9.1 State entities (HA Discovery)
 
 Base topic: `homedrive/<hostname>/<user>/`. Auto-discovery via
@@ -1047,6 +1066,17 @@ two independent copies of one algorithm that could silently drift apart.
 - Issue: `[homedrive] Filter parity: honor excludes on pull path + rclone
   migration doc` (#54).
 
+### Phase 17 — Status v2: status topic, persistent counters (issue #141) [DONE]
+- [x] `internal/stats` tracker: 5-minute buckets in Bolt, 1h/24h/7d windows,
+  flushed per tick and on shutdown, restart-surviving.
+- [x] `syncer.Recorder` hook: one `Outcome` per final result (after retries) in
+  push, pull and bisync.
+- [x] `internal/mqtt` status publisher wired in `cmd/homedrive` (it never was).
+- [x] Fixes: zeroed `bytes_*_24h`/`conflicts_24h` in `/status`, push event
+  `ts` now UTC `Z`, `last_push`/`last_pull` advance on success only.
+- [x] MQTT reconnect gap capped at 2 min (paho defaults to 10 min).
+- [ ] #142: auth observer, non-fatal MQTT connect, `state:"error"` on failed start.
+
 ---
 
 ## 15. Packaging
@@ -1424,4 +1454,3 @@ Document all of the above in `docs/dev-environment.md`.
 | Footprint regression | Must run on a Raspberry Pi 3B+ alongside other workloads; CI reports binary size and gates on exactly 1 rclone backend |
 | macOS dev → Linux runtime divergence | OrbStack VM for tests, GOOS=linux gopls, build tags |
 | Future cross-device sync collision | Reserved MQTT namespaces documented in §8.3 |
-
