@@ -16,7 +16,7 @@ const DefaultPublishInterval = 30 * time.Second
 type SnapshotFunc func() homedrive.StatusV2
 
 // StatePublisher periodically publishes ONE retained JSON status document
-// (schema 2.0, status-v2.md §5.3) on <base>/<host>/<user>/status.
+// (schema 2.1, status-v2.md §5.3) on <base>/<host>/<user>/status.
 type StatePublisher struct {
 	pub      Publisher
 	snapshot SnapshotFunc

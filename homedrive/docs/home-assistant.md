@@ -9,7 +9,7 @@ depth, quota usage, and events.
 > describe the original design and are **not currently published**: the
 > state publisher and `PublishDiscovery` were never wired into the agent.
 > What the agent publishes today is one retained JSON document on
-> `<base_topic>/<hostname>/<user>/status` (schema 2.0, see
+> `<base_topic>/<hostname>/<user>/status` (schema 2.1, see
 > `docs/design/status-v2.md`). Wiring HA Discovery against it (with
 > `value_template`s over that JSON) is a follow-up.
 

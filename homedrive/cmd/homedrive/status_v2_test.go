@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,4 +126,48 @@ func TestRefreshQuota_CachesBetweenTicks(t *testing.T) {
 	if p := a.quota.get(); *p != 50 {
 		t.Errorf("quota after refresh = %v, want 50", *p)
 	}
+}
+
+func TestStatusGuards_Cases(t *testing.T) {
+	since := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+
+	t.Run("none_blocking", func(t *testing.T) {
+		a := &Agent{log: slog.Default(), stats: stats.New(stats.Config{})}
+		d := a.buildStatusV2(since)
+		if d.Guards.LocalRoot != nil || d.Guards.BisyncDeletes != nil || d.State != homedrive.StateRunning {
+			t.Errorf("doc = %+v", d)
+		}
+	})
+
+	t.Run("root_blocked_keeps_codes_only", func(t *testing.T) {
+		a, _, _ := newBlockedRootAgent(t)
+		a.stats = stats.New(stats.Config{})
+		d := a.buildStatusV2(since)
+		if d.State != homedrive.StateRootBlocked {
+			t.Errorf("state = %q, want root_blocked", d.State)
+		}
+		g := d.Guards.LocalRoot
+		if g == nil || g.Reason != syncer.RootBlockMissing || g.Since.IsZero() {
+			t.Fatalf("guards.local_root = %+v", g)
+		}
+		out, err := json.Marshal(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The block's Detail carries the lstat error with the local_root
+		// path: none of it may reach the document.
+		if strings.Contains(string(out), a.cfg.LocalRoot) || strings.Contains(string(out), "no such file") {
+			t.Errorf("document leaks a path or error text: %s", out)
+		}
+	})
+
+	t.Run("delete_guard_mapping", func(t *testing.T) {
+		if deleteGuardStatus(nil) != nil || rootGuardStatus(nil) != nil {
+			t.Error("nil block must map to nil")
+		}
+		g := deleteGuardStatus(&syncer.DeleteBlock{Planned: 412, Threshold: 100, Reason: syncer.BlockThreshold, Since: since})
+		if g == nil || g.Reason != "threshold" || g.Planned != 412 || g.Threshold != 100 || !g.Since.Equal(since) {
+			t.Errorf("guard = %+v", g)
+		}
+	})
 }

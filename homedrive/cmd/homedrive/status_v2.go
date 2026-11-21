@@ -10,6 +10,7 @@ import (
 
 	"github.com/asnowfix/home-drive/homedrive/internal/mqtt"
 	"github.com/asnowfix/home-drive/homedrive/internal/stats"
+	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
 	"github.com/asnowfix/home-drive/homedrive/pkg/homedrive"
 )
 
@@ -73,10 +74,42 @@ func (a *Agent) refreshQuota(ctx context.Context, now time.Time) {
 
 // stateName is the document "state" for the live process.
 func (a *Agent) stateName() string {
+	if a.rootGuard.Block() != nil {
+		return homedrive.StateRootBlocked
+	}
 	if a.paused.Load() {
 		return homedrive.StatePaused
 	}
 	return homedrive.StateRunning
+}
+
+// statusGuards reports the active guard blocks as stable codes and counts
+// only: no paths, no error text (a RootBlock's Detail can carry a path).
+func (a *Agent) statusGuards() homedrive.Guards {
+	g := homedrive.Guards{LocalRoot: rootGuardStatus(a.rootGuard.Block())}
+	if a.bisync != nil {
+		g.BisyncDeletes = deleteGuardStatus(a.bisync.DeleteBlock())
+	}
+	return g
+}
+
+// rootGuardStatus maps a root block onto the document; nil stays nil.
+func rootGuardStatus(blk *syncer.RootBlock) *homedrive.RootGuard {
+	if blk == nil {
+		return nil
+	}
+	return &homedrive.RootGuard{Reason: blk.Reason, Since: homedrive.Timestamp{Time: blk.Since}}
+}
+
+// deleteGuardStatus maps a bisync delete block onto the document.
+func deleteGuardStatus(blk *syncer.DeleteBlock) *homedrive.DeleteGuard {
+	if blk == nil {
+		return nil
+	}
+	return &homedrive.DeleteGuard{
+		Reason: blk.Reason, Planned: blk.Planned, Threshold: blk.Threshold,
+		Since: homedrive.Timestamp{Time: blk.Since},
+	}
 }
 
 // buildStatusV2 assembles the status document as of now.
@@ -107,6 +140,7 @@ func (a *Agent) buildStatusV2(now time.Time) homedrive.StatusV2 {
 		Bisync:       snap.Bisync,
 		Local:        snap.Local,
 		QuotaUsedPct: a.quota.get(),
+		Guards:       a.statusGuards(),
 	}
 	return doc
 }

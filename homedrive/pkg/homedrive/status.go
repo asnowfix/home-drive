@@ -9,7 +9,9 @@ import (
 // StatusSchema is the major.minor version of the status document
 // published on <base>/<host>/<user>/status. See
 // homedrive/docs/design/status-v2.md §5.3 (the wire contract).
-const StatusSchema = "2.0"
+//
+// 2.1 adds the "guards" object and the "root_blocked" state (additive).
+const StatusSchema = "2.1"
 
 // Status document "state" values. Consumers must treat unknown values as
 // "degraded: show raw", so new values may be added in a minor release.
@@ -20,6 +22,9 @@ const (
 	StateRunning  = "running"
 	StatePaused   = "paused"
 	StateError    = "error"
+	// StateRootBlocked: local_root is missing or not the synced tree, so
+	// pull, push and bisync are paused (issue #170). Added in 2.1.
+	StateRootBlocked = "root_blocked"
 )
 
 // Window names used as keys of StatusV2.Counts.
@@ -106,6 +111,31 @@ type LocalInfo struct {
 	ScannedAt Timestamp `json:"scanned_at"`
 }
 
+// RootGuard reports a blocked local_root (status-v2.md §5.3, "guards").
+// Reason is a stable code: missing, marker_missing, identity_mismatch or
+// unreadable. It never carries a path or an error message.
+type RootGuard struct {
+	Reason string    `json:"reason"`
+	Since  Timestamp `json:"since"`
+}
+
+// DeleteGuard reports bisync deletions held back by the mass-deletion
+// guard (issue #156). Reason is a stable code: threshold, empty_local or
+// empty_remote. Planned and Threshold are counts, never file names.
+type DeleteGuard struct {
+	Reason    string    `json:"reason"`
+	Planned   int       `json:"planned"`
+	Threshold int       `json:"threshold"`
+	Since     Timestamp `json:"since"`
+}
+
+// Guards describes the safety guards currently holding work back. Each
+// member is null when its guard is not blocking. Added in schema 2.1.
+type Guards struct {
+	LocalRoot     *RootGuard   `json:"local_root"`
+	BisyncDeletes *DeleteGuard `json:"bisync_deletes"`
+}
+
 // StatusV2 is the retained JSON document published on the status topic.
 // Absent values are JSON null, never "" or the zero time.
 type StatusV2 struct {
@@ -130,4 +160,7 @@ type StatusV2 struct {
 	Bisync       *BisyncInfo       `json:"bisync"`
 	Local        *LocalInfo        `json:"local"`
 	QuotaUsedPct *float64          `json:"quota_used_pct"`
+
+	// Guards is always present (members null when not blocking).
+	Guards Guards `json:"guards"`
 }

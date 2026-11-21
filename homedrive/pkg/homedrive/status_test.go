@@ -53,12 +53,12 @@ func TestStatusV2_NullableTimestamps(t *testing.T) {
 }
 
 // TestStatusV2_ExampleFixtures pins the example documents shipped for the
-// myhome consumer (status-v2.md §12): they must parse, carry schema 2.0 and
+// myhome consumer (status-v2.md §12): they must parse, carry schema 2.1 and
 // a positive publish_interval_s, and use UTC "Z" second-precision stamps.
 func TestStatusV2_ExampleFixtures(t *testing.T) {
 	files, err := filepath.Glob("testdata/status-*.json")
-	if err != nil || len(files) != 3 {
-		t.Fatalf("fixtures = %v (%v), want 3", files, err)
+	if err != nil || len(files) != 5 {
+		t.Fatalf("fixtures = %v (%v), want 5", files, err)
 	}
 	for _, f := range files {
 		t.Run(filepath.Base(f), func(t *testing.T) {

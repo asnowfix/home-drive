@@ -57,8 +57,8 @@ func TestStatePublisher_PublishOnceRetained(t *testing.T) {
 				}
 				var schema string
 				_ = json.Unmarshal(raw["schema"], &schema)
-				if schema != "2.0" {
-					t.Errorf("schema = %q, want 2.0", schema)
+				if schema != homedrive.StatusSchema {
+					t.Errorf("schema = %q, want 2.1", schema)
 				}
 				var secs int
 				_ = json.Unmarshal(raw["publish_interval_s"], &secs)
