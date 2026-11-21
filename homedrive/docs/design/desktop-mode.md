@@ -216,6 +216,13 @@ and `go-fuse` is actively maintained. **Caveat:** the trial exercised `cmd/mount
 not `mount2`. Phase D1's first deliverable is the same measurement matrix on
 `mount2`, and falling back to `cmd/mount` costs one import line.
 
+**D1 finding (fuse3 3.18.2, Ubuntu 26.04):** `mount2` (go-fuse v2.11.0) cannot mount
+as a normal user on this host: go-fuse hands `fusermount3` a unixgram socketpair
+and fusermount3 answers `file descriptor 3 is not a socket, can't send fuse fd`
+(a SOCK_STREAM socketpair is accepted). The matrix on `mount2` therefore needs
+either a go-fuse fix or a fuse3 package that accepts the datagram socket; falling
+back to `cmd/mount` (bazil, one import line) is the alternative the design already names.
+
 ## 6. rclone allow-list (accepted with O1)
 
 Today (`AGENTS.md`, `homedrive-rclone-import` skill) the whole module may import:
@@ -291,6 +298,42 @@ process links the FUSE/VFS packages but never initialises a mount; D1 must check
 that no rclone `cmd`/`mount2` `init()` does work at NAS start-up (memory, flags)
 and record the arm64 RSS of NAS mode before and after on a Pi 3B+-class host.
 
+### 7.1 Measured in D1: what NAS mode pays (issue #176)
+
+D1 (`homedrive mount` linked into the one binary) measured against `main`
+(c3439ce) on the same machine, 2026-11-21. **No Raspberry Pi and no qemu-user
+were available, so the runtime figures are linux/amd64, not arm64** (24-core
+x86_64 desktop host, Go 1.27.4); only the binary size is also given for arm64.
+Each runtime figure is the median of 15 runs, alternating main and branch.
+The NAS start-up path is `homedrive run --config <c>` with an empty
+`rclone.conf` (no remote section): it loads the config, opens the journal and
+audit log, and fails at "didn't find section in config file" before any token
+or network use, so no Google call is made. The NAS itself was not used.
+
+| Metric | `main` | D1 branch | Delta |
+|---|---|---|---|
+| Stripped binary, linux/arm64 | 22,741,152 B | 24,576,160 B | +1,835,008 B (+1.75 MiB) |
+| Stripped binary, linux/amd64 | 24,531,104 B | 26,554,528 B | +2,023,424 B (+1.93 MiB) |
+| `inittrace`: package inits (amd64) | 265 | 280 | +15 |
+| `inittrace`: init time, summed | 11.0-11.2 ms | 14.6-17.6 ms | about +3.5 to +6 ms (noisy) |
+| `inittrace`: init allocations (bytes) | 2.21 MB | 2.54 MB | +0.33 MB |
+| `inittrace`: init allocations (count) | 27,190 | 29,030 | +1,840 |
+| Peak RSS, NAS start-up path (amd64) | 21.6-21.9 MiB | 23.0-23.2 MiB | about +1.7 MiB |
+| Wall time, NAS start-up path (amd64) | 16.8-17.1 ms | 18.8-19.6 ms | about +2 ms |
+
+**Reading:** NAS mode does get a little heavier at start-up, it is not free:
+15 more package `init()`s run in every NAS process. The heaviest new ones are
+`cmd/mount2` (1.5 ms, 154 KB, 400 allocations: it registers rclone's mount
+flags and a cobra command in its `init()`), `fs/rc/rcserver` (0.30 ms, 15 KB;
+pulled in by `mountlib`, although the allow-list does not name it),
+`vfs/vfscommon` (0.25 ms, 18 KB) and `cmd/mountlib` (0.14 ms, 14 KB). None of
+them starts a goroutine or opens a file (they only register flags and options),
+so steady-state RSS is expected to move by the same ~1.7 MiB at most, but a
+steady-state arm64 run on a Pi 3B+ is **not measured**. These `init()`s cannot
+be avoided without forking rclone or splitting the binary (option (a)), which
+the maintainer ruled out; the maintainer decides whether about 2 MiB RSS and
+a few ms of start-up are acceptable on a Pi 3B+.
+
 ## 8. Design
 
 ### 8.1 Runtime topology
@@ -352,10 +395,32 @@ plus no cap check and no offline listing guarantee.
 
 - `cache.max_size`: default **25% of the size of the filesystem holding the cache
   dir** (256 GiB on the current desktop host, 1 TiB disk), overridable with an
-  absolute size (decision, 2026-11-15). `cache.max_age` (default 0: no age limit;
-  rclone's default of 1h would evict everything hourly), `cache.min_free_space`
-  (default 5 GiB; rclone's `--vfs-cache-min-free-space`), cache dir
-  `$XDG_CACHE_HOME/homedrive-desktop`.
+  absolute size (decision, 2026-11-15). `cache.max_age` (default 0: no age limit),
+  `cache.min_free_space` (default 5 GiB; rclone's `--vfs-cache-min-free-space`),
+  cache dir `$XDG_CACHE_HOME/home-drive` (rule below).
+- **`max_age: 0` needs a mapping (found in D1, rclone v1.76.0).** In rclone,
+  `--vfs-cache-max-age 0` does not mean "no limit": cache cleaning calls
+  `purgeOld(0)` and `Item.RemoveNotInUse` treats `maxAge == 0` as "remove every
+  item not in use" (`vfs/vfscache/item.go`), at every poll and once at start-up.
+  `desktop.yaml` keeps `0` (default) as "no age-based eviction" and hands rclone a
+  100-year age instead; a test pins the mapping.
+- **Where files go (XDG rule, decided 2026-11-21).** One resolver per kind
+  (`internal/desktop/paths.go`), every one overridable in `desktop.yaml`; a
+  relative or empty `XDG_*` value is ignored, as the XDG specification requires:
+
+  | Kind | Default | Fallback | Key |
+  |---|---|---|---|
+  | Cache | `$XDG_CACHE_HOME/home-drive` | `~/.cache/home-drive` | `cache.dir` |
+  | State | `$XDG_STATE_HOME/home-drive` | `~/.local/state/home-drive` | `state_dir` |
+  | Runtime | `$XDG_RUNTIME_DIR/home-drive` | `<state dir>/run` (XDG defines none) | `runtime_dir` |
+  | Config, token | `$XDG_CONFIG_HOME/homedrive/{desktop.yaml,rclone.conf}` | `~/.config/homedrive/` | `--config`, `token_file` |
+
+  rclone's VFS writes **only** below the cache dir: `vfs/<remote>/` (data) and
+  `vfsMeta/<remote>/` (metadata). Checked in v1.76.0: `vfscache.New` builds both
+  from `config.GetCacheDir()`, which homedrive sets to `cache.dir`; the FUSE test
+  runs with `HOME` and every `XDG_*` pointed at an empty directory and asserts
+  nothing appears there and that the cache dir holds only `vfs`, `vfsMeta` and
+  homedrive's marker file.
 - `cache.poll_interval` 10 s: the soft-cap overshoot is bounded by one interval
   of reads; 10 s keeps it small.
 - LRU by **open/read/close/write** is rclone's behaviour; **touch is not**.
@@ -513,7 +578,7 @@ fallback** for desktops without `graphical-session.target`.
 
 - **Logout:** SIGTERM. The process stops accepting new opens, waits for
   in-progress uploads and for dirty items to upload for up to ~30 s (inside
-  `TimeoutStopSec=45`), then unmounts. If the mount is busy (`EBUSY`, a file still
+  `TimeoutStopSec=45`), then unmounts (**checked against rclone v1.76.0 in D1:** rclone does not do this wait for us: `MountPoint.Wait` unmounts, then `VFS.Shutdown` cancels the cache, and nothing under `cmd/` calls `VFS.WaitForWriters`, so homedrive calls it itself, bounded, before `Unmount`). If the mount is busy (`EBUSY`, a file still
   open), it falls back to a **lazy unmount** (`fusermount3 -u -z`). Dirty items not
   uploaded by then **stay in the cache** and rclone re-queues them at the next
   start (verified: the cache survived unmount/remount in the trial; that dirty
@@ -547,8 +612,8 @@ extension (Python, GObject). Not proposed for the first phases.
 |---|---|---|
 | Unit | `homedrive.service`, `WantedBy=default.target`, lingering | `homedrive-desktop.service`, `WantedBy=graphical-session.target` |
 | Config | `~/.config/homedrive/config.yaml` | `~/.config/homedrive/desktop.yaml` |
-| State | NAS state dir | `$XDG_STATE_HOME/homedrive-desktop/` |
-| Cache | none | `$XDG_CACHE_HOME/homedrive-desktop/` |
+| State | NAS state dir | `$XDG_STATE_HOME/home-drive/` |
+| Cache | none | `$XDG_CACHE_HOME/home-drive/` (section 8.3) |
 | Local path | `local_root` (`~/gdrive`) | mount point, e.g. `~/GoogleDrive` |
 | HTTP | 6090 | 6091 |
 | MQTT | `homedrive/<host>/<user>/` | `homedrive/<host>/<user>/desktop/` |

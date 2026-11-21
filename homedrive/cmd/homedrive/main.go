@@ -78,6 +78,7 @@ func newRootCmd(logLevel *slog.LevelVar) *cobra.Command {
 
 	root.AddCommand(newRunCmd(logLevel))
 	root.AddCommand(newCtlCmd())
+	root.AddCommand(newMountCmd())
 
 	return root
 }
@@ -104,6 +105,12 @@ func runAgent(cmd *cobra.Command, configPath string, logLevel *slog.LevelVar) er
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+
+	lock, err := acquireTokenLock(configPath, slog.Default())
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Release() }()
 
 	agent, err := newAgent(ctx, AgentOpts{
 		ConfigPath: configPath,

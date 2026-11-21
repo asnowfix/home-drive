@@ -73,6 +73,20 @@ jobs:
             | grep -v '_test.go' || true)
           echo "Drive backend imports: ${drive_imports:-none (not yet wired)}"
 
+      - name: Verify desktop-only rclone imports stay in desktop code
+        run: |
+          # vfs, cmd/* (mountlib, mount2) and fs/rc are desktop-mode packages:
+          # only homedrive/internal/desktop/ and homedrive/cmd/homedrive/mount*.go
+          # may import them (design: docs/design/desktop-mode.md section 6).
+          imports=$(grep -rnE '"github.com/rclone/rclone/(vfs|vfs/[^"]*|cmd/[^"]*|fs/rc[^"]*)"' homedrive/ --include='*.go' \
+            | grep -v '^homedrive/internal/desktop/' \
+            | grep -v '^homedrive/cmd/homedrive/mount[^/]*\.go:' || true)
+          if [ -n "$imports" ]; then
+            echo "ERROR: desktop-only rclone packages imported outside the desktop code:"
+            echo "$imports"
+            exit 1
+          fi
+
   # Runs on native amd64 only. Tests are not executed on arm64 — the 'build'
   # job above already verified the arm64 binary compiles and meets constraints.
   test:

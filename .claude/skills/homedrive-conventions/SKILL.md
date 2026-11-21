@@ -82,6 +82,10 @@ import (
 )
 ```
 
+Desktop mode (`internal/desktop`, `cmd/homedrive/mount*.go` only) may also
+import `vfs`, `vfs/vfscommon`, `cmd/mountlib`, `_ cmd/mount2` and `fs/rc`; CI
+greps for them elsewhere (see `homedrive-rclone-import`).
+
 Adding any other rclone package requires user approval AND verification
 that the build stays lean enough for a Raspberry Pi 3B+. See `homedrive-rclone-import`.
 
