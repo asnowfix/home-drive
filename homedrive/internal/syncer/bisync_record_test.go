@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -35,10 +36,10 @@ func TestBisyncRecorder_DeletesConflictsAndPass(t *testing.T) {
 
 	w.run()
 
-	if got := rec.byOp(OutPullDelete); len(got) != 1 || got[0].Err != nil || got[0].Dir != DirDown {
+	if got := rec.byOp(OutPullDelete); len(got) != 1 || got[0].Err != nil || got[0].Dir != "" {
 		t.Errorf("pull_delete outcomes = %+v", got)
 	}
-	if got := rec.byOp(OutPushDelete); len(got) != 1 || got[0].Err != nil || got[0].Dir != DirUp {
+	if got := rec.byOp(OutPushDelete); len(got) != 1 || got[0].Err != nil || got[0].Dir != "" {
 		t.Errorf("push_delete outcomes = %+v", got)
 	}
 	if got := rec.byOp(OutConflict); len(got) != 1 || got[0].Path != "mod.txt" {
@@ -86,5 +87,28 @@ func TestBisyncRecorder_DryRunRecordsNothing(t *testing.T) {
 		if got := rec.byOp(op); len(got) != 0 {
 			t.Errorf("dry run recorded %s: %+v", op, got)
 		}
+	}
+}
+
+// A delete turned into a pull by the re-check (Drive changed after the
+// listing) that then fails is a bisync pull failure, recorded once.
+func TestBisyncRecorder_DeleteRacePullFailureIsAPullFailure(t *testing.T) {
+	w := newGuardWorld(t, false)
+	rec := &fakeRecorder{}
+	w.b.rec = rec
+	seedBaseline(w.journal, "r.txt")
+	w.remote.Seed("r.txt", deleteT0.Add(time.Minute), "changed")
+	w.remote.downloadErr["r.txt"] = errors.New("drive 503")
+
+	if w.b.syncDelete(context.Background(), FileDiff{Path: "r.txt", Kind: DiffLocalDeleted}) {
+		t.Fatal("syncDelete reported the delete as applied")
+	}
+
+	if got := rec.byOp(OutPushDelete); len(got) != 0 {
+		t.Errorf("push_delete recorded: %+v", got)
+	}
+	got := rec.byOp(OutBisyncPull)
+	if len(got) != 1 || got[0].Err == nil || got[0].Dir != DirDown {
+		t.Errorf("bisync_pull outcomes = %+v, want one failure", got)
 	}
 }
