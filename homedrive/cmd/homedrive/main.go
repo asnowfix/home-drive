@@ -78,6 +78,7 @@ func newRootCmd(logLevel *slog.LevelVar) *cobra.Command {
 
 	root.AddCommand(newRunCmd(logLevel))
 	root.AddCommand(newCtlCmd())
+	root.AddCommand(newMountCmd())
 
 	return root
 }

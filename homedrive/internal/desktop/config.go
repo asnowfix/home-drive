@@ -63,8 +63,8 @@ type Config struct {
 	StateDir   string `yaml:"state_dir"`
 	RuntimeDir string `yaml:"runtime_dir"`
 	// PollInterval is how often the VFS asks Drive for changes.
-	PollInterval Duration  `yaml:"poll_interval"`
-	Cache        CacheCfg  `yaml:"cache"`
+	PollInterval Duration    `yaml:"poll_interval"`
+	Cache        CacheCfg    `yaml:"cache"`
 	Shutdown     ShutdownCfg `yaml:"shutdown"`
 }
 

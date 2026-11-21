@@ -20,8 +20,9 @@ func TestNewRootCmd_HasSubcommands(t *testing.T) {
 	root := newRootCmd(nil)
 
 	want := map[string]bool{
-		"run": false,
-		"ctl": false,
+		"run":   false,
+		"ctl":   false,
+		"mount": false,
 	}
 
 	for _, cmd := range root.Commands() {
