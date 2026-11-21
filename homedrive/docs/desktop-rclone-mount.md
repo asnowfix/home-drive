@@ -19,8 +19,12 @@ kept in a local cache.
 - `fuse3` (provides `fusermount3`), with your user allowed to use FUSE.
 - **rclone v1.76.0**, the version `homedrive/go.mod` pins and the one the trial
   ran. The distribution package may be older (v1.60.1 on the trial host) and was
-  **not tested**. The unit expects the binary at `/usr/bin/rclone`; edit
-  `ExecStart=` if yours lives elsewhere.
+  **not tested**. The unit runs `~/.local/bin/rclone` by default (install
+  v1.76.0 there, for example with `go install github.com/rclone/rclone@v1.76.0`
+  and copying the binary, or from the rclone release archive); set `HD_RCLONE`
+  in the settings file to use another path.
+- `~/GoogleDrive` must be absent or empty: rclone refuses a non-empty mount
+  point, and the unit would then retry every minute for ever.
 - Enough disk for the cache (see "Cache size").
 
 ## Paths
@@ -34,7 +38,7 @@ your systemd user manager** (not only your shell).
 | Mount point | `%h/GoogleDrive` | `~/GoogleDrive` |
 | Cache | `$XDG_CACHE_HOME/home-drive` (`%C/home-drive`) | `~/.cache/home-drive` |
 | Private token file | `$XDG_CONFIG_HOME/homedrive/rclone.conf` (`%E/homedrive/rclone.conf`) | `~/.config/homedrive/rclone.conf` |
-| Optional settings | `$XDG_CONFIG_HOME/homedrive/desktop-rclone.env` | not present |
+| Optional settings | `$XDG_CONFIG_HOME/homedrive/desktop-rclone.env` | `~/.config/homedrive/desktop-rclone.env` (absent by default) |
 
 rclone's VFS writes `vfs/<remote>/` and `vfsMeta/<remote>/` (and a small `kv/`
 database) under the cache directory, nothing outside it (checked in the rclone
@@ -52,10 +56,22 @@ rclone config --config ~/.config/homedrive/rclone.conf   # create a Drive remote
 chmod 600 ~/.config/homedrive/rclone.conf
 ```
 
-Use your own OAuth client id (see the README and `oauth-troubleshooting.md`).
-The unit mounts the remote named `gdrive:`; if you named it otherwise, edit
-`ExecStart=`. If `XDG_CONFIG_HOME` is set, use that directory instead of
-`~/.config`.
+Use your own OAuth client id (see the [README](../README.md) and
+[oauth-troubleshooting.md](oauth-troubleshooting.md)). The unit mounts the
+remote named `gdrive:`. If `XDG_CONFIG_HOME` is set, use that directory instead
+of `~/.config`.
+
+The unit's defaults are written once (`Environment=` in the unit). Override them
+without editing the unit, in the optional settings file
+`~/.config/homedrive/desktop-rclone.env` (`KEY=value` lines):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `HD_MOUNT` | `%h/GoogleDrive` | mount point |
+| `HD_REMOTE` | `gdrive:` | rclone remote (and path) to mount |
+| `HD_RCLONE` | `%h/.local/bin/rclone` | rclone binary |
+| `HD_CONFIG` | `%E/homedrive/rclone.conf` | token file (also set in `AssertPathExists=`: change both, with `systemctl --user edit`) |
+| `RCLONE_VFS_CACHE_MAX_SIZE` | unset | cache size cap, see "Cache size" |
 
 ## Install, enable, disable, uninstall
 
@@ -80,6 +96,25 @@ rm ~/.config/systemd/user/homedrive-desktop-rclone.service
 systemctl --user daemon-reload
 ```
 
+### What uninstall leaves behind
+
+Nothing below is removed by the steps above:
+
+- **The cache**, `${XDG_CACHE_HOME:-$HOME/.cache}/home-drive`. It can be large
+  and **may hold files not yet uploaded to Drive** (see "Stop"). Before deleting
+  it, mount once more and wait until the journal shows no pending uploads, then
+  `rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/home-drive"`.
+- The optional settings file `~/.config/homedrive/desktop-rclone.env` and the
+  desktop token file `~/.config/homedrive/rclone.conf`: remove each by name
+  if you want them gone.
+- **Never remove `~/.config/homedrive/` as a whole**: it also holds the
+  NAS-mode `config.yaml`.
+
+If the token file does not exist, the start **fails visibly** (`AssertPathExists=`):
+`systemctl --user status homedrive-desktop-rclone.service` shows "Assertion
+failed ... rclone.conf". Create the token, then run `systemctl --user start
+homedrive-desktop-rclone.service`; it is not retried by itself.
+
 `enable` links the unit under `graphical-session.target.wants`, so the mount
 appears when your session starts and disappears at logout (`PartOf=`). The unit
 is deliberately **never** `WantedBy=default.target`: with `loginctl
@@ -88,10 +123,22 @@ is used because rclone v1.76.0's foreground `mount` sends `READY=1` once the
 mount is live (`cmd/mountlib/mount.go` calls `lib/systemd.Notify`), so
 `systemctl start` returns when the mount works.
 
-Stopping sends SIGTERM: rclone unmounts and flushes queued uploads, with up to
-90 s (`TimeoutStopSec`) to do so. After the process exits (also after a crash)
-`ExecStopPost=` runs `fusermount3 -u`, then `fusermount3 -uz` (lazy) as a
-fallback. To clean up by hand: `fusermount3 -u ~/GoogleDrive`.
+**Stop does not flush.** Stopping sends SIGTERM. In rclone v1.76.0 that
+unmounts, cancels in-flight uploads and exits at once (`TimeoutStopSec=45` only
+bounds a slow unmount); it does **not** wait for the upload queue. Files still
+dirty at logout stay in the cache (marked dirty) and upload after the next
+start. Before logging out, check `journalctl --user -u
+homedrive-desktop-rclone.service` for pending uploads. D1 replaces this with a
+real drain (design section 9.3).
+
+Cleanup of a crashed mount: before start and after stop, the unit runs
+`fusermount3 -uz` **only** if the mount point is an `rclone` FUSE mount whose
+daemon is gone (`stat` fails); a live mount is never touched. By hand:
+`fusermount3 -u ~/GoogleDrive`. A clean stop exits with status 143, which the
+unit treats as success.
+
+If the start fails (bad token, wrong remote), it is retried every 60 s without
+limit.
 
 ## Cache size
 
@@ -109,6 +156,7 @@ cache_parent=${XDG_CACHE_HOME:-$HOME/.cache}
 mkdir -p "$cache_parent"
 # 25% of the filesystem size, in GiB (df reports 1K blocks)
 gib=$(( $(df --output=size -k "$cache_parent" | tail -n 1) / 1024 / 1024 / 4 ))
+[ "$gib" -ge 1 ] || gib=1   # 0 would mean "no cap" to rclone
 mkdir -p ~/.config/homedrive
 echo "RCLONE_VFS_CACHE_MAX_SIZE=${gib}G" > ~/.config/homedrive/desktop-rclone.env
 systemctl --user restart homedrive-desktop-rclone.service
@@ -137,6 +185,9 @@ Full data: design doc sections 3.2-3.3. The ones that matter day to day:
   file was edited locally and also changed on Drive meanwhile, rclone uploads the
   local version, with no check, no `.old.<N>` copy and no event. Drive's own
   revision history is the only recovery.
+- **Logout does not flush queued uploads** (see "Stop"): a file written just
+  before logout reaches Drive only at your next login, which makes the silent
+  overwrite above more likely if you edit it elsewhere meanwhile.
 - **No MQTT, no Home Assistant entities, no journal of sync events.** Only
   rclone's logs in the journal.
 
@@ -151,4 +202,6 @@ Full data: design doc sections 3.2-3.3. The ones that matter day to day:
   folder is reachable both ways; edits propagate but disk use doubles.
 - **Never run this unit together with D1+ desktop mode (`homedrive mount`) on
   the same mount point or the same token file.** Disable this unit first.
+- Start and stop of this unit unmount a dead rclone mount on the mount point
+  (never a live one).
 - Never point `--config` at another running instance's token file.
