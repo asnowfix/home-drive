@@ -1,8 +1,11 @@
-# Desktop mode: on-demand Google Drive for a Linux desktop (design, PROPOSED)
+# Desktop mode: on-demand Google Drive for a Linux desktop (design, accepted: O1)
 
-Status: **design only, nothing built.** Awaiting a go/no-go from the maintainer
-(see "Questions for the maintainer" at the end). Tracking epic: #147. Related
-finding from the trial: #146.
+Status: **accepted, option O1** (maintainer, 2026-11-21): desktop mode in Go,
+single executable (`homedrive mount`), built in phases D0-D5 (section 11) with
+the decisions of section 12. Tracking epic: #147 (one sub-issue per phase).
+Related finding from the trial: #146. Sections 3-7 keep the study as it was
+written on 2026-11-15; where `main` changed since (#154, #155, #156, #170),
+section 8.8 says what that means for desktop mode.
 
 ## 1. Goal
 
@@ -213,7 +216,7 @@ and `go-fuse` is actively maintained. **Caveat:** the trial exercised `cmd/mount
 not `mount2`. Phase D1's first deliverable is the same measurement matrix on
 `mount2`, and falling back to `cmd/mount` costs one import line.
 
-## 6. Proposed rclone allow-list
+## 6. rclone allow-list (accepted with O1)
 
 Today (`AGENTS.md`, `homedrive-rclone-import` skill) the whole module may import:
 
@@ -226,8 +229,8 @@ _ "github.com/rclone/rclone/backend/drive"
 ```
 
 Proposed: keep that list for NAS code, and allow **only the desktop code paths**
-(the package `internal/desktop` and the `mount` subcommand wiring) to
-add:
+(the package `homedrive/internal/desktop` and the `mount` subcommand wiring,
+`homedrive/cmd/homedrive/mount*.go`) to add:
 
 ```go
 "github.com/rclone/rclone/vfs"
@@ -426,6 +429,40 @@ This replaces rclone's silent "keep local, overwrite remote".
 | `internal/watcher` | **Not used**: the FUSE layer sees every write; there is nothing to watch. |
 | `internal/syncer` (push queue, puller, bisync) | **Not used**: rclone's VFS write-back and change polling replace them. |
 
+### 8.8 What changed on `main` since the study, and what it means here
+
+- **Root guard (#170).** NAS mode pauses when `local_root` is missing or is not
+  the synced tree. Desktop mode has no sync root, but the same failure has two
+  forms here, both checked in D1 before mounting: (1) the mount point must be an
+  existing, empty directory that is not already a mount (never mount over
+  content, never stack a second mount); (2) the cache directory must exist on
+  the filesystem it was first created on (a marker file with the device id in
+  the cache dir), so an unmounted or swapped disk does not silently refill a
+  cache on another filesystem or re-upload a stale dirty cache. On failure the
+  process exits non-zero with a clear log line; systemd's `Restart=` retries.
+- **Local trash (#155).** NAS mode moves local deletions to the freedesktop.org
+  trash. Desktop mode never deletes user data locally: cache eviction drops a
+  copy whose master is on Drive, so `internal/trash` is **not** used for the
+  cache. A delete through the mount deletes on Drive, and rclone's Drive
+  backend sends it to the **Drive trash** (`use_trash`, default true): that is
+  the recovery path, and desktop mode must keep that default. Unverified and to
+  be measured in D1: what GNOME Files' "Move to Trash" does on a FUSE mount.
+  GLib may create a `.Trash-<uid>` folder at the mount's top, which here would
+  be a folder **on Drive**. D1 records the observed behaviour; if it creates
+  that folder, the mount hides and refuses `.Trash-*` at its root so that
+  "Move to Trash" fails over to a permanent-delete prompt (whose effect is the
+  Drive trash).
+- **Mass-deletion guard (#156).** It guards bisync, which desktop mode does not
+  run. `rm -rf` through the mount deletes on Drive one call per item, like any
+  file manager on a network filesystem; the Drive trash is the safety net. No
+  guard is planned in D1-D5 (no observed incident; it would need a deletion
+  rate limiter in `GuardFs`). Can be added later as its own issue.
+- **Delete echo (#154) and unsafe Drive paths (#161).** Not applicable as such:
+  there is no puller writing local files and no push queue. Drive names that
+  are not valid local names are rclone's VFS encoding problem, not homedrive's.
+- **Change-ID resolution (#163).** Not applicable: the VFS polls Drive changes
+  itself.
+
 ## 9. Session lifecycle
 
 ### 9.1 systemd user unit bound to the graphical session (recommended)
@@ -522,30 +559,46 @@ Rules the desktop binary enforces at startup:
   it can find in `~/.config/homedrive/config.yaml`.
 - **`rclone.conf` is a shared writer.** Both processes refresh the OAuth token and
   rclone writes the refreshed token back to the file. Two writers to one
-  `rclone.conf` is a race that NAS mode has never had. Options: desktop mode uses
-  its own `rclone.conf` (a second `rclone config` run), or #86 lands first (no
-  `rclone.conf`). The trial avoided this by using a copy. **Decision needed.**
+  `rclone.conf` is a race that NAS mode has never had. **Decided (2026-11-15/21):**
+  the token store is private to homedrive and never shared between two running
+  processes. Desktop mode owns the default location,
+  `$XDG_CONFIG_HOME/homedrive/rclone.conf` (file `0600`, created by a one-off
+  `rclone config --config <that path>` run); any other instance (the development
+  NAS-mode instance on this host) must name a different file with an explicit
+  `rclone_config:`. At startup each mode takes an exclusive, non-blocking `flock`
+  on `<token file>.lock` and refuses to start if another process holds it;
+  desktop mode additionally refuses when the token path equals the
+  `rclone_config` of the NAS-mode config it reads (that covers instances
+  started by an older binary that takes no lock). The default path is this
+  design's reading of "private to homedrive" (rclone's own default,
+  `~/.config/rclone/rclone.conf`, is shared with the `rclone` CLI); the
+  maintainer may name another. Longer term, #86 removes `rclone.conf`.
 - **Overlap in Drive.** If desktop mode mounts the Drive root and NAS mode syncs
   `gdrive:Brain`, `Brain` is reachable both ways on one host: an edit through the
   mount is pulled into `~/gdrive` by the NAS agent within its poll interval,
   and vice versa. That is correct but doubles disk use for `Brain`. Excluding the
   NAS mode's remote from the mount is an option.
 
-Whether desktop mode is meant to **replace** NAS mode on this host, or run beside
-it, is a question for the maintainer (below). The design supports both.
+**Decided (2026-11-15):** on this host desktop mode is the main agent and runs
+**beside** the development NAS-mode instance, which keeps its own config,
+state, `local_root` and (explicit) token file.
 
-## 11. Proposed phases (PROPOSED, for `homedrive/PLAN.md` §14)
+## 11. Phases (accepted 2026-11-21, one sub-issue of #147 each)
 
 Numbered `D0`–`D5` to avoid colliding with the Dropbox proposal (#137, phases
-17–22); renumber at merge.
+17–22). Each phase is one PR. The Nautilus extension (#153) comes after D1 and
+D5.
 
 - **D0: supported `rclone mount` unit + docs (O0).** `homedrive/linux/
   homedrive-desktop-rclone.service` (session-bound, flags from section 3), a docs
   page with the trial's findings and known limits. No Go. About 150 lines.
   Useful alone; the baseline for everything below.
 - **D1: desktop mode skeleton.** `homedrive mount` subcommand (option b), config, `vfs` + `mount2`, signal handling and flush-then-
-  unmount, `Type=notify`. Re-run the section 3 matrix on `mount2`, including
-  dirty re-upload after restart. Allow-list and size checks per section 6/7.
+  unmount, `Type=notify`. Token-file lock and mount-point/cache-dir checks
+  (sections 8.8 and 10). Re-run the section 3 matrix on `mount2`, including
+  dirty re-upload after restart and GNOME Files' "Move to Trash". Allow-list
+  CI grep per section 6; NAS-mode arm64 RSS and start-up recorded before and
+  after (section 7).
 - **D2: `GuardFs` + bounded timeouts.** `EIO` within seconds when Drive is
   unreachable (no offline mode, section 8.4); tests with a fake `fs.Fs` (no
   Google calls, per `homedrive-test-mocks`).
@@ -599,8 +652,14 @@ Answered on 2026-11-15 (second round):
   fingerprint.
 - **Defaults:** mount point `~/GoogleDrive`, 5 GiB minimum free space.
 
-Still open:
+Answered on 2026-11-21:
 
-1. **Go/no-go and depth:** O0 (a supported plain `rclone mount` unit and docs,
-   no homedrive code, keeping rclone's limits) or O1 (desktop mode in homedrive,
-   phases D0–D5)?
+- **Go/no-go and depth (was Q1):** **O1**, desktop mode in homedrive, phases
+  D0-D5 of section 11, single executable (`homedrive mount`). Constraint
+  restated with it: NAS mode must not get heavier **at runtime**; D1 records
+  NAS-mode arm64 RSS and start-up before and after.
+
+No question is open. Points this design settles by default and the maintainer
+may still overrule: the token file default path (section 10), the
+`.Trash-<uid>` handling and the absence of a mass-deletion guard on the mount
+(section 8.8).
