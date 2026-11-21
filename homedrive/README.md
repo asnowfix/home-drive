@@ -679,6 +679,7 @@ development setup guide.
 | [docs/architecture.md](docs/architecture.md) | Runtime topology, module layout, data flows |
 | [docs/conflict-resolution.md](docs/conflict-resolution.md) | Newer-wins algorithm and `.old.<N>` naming |
 | [docs/directory-rename.md](docs/directory-rename.md) | Cookie-based rename pairing and performance |
+| [docs/desktop-rclone-mount.md](docs/desktop-rclone-mount.md) | Desktop baseline (D0): session-bound `rclone mount` user unit, setup and measured limits |
 | [docs/dev-environment.md](docs/dev-environment.md) | macOS + OrbStack setup, cross-compilation, VS Code |
 | [docs/home-assistant.md](docs/home-assistant.md) | MQTT entities, topics, and HA automations |
 | [docs/live-testing.md](docs/live-testing.md) | Exercising a build against real Drive with an isolated instance; cleanup pitfalls |
