@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"github.com/asnowfix/home-drive/homedrive/internal/mqtt"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -170,4 +172,59 @@ func TestStatusGuards_Cases(t *testing.T) {
 			t.Errorf("guard = %+v", g)
 		}
 	})
+}
+
+// fakeStatusPub is an mqtt.Publisher capturing retained status documents.
+type fakeStatusPub struct {
+	mu   sync.Mutex
+	docs []homedrive.StatusV2
+}
+
+func (f *fakeStatusPub) Publish(_ string, _ byte, _ bool, payload any) error {
+	if d, ok := payload.(homedrive.StatusV2); ok {
+		f.mu.Lock()
+		f.docs = append(f.docs, d)
+		f.mu.Unlock()
+	}
+	return nil
+}
+func (f *fakeStatusPub) PublishJSON(string, any) error { return nil }
+func (f *fakeStatusPub) Topic(parts ...string) string  { return strings.Join(parts, "/") }
+func (f *fakeStatusPub) Close(context.Context) error   { return nil }
+
+func (f *fakeStatusPub) first() (homedrive.StatusV2, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.docs) == 0 {
+		return homedrive.StatusV2{}, false
+	}
+	return f.docs[0], true
+}
+
+// TestAgent_Run_BlockedOnlyPublishesStatus: when local_root is blocked at
+// startup nothing syncs, but the status document (state root_blocked,
+// guards.local_root) must still be published: that is the case schema 2.1
+// exists to report.
+func TestAgent_Run_BlockedOnlyPublishesStatus(t *testing.T) {
+	a, _, logs := newBlockedRootAgent(t)
+	a.stats = stats.New(stats.Config{})
+	pub := &fakeStatusPub{}
+	a.statePub = mqtt.NewStatePublisher(pub,
+		func() homedrive.StatusV2 { return a.buildStatusV2(time.Now()) }, time.Minute, slog.Default())
+	runAgentUntilExit(t, a)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if d, ok := pub.first(); ok {
+			if d.State != homedrive.StateRootBlocked || d.Guards.LocalRoot == nil ||
+				d.Guards.LocalRoot.Reason != syncer.RootBlockMissing {
+				t.Fatalf("first document state=%q guards=%+v", d.State, d.Guards)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no status document published in blocked-only mode: %s", logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

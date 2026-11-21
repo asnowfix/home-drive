@@ -32,6 +32,13 @@ func (a *Agent) Run(ctx context.Context) error {
 	)
 
 	var wg sync.WaitGroup
+	// The status loop (flush + publish) runs in every mode, blocked-only
+	// included: that is when guards.local_root / state root_blocked matter.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.runStatusLoop(ctx)
+	}()
 	// Startup check (issue #170): records the identity on a first install.
 	// A missing or foreign local_root is reported and nothing else starts
 	// (no watcher, pull, push, bisync, purge); the agent exits once it passes.
@@ -101,12 +108,6 @@ func (a *Agent) startComponents(ctx context.Context, wg *sync.WaitGroup) {
 	go func() {
 		defer wg.Done()
 		a.runTrashPurge(ctx)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		a.runStatusLoop(ctx)
 	}()
 
 	wg.Add(1)
