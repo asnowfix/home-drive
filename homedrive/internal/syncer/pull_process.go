@@ -7,12 +7,30 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/pathfilter"
+	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 )
 
 // processChange handles a single remote change: download or delete.
 func (p *Puller) processChange(ctx context.Context, ch Change) error {
 	start := p.clock()
 
+	if pathfilter.IsTrash(ch.Path) || pathfilter.IsRootMarker(ch.Path) {
+		// A topdir trash or the root marker directly under the root is never
+		// synced (#155, #170).
+		p.log.Debug("ignoring remote change under a trash directory or the root marker",
+			"path", ch.Path, "op", "pull", "origin", "remote")
+		return nil
+	}
+	if !ch.Deleted && !rcloneclient.ValidRemotePath(ch.Path) {
+		// Defence in depth (issue #161): translateChange and the full walk
+		// are meant to drop these, but a remote path with a ".." or empty
+		// component must never be joined onto local_root.
+		p.log.Warn("ignoring remote change with an unsafe path",
+			"op", "pull", "origin", "remote", "path", ch.Path)
+		return nil
+	}
 	if ch.Deleted {
 		return p.recordUnrecordedDelete(ch, p.processDelete(ctx, ch, start))
 	}
@@ -58,6 +76,14 @@ func (p *Puller) recordUnrecorded(ch Change, err error) error {
 
 // processDelete handles a remote deletion.
 func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) error {
+	if !rcloneclient.ValidRemotePath(ch.Path) {
+		// The sync root's own ID resolves to "", and an empty, "." or ".."
+		// component or a backslash could address something outside the
+		// deleted item: none of these may reach the local-root sweep.
+		p.log.Warn("ignoring remote delete with an unsafe path",
+			"path", ch.Path, "op", "pull_delete", "origin", "remote")
+		return nil
+	}
 	p.log.Info("remote file deleted",
 		"path", ch.Path,
 		"op", "pull_delete",
@@ -76,11 +102,19 @@ func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) 
 			Origin:    "remote",
 			DryRun:    true,
 		})
-		return nil
+		dryPath, err := localPathFor(p.cfg.LocalRoot, ch.Path)
+		if err != nil {
+			return err
+		}
+		return p.removeSyncedDescendants(ctx, ch.Path, dryPath, start, true)
 	}
 
-	localPath := filepath.Join(p.cfg.LocalRoot, ch.Path)
-	if err := p.removeLocal(ch.Path, localPath); err != nil {
+	localPath, err := localPathFor(p.cfg.LocalRoot, ch.Path)
+	if err != nil {
+		return err
+	}
+	outcome, err := p.removeLocal(ctx, ch, localPath, start)
+	if err != nil {
 		p.log.Error("failed to delete local file",
 			"path", ch.Path,
 			"op", "pull_delete",
@@ -89,6 +123,9 @@ func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) 
 		err = fmt.Errorf("deleting local file %s: %w", ch.Path, err)
 		return p.recordFail(Outcome{Op: OutPullDelete, Path: ch.Path, Err: err})
 	}
+	if outcome == deleteStale {
+		return nil
+	}
 
 	if err := p.store.Delete(ctx, ch.Path); err != nil {
 		err = fmt.Errorf("removing journal entry for %s: %w", ch.Path, err)
@@ -96,14 +133,17 @@ func (p *Puller) processDelete(ctx context.Context, ch Change, start time.Time) 
 	}
 	p.recordOutcome(Outcome{Op: OutPullDelete, Path: ch.Path})
 
-	p.logAudit(AuditEntry{
-		Timestamp:  start,
-		Op:         "pull_delete",
-		Path:       ch.Path,
-		Origin:     "remote",
-		DurationMs: p.clock().Sub(start).Milliseconds(),
-	})
-
+	// One audit line per deletion actually made: a path already removed by
+	// an earlier sweep or change, or kept, is not audited as deleted.
+	if outcome == deleteRemoved {
+		p.logAudit(AuditEntry{
+			Timestamp:  start,
+			Op:         "pull_delete",
+			Path:       ch.Path,
+			Origin:     "remote",
+			DurationMs: p.clock().Sub(start).Milliseconds(),
+		})
+	}
 	return nil
 }
 
@@ -145,7 +185,10 @@ func (p *Puller) detectConflict(
 	ch Change,
 	journal JournalEntry,
 ) (bool, time.Time, error) {
-	localPath := filepath.Join(p.cfg.LocalRoot, ch.Path)
+	localPath, err := localPathFor(p.cfg.LocalRoot, ch.Path)
+	if err != nil {
+		return false, time.Time{}, err
+	}
 	info, err := os.Stat(localPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -255,6 +298,9 @@ func (p *Puller) buildConflictEntry(
 		entry.LocalMtime = ch.Object.ModTime
 	} else {
 		entry.LocalMtime = localMtime
+		// The loser (renamed to .old.<N>) keeps ch.Object's ID; the path now
+		// holds the upload, a different Drive file.
+		entry.RemoteID = result.WinnerRemoteID
 	}
 	return entry
 }
@@ -262,7 +308,10 @@ func (p *Puller) buildConflictEntry(
 // downloadFile downloads a remote file to the local root and records the
 // result in the journal and audit log.
 func (p *Puller) downloadFile(ctx context.Context, ch Change, start time.Time) error {
-	localPath := filepath.Join(p.cfg.LocalRoot, ch.Path)
+	localPath, err := localPathFor(p.cfg.LocalRoot, ch.Path)
+	if err != nil {
+		return err
+	}
 
 	p.log.Info("downloading remote file",
 		"path", ch.Path,
@@ -285,6 +334,7 @@ func (p *Puller) downloadFile(ctx context.Context, ch Change, start time.Time) e
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating directory %s: %w", dir, err)
 	}
+	noteLocalWrite(p.cfg.Remover, dir)
 
 	if err := p.remote.DownloadFile(ctx, ch.Path, localPath); err != nil {
 		if errors.Is(err, ErrDanglingShortcut) {

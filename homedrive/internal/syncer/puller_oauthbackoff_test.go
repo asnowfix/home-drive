@@ -27,7 +27,7 @@ func TestPuller_OAuthClientMissing_BacksOffPollInterval(t *testing.T) {
 	_ = store.SetPageToken(context.Background(), "stuck-token")
 
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: localRoot},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: localRoot},
 		remote, store, newMockAuditLogger(), nil,
 		slog.Default(), fixedClock(now),
 	)
@@ -75,7 +75,7 @@ func TestPuller_OAuthClientMissing_BacksOffPollInterval(t *testing.T) {
 // TestPuller_NextPollInterval_CapsAtOAuthBackoffMax proves the backoff is
 // bounded rather than growing unboundedly across a long outage.
 func TestPuller_NextPollInterval_CapsAtOAuthBackoffMax(t *testing.T) {
-	p := &Puller{cfg: PullerConfig{Interval: 30 * time.Second}}
+	p := &Puller{cfg: PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second}}
 	p.oauthMissingStreak = 1000 // far more than needed to reach the cap
 	if got := p.NextPollInterval(); got != oauthBackoffMax {
 		t.Errorf("NextPollInterval with a long streak = %v, want capped at %v", got, oauthBackoffMax)
@@ -98,7 +98,7 @@ func TestPuller_UnrelatedError_LeavesOAuthStreakAtZero(t *testing.T) {
 	_ = store.SetPageToken(context.Background(), "rate-limited-token")
 
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: localRoot},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: localRoot},
 		remote, store, newMockAuditLogger(), nil,
 		slog.Default(), fixedClock(now),
 	)
@@ -129,7 +129,7 @@ func TestPuller_Run_AppliesOAuthBackoffViaTimer(t *testing.T) {
 	_ = store.SetPageToken(context.Background(), "stuck-token")
 
 	p := NewPuller(
-		PullerConfig{Interval: 20 * time.Millisecond, LocalRoot: localRoot},
+		PullerConfig{Remover: osRemover{}, Interval: 20 * time.Millisecond, LocalRoot: localRoot},
 		remote, store, newMockAuditLogger(), nil,
 		slog.Default(), fixedClock(now),
 	)
@@ -178,7 +178,7 @@ func TestPuller_410Reset_LeavesOAuthStreakAtZero(t *testing.T) {
 	_ = store.SetPageToken(context.Background(), "stale-token")
 
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: localRoot},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: localRoot},
 		remote, store, newMockAuditLogger(), nil,
 		slog.Default(), fixedClock(now),
 	)

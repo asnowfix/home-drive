@@ -1,91 +1,14 @@
-// bisync_gc.go holds the bisync retention GC and the nested .old.<N>
-// chain repair pass (PLAN.md §11.5), split out of bisync.go to keep that
-// file under the 500-line limit.
+// bisync_gc.go holds the nested .old.<N> chain repair pass (PLAN.md §11.5);
+// the retention GC itself lives in bisync_retention.go. Split out of
+// bisync.go to keep that file under the 500-line limit.
 package syncer
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/asnowfix/home-drive/homedrive/internal/store"
 )
-
-// ---------------------------------------------------------------------------
-// Retention GC (PLAN.md §11.5)
-// ---------------------------------------------------------------------------
-
-// shouldSweep reports whether the periodic full-journal retention sweep is
-// due. A zero SweepInterval disables the periodic sweep entirely (inline
-// eviction in resolveLocalWins/resolveRemoteWins still runs).
-func (b *Bisync) shouldSweep() bool {
-	if b.cfg.SweepInterval <= 0 {
-		return false
-	}
-	return b.clock.Now().Sub(b.lastSweep) >= b.cfg.SweepInterval
-}
-
-// pruneDeps builds the store.PruneDeps closures for the retention GC,
-// wiring them to this Bisync's journal/remote/LocalRoot. Shared by the
-// inline eviction in resolveLocalWins/resolveRemoteWins and the periodic
-// sweep, so the deletion ordering (file first, then journal entry -- see
-// store.PruneDeps.DeleteEntry) is enforced once, in store.PruneOldSiblings/
-// evict, not duplicated here.
-func (b *Bisync) pruneDeps() store.PruneDeps {
-	return store.PruneDeps{
-		Matcher: b.cfg.Matcher,
-		ListByPrefix: func(prefix string) ([]JournalEntry, error) {
-			return b.journal.ListByPrefix(prefix)
-		},
-		ForEach: func(fn func(JournalEntry) error) error {
-			return b.journal.ForEach(fn)
-		},
-		DeleteEntry: func(p string) error {
-			return b.journal.Delete(p)
-		},
-		RemoveLocal: func(relPath string) error {
-			err := os.Remove(filepath.Join(b.cfg.LocalRoot, filepath.FromSlash(relPath)))
-			if err != nil && os.IsNotExist(err) {
-				return nil
-			}
-			return err
-		},
-		RemoveRemote: func(ctx context.Context, p string) error {
-			err := b.remote.DeleteFile(ctx, p)
-			if err != nil && errors.Is(err, ErrRemoteNotFound) {
-				return nil
-			}
-			return err
-		},
-		Auditor:   b.auditor,
-		Publisher: b.mqtt,
-		Clock:     b.clock.Now,
-		DryRun:    b.cfg.DryRun,
-		Log:       b.log,
-	}
-}
-
-// pruneAfterConflict runs the inline retention GC for base right after a
-// new conflict loser was recorded by resolveLocalWins/resolveRemoteWins.
-// Errors are logged, never propagated -- a GC failure must not fail the
-// conflict resolution that triggered it.
-func (b *Bisync) pruneAfterConflict(ctx context.Context, base string) {
-	if _, err := store.PruneOldSiblings(ctx, b.pruneDeps(), b.cfg.Retention, base); err != nil {
-		b.log.Error("conflict retention prune failed", "op", "conflict_gc", "base", base, "error", err)
-	}
-}
-
-// sweepOldFiles runs the periodic full-journal retention sweep. Errors are
-// logged, never propagated -- see pruneAfterConflict.
-func (b *Bisync) sweepOldFiles(ctx context.Context) []string {
-	removed, err := store.SweepOldFiles(ctx, b.pruneDeps(), b.cfg.Retention)
-	if err != nil {
-		b.log.Error("retention sweep failed", "op", "conflict_gc", "error", err)
-	}
-	return removed
-}
 
 // ---------------------------------------------------------------------------
 // Chain repair (PLAN.md §11.5, issue #65 §3)
@@ -118,6 +41,9 @@ func (b *Bisync) shouldRepairChains() bool {
 func (b *Bisync) RunChainRepair(ctx context.Context, dryRun bool) (Report, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if err := b.gateErr(); err != nil {
+		return Report{}, err
+	}
 	return b.runChainRepair(ctx, dryRun, !dryRun)
 }
 

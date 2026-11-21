@@ -105,6 +105,9 @@ QoS 1 and retain=false.
 | `quota.warning` | Drive quota above `warn_pct` threshold |
 | `quota.exhausted` | Drive quota above `stop_push_pct`, pushes paused |
 | `oauth.refresh_failed` | OAuth token refresh failed |
+| `bisync.delete_blocked` | Bisync deletions vetoed by the mass-deletion guard (topic `events/bisync/delete_blocked`) |
+| `root.blocked` | `local_root` is missing or not the synced tree: sync paused (topic `events/root/blocked`; `reason`, `detail`) |
+| `root.resumed` | `local_root` is back; the agent exits and is restarted by systemd (topic `events/root/resumed`) |
 
 ### Event payload format
 

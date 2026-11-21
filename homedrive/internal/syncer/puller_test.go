@@ -41,11 +41,11 @@ func TestPuller_SingleRemoteChange(t *testing.T) {
 			{
 				Path: "docs/readme.txt",
 				Object: &RemoteObject{
-					Path:    "docs/readme.txt",
-					Size:    42,
-					MD5:     "abc123",
-					ModTime: now,
-					RemoteID:      "remote-id-1",
+					Path:     "docs/readme.txt",
+					Size:     42,
+					MD5:      "abc123",
+					ModTime:  now,
+					RemoteID: "remote-id-1",
 				},
 			},
 		},
@@ -57,7 +57,7 @@ func TestPuller_SingleRemoteChange(t *testing.T) {
 	pub := newMockPublisher()
 
 	p := NewPuller(
-		PullerConfig{
+		PullerConfig{Remover: osRemover{},
 			Interval:       30 * time.Second,
 			LocalRoot:      localRoot,
 			ConflictPolicy: PolicyNewerWins,
@@ -150,11 +150,11 @@ func TestPuller_ConflictDetected(t *testing.T) {
 			{
 				Path: "notes.md",
 				Object: &RemoteObject{
-					Path:    "notes.md",
-					Size:    100,
-					MD5:     "new-remote-md5",
-					ModTime: remoteModTime,
-					RemoteID:      "remote-id-notes",
+					Path:     "notes.md",
+					Size:     100,
+					MD5:      "new-remote-md5",
+					ModTime:  remoteModTime,
+					RemoteID: "remote-id-notes",
 				},
 			},
 		},
@@ -181,7 +181,7 @@ func TestPuller_ConflictDetected(t *testing.T) {
 	pub := newMockPublisher()
 
 	p := NewPuller(
-		PullerConfig{
+		PullerConfig{Remover: osRemover{},
 			Interval:       30 * time.Second,
 			LocalRoot:      localRoot,
 			ConflictPolicy: PolicyNewerWins,
@@ -252,11 +252,11 @@ func TestPuller_ConflictRemoteNewer(t *testing.T) {
 			{
 				Path: "report.pdf",
 				Object: &RemoteObject{
-					Path:    "report.pdf",
-					Size:    200,
-					MD5:     "new-remote-md5",
-					ModTime: remoteModTime,
-					RemoteID:      "remote-id-report",
+					Path:     "report.pdf",
+					Size:     200,
+					MD5:      "new-remote-md5",
+					ModTime:  remoteModTime,
+					RemoteID: "remote-id-report",
 				},
 			},
 		},
@@ -278,7 +278,7 @@ func TestPuller_ConflictRemoteNewer(t *testing.T) {
 	pub := newMockPublisher()
 
 	p := NewPuller(
-		PullerConfig{
+		PullerConfig{Remover: osRemover{},
 			Interval:       30 * time.Second,
 			LocalRoot:      localRoot,
 			ConflictPolicy: PolicyNewerWins,
@@ -352,7 +352,7 @@ func TestPuller_PageTokenPersistedAcrossRestarts(t *testing.T) {
 
 	// First puller instance processes first batch.
 	p1 := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: localRoot},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: localRoot},
 		remote, store, newMockAuditLogger(), nil,
 		slog.Default(), fixedClock(now),
 	)
@@ -382,7 +382,7 @@ func TestPuller_PageTokenPersistedAcrossRestarts(t *testing.T) {
 	}
 
 	p2 := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: localRoot},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: localRoot},
 		remote2, store, newMockAuditLogger(), nil,
 		slog.Default(), fixedClock(now),
 	)
@@ -426,7 +426,7 @@ func TestPuller_410Gone_TokenReset(t *testing.T) {
 	pub := newMockPublisher()
 
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: localRoot},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: localRoot},
 		remote, store, newMockAuditLogger(), pub,
 		slog.Default(), fixedClock(now),
 	)
@@ -485,7 +485,7 @@ func TestPuller_TokenRejectedNon410_TokenReset(t *testing.T) {
 	pub := newMockPublisher()
 
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: localRoot},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: localRoot},
 		remote, store, newMockAuditLogger(), pub,
 		slog.Default(), fixedClock(now),
 	)
@@ -541,7 +541,7 @@ func TestPuller_UnrelatedListChangesError_LeavesTokenUntouched(t *testing.T) {
 	pub := newMockPublisher()
 
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: localRoot},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: localRoot},
 		remote, store, newMockAuditLogger(), pub,
 		slog.Default(), fixedClock(now),
 	)
@@ -602,7 +602,7 @@ func TestPuller_DryRun(t *testing.T) {
 	pub := newMockPublisher()
 
 	p := NewPuller(
-		PullerConfig{
+		PullerConfig{Remover: osRemover{},
 			Interval:  30 * time.Second,
 			LocalRoot: localRoot,
 			DryRun:    true,
@@ -676,7 +676,7 @@ func TestPuller_LoopPrevention(t *testing.T) {
 	audit := newMockAuditLogger()
 
 	p := NewPuller(
-		PullerConfig{
+		PullerConfig{Remover: osRemover{},
 			Interval:  30 * time.Second,
 			LocalRoot: localRoot,
 		},
@@ -766,11 +766,12 @@ func TestPuller_RemoteDelete(t *testing.T) {
 	store := newMockStore()
 	store.entries["deleted.txt"] = JournalEntry{
 		Path: "deleted.txt", LastOrigin: "local",
+		LocalMtime: now, RemoteMtime: now, RemoteMD5: "m",
 	}
 	audit := newMockAuditLogger()
 
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: localRoot},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: localRoot},
 		remote, store, audit, nil,
 		slog.Default(), fixedClock(now),
 	)
@@ -823,7 +824,7 @@ func TestPuller_DryRunDelete(t *testing.T) {
 	audit := newMockAuditLogger()
 
 	p := NewPuller(
-		PullerConfig{
+		PullerConfig{Remover: osRemover{},
 			Interval:  30 * time.Second,
 			LocalRoot: localRoot,
 			DryRun:    true,
@@ -864,7 +865,7 @@ func TestPuller_NoChanges(t *testing.T) {
 	store := newMockStore()
 
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: localRoot},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: localRoot},
 		remote, store, newMockAuditLogger(), nil,
 		slog.Default(), fixedClock(now),
 	)
@@ -908,7 +909,7 @@ func TestPuller_MultipleChanges(t *testing.T) {
 	store := newMockStore()
 
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: localRoot},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: localRoot},
 		remote, store, newMockAuditLogger(), nil,
 		slog.Default(), fixedClock(now),
 	)
@@ -947,7 +948,7 @@ func TestPuller_RunCancelledByContext(t *testing.T) {
 	store := newMockStore()
 
 	p := NewPuller(
-		PullerConfig{Interval: 100 * time.Millisecond, LocalRoot: localRoot},
+		PullerConfig{Remover: osRemover{}, Interval: 100 * time.Millisecond, LocalRoot: localRoot},
 		remote, store, newMockAuditLogger(), nil,
 		slog.Default(), fixedClock(now),
 	)
@@ -1069,7 +1070,7 @@ func TestPuller_OldNCollision(t *testing.T) {
 	store.entries["data.csv.old.1"] = JournalEntry{Path: "data.csv.old.1"}
 
 	p := NewPuller(
-		PullerConfig{
+		PullerConfig{Remover: osRemover{},
 			Interval:       30 * time.Second,
 			LocalRoot:      localRoot,
 			ConflictPolicy: PolicyNewerWins,
@@ -1130,7 +1131,7 @@ func TestPuller_DryRunConflict(t *testing.T) {
 	audit := newMockAuditLogger()
 
 	p := NewPuller(
-		PullerConfig{
+		PullerConfig{Remover: osRemover{},
 			Interval:  30 * time.Second,
 			LocalRoot: localRoot,
 			DryRun:    true,
@@ -1193,7 +1194,7 @@ func TestPuller_FileDoesNotExistLocally(t *testing.T) {
 	}
 
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: localRoot},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: localRoot},
 		remote, store, newMockAuditLogger(), nil,
 		slog.Default(), fixedClock(now),
 	)

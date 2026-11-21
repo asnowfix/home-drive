@@ -24,11 +24,12 @@ func (s *Syncer) handleDirRename(ctx context.Context, dr DirRename) {
 	s.bisyncMu.RLock()
 	defer s.bisyncMu.RUnlock()
 
-	err := retryFunc(ctx, s.cfg.Retry, logger, "dir_rename",
-		s.sleepFn, func(ctx context.Context) error {
-			return s.remote.MoveDir(ctx, dr.From, dr.To)
-		},
-	)
+	blocked, err := s.retryGated(ctx, logger, "dir_rename", func(ctx context.Context) error {
+		return s.remote.MoveDir(ctx, dr.From, dr.To)
+	})
+	if blocked {
+		return
+	}
 
 	elapsed := s.nowFn().Sub(start)
 

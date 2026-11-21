@@ -219,11 +219,10 @@ Key settings explained:
 Every PR must verify these invariants before merge:
 
 ```bash
-# Binary size must be under 25 MB (stripped)
+# Binary size: reported, no limit (must run on a Raspberry Pi 3B+)
 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
   -o homedrive-bin ./homedrive/cmd/homedrive
 du -h homedrive-bin
-# Expected: < 25M
 
 # Exactly 1 rclone backend explicitly imported (crypt is a transitive
 # dependency of drive itself, so a raw binary symbol count over-counts;

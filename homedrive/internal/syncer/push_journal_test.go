@@ -39,7 +39,7 @@ func pullBack(t *testing.T, root string, remote *mockRemoteFS, store *mockStore,
 		NextPageToken: "t2",
 	}
 	p := NewPuller(
-		PullerConfig{Interval: 30 * time.Second, LocalRoot: root, ConflictPolicy: PolicyNewerWins},
+		PullerConfig{Remover: osRemover{}, Interval: 30 * time.Second, LocalRoot: root, ConflictPolicy: PolicyNewerWins},
 		remote, store, newMockAuditLogger(), newMockPublisher(),
 		newDiscardLogger(), fixedClock(pushTestMtime.Add(time.Minute)),
 	)
@@ -131,6 +131,38 @@ func TestPull_UnknownBaseline(t *testing.T) {
 			assertNoConflict(t, remote, store)
 			if e := store.entries["f.txt"]; e.RemoteMD5 != obj.MD5 || e.LocalMtime.IsZero() {
 				t.Errorf("baseline not adopted: %+v", e)
+			}
+		})
+	}
+}
+
+// R8 (#152 review): a file edited while it was uploaded must not have the
+// post-edit mtime journaled as the synced baseline, or a later Drive
+// deletion would read the edit as "unchanged" and delete it.
+func TestPushEntry_EditDuringUpload(t *testing.T) {
+	tests := []struct {
+		name      string
+		fileMtime time.Time
+		want      time.Time
+	}{
+		{name: "unchanged_since_upload", fileMtime: pushTestMtime, want: pushTestMtime},
+		{name: "within_tolerance", fileMtime: pushTestMtime.Add(500 * time.Millisecond),
+			want: pushTestMtime.Add(500 * time.Millisecond)},
+		{name: "edited_during_upload", fileMtime: pushTestMtime.Add(time.Minute), want: pushTestMtime},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeTestFileWithMtime(t, filepath.Join(root, "f.txt"), "x", tt.fileMtime)
+			cfg := DefaultConfig()
+			cfg.LocalRoot = root
+			s := New(cfg, newMockRemoteFS(), newMockStore(), newMockAuditLogger(),
+				newMockPublisher(), newDiscardLogger(), WithSleepFunc(noSleep))
+
+			e := s.pushEntry("f.txt", &RemoteObject{Path: "f.txt", ModTime: pushTestMtime, MD5: "m"})
+
+			if !e.LocalMtime.Equal(tt.want) {
+				t.Errorf("LocalMtime = %v, want %v", e.LocalMtime, tt.want)
 			}
 		})
 	}

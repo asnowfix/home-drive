@@ -10,6 +10,7 @@ import (
 
 	"github.com/asnowfix/home-drive/homedrive/internal/oldsuffix"
 	"github.com/asnowfix/home-drive/homedrive/internal/pathfilter"
+	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 )
 
 // ---------------------------------------------------------------------------
@@ -38,6 +39,15 @@ func (b *Bisync) diff(ctx context.Context) ([]FileDiff, error) {
 	localMap := make(map[string]LocalFileInfo, len(localFiles))
 	for _, l := range localFiles {
 		localMap[l.Path] = l
+	}
+
+	b.localCount, b.remoteCount = len(localMap), len(remoteMap)
+	b.snapshot = make(map[string]struct{}, len(localMap)+len(remoteMap))
+	for p := range localMap {
+		b.snapshot[p] = struct{}{}
+	}
+	for p := range remoteMap {
+		b.snapshot[p] = struct{}{}
 	}
 
 	var diffs []FileDiff
@@ -69,18 +79,17 @@ func (b *Bisync) diffLocalAgainstRemote(
 	for path, local := range localMap {
 		remote, exists := remoteMap[path]
 		if !exists {
-			diffs = append(diffs, FileDiff{
-				Path:      path,
-				Kind:      DiffLocalOnly,
-				LocalInfo: &local,
-			})
+			if _, skip := b.unrepresentable[path]; skip {
+				continue
+			}
+			diffs = append(diffs, b.localOnlyDiff(path, local))
 			continue
 		}
-		if b.hasDivergence(path, local, remote) {
+		if kind, differs := b.classify(path, local, remote); differs {
 			remoteCopy := remote
 			diffs = append(diffs, FileDiff{
 				Path:       path,
-				Kind:       DiffConflict,
+				Kind:       kind,
 				LocalInfo:  &local,
 				RemoteInfo: &remoteCopy,
 			})
@@ -97,33 +106,10 @@ func (b *Bisync) diffRemoteAgainstLocal(
 ) []FileDiff {
 	for path, remote := range remoteMap {
 		if _, exists := localMap[path]; !exists {
-			remoteCopy := remote
-			diffs = append(diffs, FileDiff{
-				Path:       path,
-				Kind:       DiffRemoteOnly,
-				RemoteInfo: &remoteCopy,
-			})
+			diffs = append(diffs, b.remoteOnlyDiff(path, remote))
 		}
 	}
 	return diffs
-}
-
-// hasDivergence checks whether the local and remote versions of a file
-// have diverged from what the journal last recorded.
-func (b *Bisync) hasDivergence(
-	path string,
-	local LocalFileInfo,
-	remote RemoteObject,
-) bool {
-	entry, err := b.journal.Get(path)
-	if err != nil || entry == nil {
-		// No journal entry: compare directly.
-		return !local.ModTime.Equal(remote.ModTime)
-	}
-	localChanged := !local.ModTime.Equal(entry.LocalMtime)
-	remoteChanged := remote.MD5 != entry.RemoteMD5 ||
-		!remote.ModTime.Equal(entry.RemoteMtime)
-	return localChanged || remoteChanged
 }
 
 // walkLocal returns all regular files under the local root, with
@@ -180,7 +166,18 @@ func (b *Bisync) listRemote(ctx context.Context) ([]RemoteObject, error) {
 		return nil, fmt.Errorf("remote list: %w", err)
 	}
 	kept := objects[:0:0]
+	b.unrepresentable = make(map[string]struct{})
 	for _, o := range objects {
+		if !rcloneclient.ValidRemotePath(o.Path) {
+			// Never pulled (it could address a path outside local_root),
+			// but remembered: a local file at this exact path still
+			// exists on Drive, so its absence from the listing must not
+			// read as a remote deletion nor trigger a push (issue #161).
+			b.unrepresentable[o.Path] = struct{}{}
+			b.log.Warn("bisync skipping remote entry with an unsafe path",
+				"op", "list", "origin", "remote", "path", o.Path)
+			continue
+		}
 		if !pathfilter.Excluded(b.cfg.Exclude, o.Path) {
 			kept = append(kept, o)
 		}
@@ -194,7 +191,7 @@ func (b *Bisync) listRemote(ctx context.Context) ([]RemoteObject, error) {
 
 // syncLocalToRemote pushes a local-only file to the remote.
 func (b *Bisync) syncLocalToRemote(ctx context.Context, d FileDiff) error {
-	b.log.Info("bisync pushing local-only file",
+	b.log.Info("bisync pushing file",
 		"path", d.Path,
 		"op", "push",
 		"origin", "local",
@@ -202,6 +199,7 @@ func (b *Bisync) syncLocalToRemote(ctx context.Context, d FileDiff) error {
 	)
 
 	if b.cfg.DryRun {
+		b.auditFile("push", d.Path, "", "")
 		return nil
 	}
 
@@ -215,12 +213,14 @@ func (b *Bisync) syncLocalToRemote(ctx context.Context, d FileDiff) error {
 	if err != nil {
 		return fmt.Errorf("copy %s to remote: %w", d.Path, err)
 	}
+	b.auditFile("push", d.Path, "", "")
 
 	return b.journal.Put(JournalEntry{
 		Path:         d.Path,
 		LocalMtime:   d.LocalInfo.ModTime,
 		RemoteMtime:  obj.ModTime,
 		RemoteMD5:    obj.MD5,
+		RemoteID:     obj.RemoteID,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "local",
 	})
@@ -228,7 +228,7 @@ func (b *Bisync) syncLocalToRemote(ctx context.Context, d FileDiff) error {
 
 // syncRemoteToLocal downloads a remote-only file to the local filesystem.
 func (b *Bisync) syncRemoteToLocal(ctx context.Context, d FileDiff) error {
-	b.log.Info("bisync pulling remote-only file",
+	b.log.Info("bisync pulling file",
 		"path", d.Path,
 		"op", "pull",
 		"origin", "remote",
@@ -236,24 +236,31 @@ func (b *Bisync) syncRemoteToLocal(ctx context.Context, d FileDiff) error {
 	)
 
 	if b.cfg.DryRun {
+		b.auditFile("pull", d.Path, "", "")
 		return nil
 	}
 
-	localPath := filepath.Join(b.cfg.LocalRoot, filepath.FromSlash(d.Path))
+	localPath, err := localPathFor(b.cfg.LocalRoot, d.Path)
+	if err != nil {
+		return err
+	}
 
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir for %s: %w", d.Path, err)
 	}
+	noteLocalWrite(b.cfg.Remover, filepath.Dir(localPath))
 
 	if err := b.remote.DownloadFile(ctx, d.Path, localPath); err != nil {
 		return fmt.Errorf("download %s: %w", d.Path, err)
 	}
+	b.auditFile("pull", d.Path, "", "")
 
 	return b.journal.Put(JournalEntry{
 		Path:         d.Path,
 		LocalMtime:   d.RemoteInfo.ModTime,
 		RemoteMtime:  d.RemoteInfo.ModTime,
 		RemoteMD5:    d.RemoteInfo.MD5,
+		RemoteID:     d.RemoteInfo.RemoteID,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "remote",
 	})
@@ -277,6 +284,7 @@ func (b *Bisync) resolveConflict(ctx context.Context, d FileDiff) error {
 	)
 
 	if b.cfg.DryRun {
+		b.auditFile("conflict", d.Path, "", "")
 		return nil
 	}
 
@@ -296,7 +304,7 @@ func (b *Bisync) resolveConflict(ctx context.Context, d FileDiff) error {
 
 // resolveLocalWins uploads local version, renames remote to .old.<N>.
 func (b *Bisync) resolveLocalWins(ctx context.Context, d FileDiff) error {
-	base, oldN := oldsuffix.NextOldN(b.cfg.Matcher, d.Path, b.journal.Exists)
+	base, oldN := oldsuffix.NextOldN(b.cfg.Matcher, d.Path, b.oldNameTaken)
 	oldPath := b.cfg.Matcher.Format(base, oldN)
 
 	b.log.Info("bisync conflict resolved: local wins",
@@ -309,6 +317,7 @@ func (b *Bisync) resolveLocalWins(ctx context.Context, d FileDiff) error {
 	if err := b.remote.MoveFile(ctx, d.Path, oldPath); err != nil {
 		return fmt.Errorf("rename remote %s to %s: %w", d.Path, oldPath, err)
 	}
+	b.auditFile("conflict", d.Path, "newer_wins:local", oldPath)
 
 	srcPath := filepath.Join(b.cfg.LocalRoot, filepath.FromSlash(d.Path))
 	dstDir := filepath.Dir(d.Path)
@@ -325,6 +334,7 @@ func (b *Bisync) resolveLocalWins(ctx context.Context, d FileDiff) error {
 		LocalMtime:   d.LocalInfo.ModTime,
 		RemoteMtime:  obj.ModTime,
 		RemoteMD5:    obj.MD5,
+		RemoteID:     obj.RemoteID,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "local",
 	}); err != nil {
@@ -347,7 +357,7 @@ func (b *Bisync) resolveLocalWins(ctx context.Context, d FileDiff) error {
 
 // resolveRemoteWins downloads remote version, renames local to .old.<N>.
 func (b *Bisync) resolveRemoteWins(ctx context.Context, d FileDiff) error {
-	base, oldN := oldsuffix.NextOldN(b.cfg.Matcher, d.Path, b.journal.Exists)
+	base, oldN := oldsuffix.NextOldN(b.cfg.Matcher, d.Path, b.oldNameTaken)
 	oldPath := b.cfg.Matcher.Format(base, oldN)
 
 	b.log.Info("bisync conflict resolved: remote wins",
@@ -357,19 +367,24 @@ func (b *Bisync) resolveRemoteWins(ctx context.Context, d FileDiff) error {
 		"kept_old_as", oldPath,
 	)
 
-	localPath := filepath.Join(b.cfg.LocalRoot, filepath.FromSlash(d.Path))
-	localOldPath := filepath.Join(
-		b.cfg.LocalRoot,
-		filepath.FromSlash(oldPath),
-	)
+	localPath, err := localPathFor(b.cfg.LocalRoot, d.Path)
+	if err != nil {
+		return err
+	}
+	localOldPath, err := localPathFor(b.cfg.LocalRoot, oldPath)
+	if err != nil {
+		return err
+	}
 
 	if err := os.Rename(localPath, localOldPath); err != nil {
 		return fmt.Errorf("rename local %s to %s: %w", d.Path, oldPath, err)
 	}
+	b.auditFile("conflict", d.Path, "newer_wins:remote", oldPath)
 
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir for %s: %w", d.Path, err)
 	}
+	noteLocalWrite(b.cfg.Remover, filepath.Dir(localPath))
 	if err := b.remote.DownloadFile(ctx, d.Path, localPath); err != nil {
 		return fmt.Errorf("download %s: %w", d.Path, err)
 	}
@@ -379,6 +394,7 @@ func (b *Bisync) resolveRemoteWins(ctx context.Context, d FileDiff) error {
 		LocalMtime:   d.RemoteInfo.ModTime,
 		RemoteMtime:  d.RemoteInfo.ModTime,
 		RemoteMD5:    d.RemoteInfo.MD5,
+		RemoteID:     d.RemoteInfo.RemoteID,
 		LastSyncedAt: b.clock.Now(),
 		LastOrigin:   "remote",
 	}); err != nil {

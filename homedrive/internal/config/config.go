@@ -26,6 +26,8 @@ type Config struct {
 	MQTT         MQTTConfig    `yaml:"mqtt"`
 	Logging      LoggingConfig `yaml:"logging"`
 	Quota        QuotaConfig   `yaml:"quota"`
+	Bisync       BisyncConfig  `yaml:"bisync"`
+	Trash        TrashConfig   `yaml:"trash"`
 	DryRun       bool          `yaml:"dry_run"`
 }
 
@@ -53,6 +55,17 @@ type RetryConfig struct {
 type PullConfig struct {
 	ChangesAPIInterval Duration `yaml:"changes_api_interval"`
 	BisyncInterval     Duration `yaml:"bisync_interval"`
+}
+
+// BisyncConfig configures the bisync mass-deletion guard (issue #156): a
+// run's deletions are blocked when there are more than 10 AND (more than
+// MaxDeleteCount OR more than MaxDeletePct percent of the journaled
+// entries). A nil field means the syncer default (50 and 10, defined once as
+// syncer.DefaultMaxDeleteCount/Pct); an explicit value
+// below 1, or a percentage above 100, is a configuration error.
+type BisyncConfig struct {
+	MaxDeleteCount *int `yaml:"max_delete_count"`
+	MaxDeletePct   *int `yaml:"max_delete_pct"`
 }
 
 // ConflictCfg configures conflict resolution.
@@ -141,6 +154,27 @@ type QuotaConfig struct {
 	StopPushPct float64 `yaml:"stop_push_pct"`
 }
 
+// defaultTrashPurgeAfter is how long homedrive keeps the entries it moved to
+// the freedesktop.org trash before purging them (issue #155).
+const defaultTrashPurgeAfter = 30 * 24 * time.Hour
+
+// TrashConfig configures the local trash (issue #155).
+type TrashConfig struct {
+	// PurgeAfter is the age, judged by the .trashinfo DeletionDate, after
+	// which homedrive purges the entries it trashed itself. nil (omitted)
+	// means 30 days; an explicit 0s disables purging. Entries homedrive
+	// did not trash are never purged.
+	PurgeAfter *Duration `yaml:"purge_after"`
+}
+
+// PurgeAfterOrDefault returns the effective purge age (0 = never purge).
+func (t TrashConfig) PurgeAfterOrDefault() time.Duration {
+	if t.PurgeAfter == nil {
+		return defaultTrashPurgeAfter
+	}
+	return t.PurgeAfter.Duration
+}
+
 // Duration wraps time.Duration to support YAML unmarshaling of "2s", "500ms".
 type Duration struct {
 	time.Duration
@@ -178,8 +212,22 @@ func Load(path string) (*Config, error) {
 	if _, err := oldsuffix.New(cfg.Conflict.OldSuffixFormat); err != nil {
 		return nil, fmt.Errorf("config: conflict.old_suffix_format: %w", err)
 	}
+	if err := cfg.Bisync.validate(); err != nil {
+		return nil, err
+	}
 	cfg.applyDefaults()
 	return &cfg, nil
+}
+
+// validate rejects out-of-range guard bounds.
+func (b BisyncConfig) validate() error {
+	if b.MaxDeleteCount != nil && *b.MaxDeleteCount < 1 {
+		return fmt.Errorf("config: bisync.max_delete_count must be at least 1, got %d", *b.MaxDeleteCount)
+	}
+	if b.MaxDeletePct != nil && (*b.MaxDeletePct < 1 || *b.MaxDeletePct > 100) {
+		return fmt.Errorf("config: bisync.max_delete_pct must be between 1 and 100, got %d", *b.MaxDeletePct)
+	}
+	return nil
 }
 
 // applyDefaults fills in zero-valued fields of Config with their

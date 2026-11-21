@@ -235,6 +235,7 @@ func (r *RcloneFS) pollChanges(ctx context.Context, pageToken string) (Changes, 
 	}
 
 	var items []Change
+	snap := &idSnapshot{res: r.idResolver}
 	token := pageToken
 	for {
 		list, err := svc.Changes.List(token).
@@ -269,7 +270,7 @@ func (r *RcloneFS) pollChanges(ctx context.Context, pageToken string) (Changes, 
 		}
 
 		for _, c := range list.Changes {
-			if ch, ok := r.translateChange(c); ok {
+			if ch, ok := r.translateChangeWith(c, snap); ok {
 				items = append(items, ch)
 			}
 		}
@@ -290,28 +291,61 @@ func (r *RcloneFS) pollChanges(ctx context.Context, pageToken string) (Changes, 
 // change should be skipped (excluded by config, or its path cannot yet be
 // resolved -- the hourly bisync safety net will catch the latter case).
 func (r *RcloneFS) translateChange(c *drivev3.Change) (Change, bool) {
+	return r.translateChangeWith(c, &idSnapshot{res: r.idResolver})
+}
+
+// translateChangeWith is translateChange sharing snap, the lazily loaded
+// journal ID snapshot, across the changes of one poll.
+//
+// A Removed change carries no parents, so its path comes from the cache; an
+// ID missing from the cache (the item was deleted while the agent was down,
+// or arrived through bisync, which does not seed the cache) is resolved
+// from the journal instead (issue #163). The resolved path then goes
+// through exactly the checks a cache-resolved one does. Folders are not
+// journaled, so a deleted folder's own ID is still unresolvable here.
+func (r *RcloneFS) translateChangeWith(c *drivev3.Change, snap *idSnapshot) (Change, bool) {
 	if c.Removed || c.File == nil {
 		p, ok := r.pathCache.get(c.FileId)
+		if !ok {
+			p, ok = snap.lookup(r.log, c.FileId)
+		}
 		if !ok {
 			r.log.Warn("ListChanges: skipping removed file with unknown path",
 				"op", "ListChanges", "file_id", c.FileId)
 			return Change{}, false
 		}
-		return Change{Path: p, Deleted: true}, !r.excluded(p)
+		r.pathCache.delete(c.FileId)
+		r.pathCache.evictTree(p)
+		if !ValidRemotePath(p) {
+			r.log.Warn("ListChanges: skipping removed file with unsafe path",
+				"op", "ListChanges", "file_id", c.FileId)
+			return Change{}, false
+		}
+		return Change{Path: p, Deleted: true, ID: c.FileId}, !r.excluded(p)
 	}
 
+	if !ValidName(c.File.Name) {
+		r.log.Warn("ListChanges: skipping change with unsafe name",
+			"op", "ListChanges", "file_id", c.FileId)
+		r.forgetID(c.FileId)
+		return Change{}, false
+	}
 	p, ok := r.resolveChangePath(c.File)
 	if !ok {
 		r.log.Warn("ListChanges: skipping change with unresolved parent path",
 			"op", "ListChanges", "file_id", c.FileId, "name", c.File.Name)
+		r.forgetID(c.FileId)
 		return Change{}, false
 	}
 	if r.excluded(p) {
+		r.forgetID(c.FileId)
 		return Change{}, false
 	}
 
 	if c.File.Trashed {
-		return Change{Path: p, Deleted: true}, true
+		r.pathCache.delete(c.FileId)
+		r.pathCache.evictTree(p)
+		return Change{Path: p, Deleted: true, ID: c.FileId}, true
 	}
 
 	r.pathCache.put(c.FileId, p)
@@ -324,6 +358,24 @@ func (r *RcloneFS) translateChange(c *drivev3.Change) (Change, bool) {
 		IsDir:    c.File.MimeType == driveFolderMimeType,
 	}
 	return Change{Path: p, Object: &obj}, true
+}
+
+// forgetID drops id from the cache together with everything cached beneath
+// its old path. Called when a change moves an item somewhere the cache will
+// not follow (outside the sync root, into an excluded path): the old
+// mapping would otherwise outlive the move and resolve a later Removed
+// change for that ID to a path now held by a different, live item.
+//
+// The journal is a separate source: a later Removed change for a forgotten
+// ID can still resolve through it (issue #163) to the path the local copy
+// was last synced at. That is intended: it is the outcome bisync reaches
+// (DiffRemoteDeleted), and the puller still keeps a locally modified copy
+// and requires the journaled RemoteID to equal the change's ID.
+func (r *RcloneFS) forgetID(id string) {
+	if old, ok := r.pathCache.get(id); ok {
+		r.pathCache.evictTree(old)
+	}
+	r.pathCache.delete(id)
 }
 
 // resolveChangePath resolves a changed file's remote-relative path from its

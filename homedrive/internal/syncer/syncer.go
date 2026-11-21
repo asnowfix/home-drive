@@ -44,6 +44,10 @@ type Syncer struct {
 	publisher Publisher
 	logger    *slog.Logger
 
+	// deleteGuard suppresses echoes of homedrive's own local deletions
+	// (issue #154); nil disables it.
+	deleteGuard *DeleteGuard
+
 	// bisyncMu coordinates push workers (RLock) with bisync (Lock).
 	bisyncMu *sync.RWMutex
 
@@ -55,6 +59,10 @@ type Syncer struct {
 
 	// recorder receives one Outcome per final push result; nil disables.
 	recorder Recorder
+
+	// rootGate, if set, vetoes push work while local_root is not the synced
+	// tree (issue #170).
+	rootGate RootGate
 }
 
 // Option configures a Syncer.
@@ -207,7 +215,7 @@ func (s *Syncer) handleEvent(ctx context.Context, ev Event) {
 	start := s.nowFn()
 	logger := s.logger.With("path", ev.Path, "op", ev.Op.String())
 
-	if s.skipDirEvent(logger, ev) {
+	if s.skipTrashEvent(ev) || s.skipExpectedDelete(logger, ev) || s.skipUnpairedRename(logger, ev) || s.skipDirEvent(logger, ev) {
 		return
 	}
 
@@ -221,14 +229,14 @@ func (s *Syncer) handleEvent(ctx context.Context, ev Event) {
 	defer s.bisyncMu.RUnlock()
 
 	var obj *RemoteObject
-	err := retryFunc(ctx, s.cfg.Retry, logger, ev.Op.String(),
-		s.sleepFn, func(ctx context.Context) error {
-			var execErr error
-			obj, execErr = s.execEvent(ctx, ev)
-			return execErr
-		},
-	)
-
+	blocked, err := s.retryGated(ctx, logger, ev.Op.String(), func(ctx context.Context) error {
+		var execErr error
+		obj, execErr = s.execEvent(ctx, ev)
+		return execErr
+	})
+	if blocked {
+		return // nothing was attempted: no journal change, no failure event
+	}
 	elapsed := s.nowFn().Sub(start)
 	s.recordResult(ctx, ev.Path, ev.Op.String(), obj, err, elapsed)
 }

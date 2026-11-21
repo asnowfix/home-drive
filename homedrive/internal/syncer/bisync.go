@@ -7,9 +7,7 @@ package syncer
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -45,6 +43,9 @@ type Bisync struct {
 	// (PLAN.md §11.5). May be nil to disable.
 	auditor *Auditor
 
+	// gate vetoes a pass while local_root is not the synced tree (#170).
+	gate RootGate
+
 	// lastSweep is when the periodic retention sweep last ran. Only
 	// read/written from execute(), which already holds b.mu exclusively,
 	// so it needs no separate lock.
@@ -63,6 +64,34 @@ type Bisync struct {
 
 	// rec receives one Outcome per final bisync result; nil disables.
 	rec Recorder
+
+	// snapshot is the set of paths seen on either side by the current
+	// pass's diff(), so conflict-loser names avoid existing files.
+	snapshot map[string]struct{}
+
+	// deleted counts deletions propagated by the current pass (issue
+	// #152). Reset at the start of syncDiffs; same locking as snapshot.
+	deleted int
+
+	// unrepresentable holds listing paths listRemote dropped as unsafe in
+	// the current pass; local files at those exact paths are left alone.
+	// Same locking as snapshot.
+	unrepresentable map[string]struct{}
+
+	// localCount and remoteCount are the sizes of the current pass's local
+	// walk and (filtered) remote listing; the delete guard treats an empty
+	// side as suspect (issue #156). Same locking as snapshot.
+	localCount, remoteCount int
+
+	// vetoed is the number of deletions the guard blocked in the current
+	// pass. Same locking as snapshot.
+	vetoed int
+
+	// guardMu protects allow and block, which the HTTP control endpoint
+	// and /status read and write outside the bisync lock.
+	guardMu sync.Mutex
+	allow   *deleteAllowance
+	block   *DeleteBlock
 }
 
 // markForPrune records base as needing a retention-GC pass once the
@@ -92,6 +121,10 @@ type BisyncOpts struct {
 	// same *store.Auditor instance the push/pull paths use for
 	// per-file AuditEntry lines.
 	Auditor *Auditor
+
+	// Gate, if non-nil, is consulted before every pass; a refusal skips the
+	// pass entirely (issue #170).
+	Gate RootGate
 
 	// Recorder, if non-nil, receives one Outcome per final per-file
 	// result and one per pass (OutBisync), plus the local tree size.
@@ -131,10 +164,15 @@ func NewBisync(opts BisyncOpts) (*Bisync, chan<- struct{}) {
 		mu:      mu,
 		forceCh: forceCh,
 		auditor: opts.Auditor,
+		gate:    opts.Gate,
 		rec:     opts.Recorder,
 	}
 	return b, forceCh
 }
+
+// LocalRemover returns the remover bisync deletes through. It exists so the
+// agent wiring (the delete guard, issue #154) can be asserted.
+func (b *Bisync) LocalRemover() LocalRemover { return b.cfg.Remover }
 
 // Mu returns the shared RWMutex so push workers can take RLock.
 func (b *Bisync) Mu() *sync.RWMutex {
@@ -170,9 +208,28 @@ func (b *Bisync) Run(ctx context.Context) error {
 	}
 }
 
+// autoRepairChains runs the first-pass-after-upgrade chain repair when due.
+// Run before diff(): repair renames the very paths a pre-computed diffs
+// snapshot would reference, and mutating files mid-way through processing a
+// stale diffs list is the same resurrection hazard the inline retention GC
+// has (see pendingPrune's doc comment). Running it first and letting diff()
+// see fresh post-repair state sidesteps that entirely.
+func (b *Bisync) autoRepairChains(ctx context.Context) {
+	if !b.shouldRepairChains() {
+		return
+	}
+	if _, err := b.runChainRepair(ctx, b.cfg.DryRun, true); err != nil {
+		b.log.Error("chain repair pass failed", "op", "conflict_repair", "error", err)
+	}
+}
+
 // ForceRun triggers an immediate bisync execution. Returns
-// ErrBisyncRunning if a run is already in progress.
+// ErrBisyncRunning if a run is already in progress, or an error wrapping
+// ErrRootBlocked while local_root is not the synced tree.
 func (b *Bisync) ForceRun(_ context.Context) error {
+	if err := b.gateErr(); err != nil {
+		return err
+	}
 	b.runMu.Lock()
 	if b.running {
 		b.runMu.Unlock()
@@ -204,63 +261,41 @@ func (b *Bisync) execute(ctx context.Context) {
 		b.runMu.Unlock()
 	}()
 
-	start := b.clock.Now()
-
-	b.publishEvent(BisyncEvent{
-		Timestamp: start.UTC().Format(time.RFC3339),
-		Type:      "bisync.started",
-		DryRun:    b.cfg.DryRun,
-	})
-
 	// Acquire exclusive lock, blocking push/pull workers.
 	b.log.Debug("bisync acquiring global lock")
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.log.Debug("bisync global lock acquired")
 
-	if b.shouldRepairChains() {
-		// Run before diff(): repair renames the very paths a
-		// pre-computed diffs snapshot would reference, and mutating
-		// files mid-way through processing a stale diffs list is the
-		// same resurrection hazard the inline retention GC has (see
-		// pendingPrune's doc comment). Running it first and letting
-		// diff() see fresh post-repair state sidesteps that entirely.
-		if _, err := b.runChainRepair(ctx, b.cfg.DryRun, true); err != nil {
-			b.log.Error("chain repair pass failed", "op", "conflict_repair", "error", err)
-		}
-	}
-
-	// Perform the diff.
-	diffs, err := b.diff(ctx)
-	if err != nil {
-		b.log.Error("bisync diff failed", "error", err)
-		b.writeAudit(start, 0, 0, 0, err)
-		b.recordPass(start, 0, err)
-		b.publishEvent(BisyncEvent{
-			Timestamp: b.clock.Now().UTC().Format(time.RFC3339),
-			Type:      "bisync.completed",
-			Error:     err.Error(),
-			DryRun:    b.cfg.DryRun,
-		})
+	// Checked under the lock, which may have waited out a long pull cycle.
+	// Nothing (not even the started event) is published for a refused pass.
+	if b.gateRefuses() {
 		return
 	}
 
+	start := b.clock.Now()
+	b.publishEvent(BisyncEvent{
+		Timestamp: start.UTC().Format(time.RFC3339),
+		Type:      "bisync.started",
+		DryRun:    b.cfg.DryRun,
+	})
+	b.autoRepairChains(ctx)
+
+	diffs, err := b.diff(ctx)
+	if err != nil {
+		b.log.Error("bisync diff failed", "error", err)
+		b.finishEarly(start, err)
+		return
+	}
+
+	b.logPlannedDeletions(diffs)
+	diffs, abort := b.applyDeleteGuard(diffs)
+	if abort {
+		b.finishEarly(start, nil)
+		return
+	}
 	pushed, pulled, conflicts := b.syncDiffs(ctx, diffs)
-
-	for base := range b.pendingPrune {
-		b.pruneAfterConflict(ctx, base)
-	}
-	b.pendingPrune = nil
-
-	if b.shouldSweep() {
-		removed := b.sweepOldFiles(ctx)
-		b.lastSweep = b.clock.Now()
-		if len(removed) > 0 {
-			b.log.Info("retention sweep pruned conflict losers",
-				"op", "conflict_gc", "count", len(removed))
-		}
-	}
-
+	b.runRetention(ctx)
 	elapsed := b.clock.Now().Sub(start)
 
 	b.log.Info("bisync completed",
@@ -268,6 +303,7 @@ func (b *Bisync) execute(ctx context.Context) {
 		"files_pushed", pushed,
 		"files_pulled", pulled,
 		"conflicts", conflicts,
+		"files_deleted", b.deleted,
 		"dry_run", b.cfg.DryRun,
 	)
 
@@ -277,22 +313,50 @@ func (b *Bisync) execute(ctx context.Context) {
 		Timestamp:    b.clock.Now().UTC().Format(time.RFC3339),
 		Type:         "bisync.completed",
 		DurationMs:   elapsed.Milliseconds(),
-		FilesChanged: pushed + pulled,
+		FilesChanged: pushed + pulled + b.deleted,
 		Conflicts:    conflicts,
 		DryRun:       b.cfg.DryRun,
 	})
+}
+
+// finishEarly closes a pass that did no work: its diff failed (err) or the
+// delete guard aborted it. Nothing was pushed, pulled, deleted or resolved.
+func (b *Bisync) finishEarly(start time.Time, err error) {
+	b.deleted = 0
+	b.writeAudit(start, 0, 0, 0, err)
+	if err != nil {
+		b.recordPass(start, 0, err)
+	}
+	ev := BisyncEvent{
+		Timestamp: b.clock.Now().UTC().Format(time.RFC3339),
+		Type:      "bisync.completed",
+		DryRun:    b.cfg.DryRun,
+	}
+	if err != nil {
+		ev.Error = err.Error()
+	}
+	b.publishEvent(ev)
 }
 
 // syncDiffs iterates over diffs and syncs each one.
 func (b *Bisync) syncDiffs(
 	ctx context.Context, diffs []FileDiff,
 ) (pushed, pulled, conflicts int) {
+	b.deleted = 0
 	for _, d := range diffs {
 		if ctx.Err() != nil {
 			break
 		}
+		if d.DeleteConflict {
+			b.reportDeleteConflict(d)
+			conflicts++
+		}
 		switch d.Kind {
-		case DiffLocalOnly:
+		case DiffRemoteDeleted, DiffLocalDeleted:
+			if b.syncDelete(ctx, d) {
+				b.deleted++
+			}
+		case DiffLocalOnly, DiffLocalChanged:
 			err := b.syncLocalToRemote(ctx, d)
 			b.recordDiff(OutBisyncPush, DirUp, d.LocalInfo.Size, d, err)
 			if err != nil {
@@ -301,7 +365,7 @@ func (b *Bisync) syncDiffs(
 				continue
 			}
 			pushed++
-		case DiffRemoteOnly:
+		case DiffRemoteOnly, DiffRemoteChanged:
 			err := b.syncRemoteToLocal(ctx, d)
 			b.recordDiff(OutBisyncPull, DirDown, d.RemoteInfo.Size, d, err)
 			if err != nil {
@@ -353,43 +417,6 @@ func (b *Bisync) recordPass(start time.Time, files int, err error) {
 // ---------------------------------------------------------------------------
 // Audit and MQTT helpers
 // ---------------------------------------------------------------------------
-
-// writeAudit appends a JSONL line to the audit log.
-func (b *Bisync) writeAudit(
-	start time.Time,
-	pushed, pulled, conflicts int,
-	syncErr error,
-) {
-	if b.audit == nil {
-		return
-	}
-
-	elapsed := b.clock.Now().Sub(start)
-	entry := BisyncAuditEntry{
-		Timestamp:    start.UTC().Format(time.RFC3339),
-		Op:           "bisync",
-		Duration:     fmt.Sprintf("%d", elapsed.Milliseconds()),
-		FilesChanged: pushed + pulled,
-		FilesPushed:  pushed,
-		FilesPulled:  pulled,
-		Conflicts:    conflicts,
-		DryRun:       b.cfg.DryRun,
-	}
-	if syncErr != nil {
-		entry.Error = syncErr.Error()
-	}
-
-	data, err := json.Marshal(entry)
-	if err != nil {
-		b.log.Error("failed to marshal audit entry", "error", err)
-		return
-	}
-
-	line := string(data) + "\n"
-	if _, err := b.audit.Write([]byte(line)); err != nil {
-		b.log.Error("failed to write audit entry", "error", err)
-	}
-}
 
 // publishEvent publishes a bisync MQTT event. No-op if MQTT is nil.
 func (b *Bisync) publishEvent(event BisyncEvent) {

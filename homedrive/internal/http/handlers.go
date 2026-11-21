@@ -1,6 +1,7 @@
 package http
 
 import (
+	"errors"
 	"net/http"
 )
 
@@ -44,12 +45,37 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]string{"status": "resumed"})
 }
 
+// handleAllowDeletes serves POST /bisync/allow-deletes: the next bisync
+// run's deletions are allowed once, bypassing the mass-deletion guard.
+func (s *Server) handleAllowDeletes(w http.ResponseWriter, r *http.Request) {
+	s.metrics.IncCounter("homedrive_http_requests_total_allow_deletes")
+
+	if s.deps.DeleteOverrider == nil {
+		s.writeError(w, http.StatusNotImplemented, "deletion override not available")
+		return
+	}
+	if err := s.deps.DeleteOverrider.AllowNextDeletes(r.Context()); err != nil {
+		if errors.Is(err, ErrNothingBlocked) {
+			s.writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		s.log.Error("failed to arm deletion override", "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to arm deletion override")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]string{"status": "deletes_allowed_once"})
+}
+
 // handleResync serves POST /resync to trigger an immediate bisync.
 // Returns 202 Accepted because the resync runs asynchronously.
 func (s *Server) handleResync(w http.ResponseWriter, r *http.Request) {
 	s.metrics.IncCounter("homedrive_http_requests_total_resync")
 
 	if err := s.deps.Resyncable.ForceResync(r.Context()); err != nil {
+		if errors.Is(err, ErrLocalRootBlocked) {
+			s.writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		s.log.Error("failed to trigger resync", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "failed to trigger resync")
 		return
@@ -79,6 +105,10 @@ func (s *Server) handleConflictRepair(w http.ResponseWriter, r *http.Request) {
 
 	dryRun := r.URL.Query().Get("dry_run") == "1"
 	report, err := s.deps.ChainRepairer.RunChainRepair(r.Context(), dryRun)
+	if errors.Is(err, ErrLocalRootBlocked) {
+		s.writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	if err != nil {
 		s.log.Error("chain repair failed", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "chain repair failed")

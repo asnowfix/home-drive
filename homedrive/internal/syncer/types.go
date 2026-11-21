@@ -118,6 +118,16 @@ type BisyncConfig struct {
 	// walk and the remote listing via pathfilter.Excluded, so it never
 	// uploads or downloads a path the watcher and the pull path skip.
 	Exclude []string
+
+	// MaxDeleteCount and MaxDeletePct are the mass-deletion guard bounds
+	// (issue #156): a run's deletions are blocked when there are more than
+	// 10 AND (more than MaxDeleteCount OR more than MaxDeletePct percent of
+	// the journaled entries). Zero means the defaults (50 and 10).
+	MaxDeleteCount int
+	MaxDeletePct   int
+	// Remover performs bisync's local deletions (trash, issue #155).
+	// Nil means os.Remove.
+	Remover LocalRemover
 }
 
 // ---------------------------------------------------------------------------
@@ -133,8 +143,12 @@ type BisyncAuditEntry struct {
 	FilesPushed  int    `json:"files_pushed"`
 	FilesPulled  int    `json:"files_pulled"`
 	Conflicts    int    `json:"conflicts"`
-	DryRun       bool   `json:"dry_run,omitempty"`
-	Error        string `json:"error,omitempty"`
+	FilesDeleted int    `json:"files_deleted,omitempty"`
+	// DeletesBlocked is the number of deletions vetoed by the mass-deletion
+	// guard (issue #156).
+	DeletesBlocked int    `json:"deletes_blocked,omitempty"`
+	DryRun         bool   `json:"dry_run,omitempty"`
+	Error          string `json:"error,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -166,14 +180,30 @@ const (
 	DiffRemoteOnly
 	// DiffConflict means both sides differ from journal expectations.
 	DiffConflict
+	// DiffLocalChanged means the file exists on both sides and only the
+	// local copy changed since the last sync: a plain push, no .old.<N>.
+	DiffLocalChanged
+	// DiffRemoteChanged means the file exists on both sides and only the
+	// remote copy changed since the last sync: a plain pull, no .old.<N>.
+	DiffRemoteChanged
+	// DiffRemoteDeleted means a journaled file, unchanged locally, is gone
+	// from Drive: delete the local copy (issue #152).
+	DiffRemoteDeleted
+	// DiffLocalDeleted means a journaled file, unchanged on Drive, is gone
+	// locally: delete the Drive copy (issue #152).
+	DiffLocalDeleted
 )
 
 // FileDiff represents one file that differs between local and remote.
 type FileDiff struct {
 	Path       string
 	Kind       DiffKind
-	LocalInfo  *LocalFileInfo // nil if DiffRemoteOnly
-	RemoteInfo *RemoteObject  // nil if DiffLocalOnly
+	LocalInfo  *LocalFileInfo // nil for DiffRemoteOnly and DiffLocalDeleted
+	RemoteInfo *RemoteObject  // nil for DiffLocalOnly and DiffRemoteDeleted
+	// DeleteConflict marks a DiffLocalOnly or DiffRemoteOnly whose other
+	// side deleted the file: the surviving copy changed since the journal
+	// fingerprint, so it is kept and propagated, with a conflict event.
+	DeleteConflict bool
 }
 
 // LocalFileInfo holds local file metadata.

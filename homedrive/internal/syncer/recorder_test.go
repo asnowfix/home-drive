@@ -170,7 +170,7 @@ func TestSyncer_PushEventTimestampIsUTC(t *testing.T) {
 func newRecordedPuller(t *testing.T, remote *mockRemoteFS, rec Recorder) *Puller {
 	t.Helper()
 	return NewPuller(
-		PullerConfig{Interval: time.Second, LocalRoot: t.TempDir(), Recorder: rec},
+		PullerConfig{Interval: time.Second, LocalRoot: t.TempDir(), Recorder: rec, Remover: osRemover{}},
 		remote, newMockStore(), newMockAuditLogger(), newMockPublisher(),
 		slog.New(slog.NewJSONHandler(discardWriter{}, nil)),
 		fixedClock(time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)),

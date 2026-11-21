@@ -20,6 +20,7 @@ type fakeRemoteFS struct {
 	mu           sync.Mutex
 	files        map[string]rcloneclient.RemoteObject
 	copyCalls    []string
+	deleteCalls  []string
 	moveCalls    [][2]string
 	moveDirCalls [][2]string
 	quota        rcloneclient.Quota
@@ -81,8 +82,21 @@ func (f *fakeRemoteFS) CopyFile(_ context.Context, src, dstDir string) (rclonecl
 func (f *fakeRemoteFS) DeleteFile(_ context.Context, path string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.deleteCalls = append(f.deleteCalls, path)
 	delete(f.files, path)
 	return nil
+}
+
+// hasDeleted reports whether DeleteFile was called for path.
+func (f *fakeRemoteFS) hasDeleted(path string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, p := range f.deleteCalls {
+		if p == path {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeRemoteFS) MoveFile(_ context.Context, src, dst string) error {

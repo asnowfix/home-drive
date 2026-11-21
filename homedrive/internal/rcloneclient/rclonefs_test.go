@@ -13,6 +13,7 @@ import (
 	// Test-only: a real local Fs to exercise CopyFile; not linked into the binary.
 	_ "github.com/rclone/rclone/backend/local"
 	rclonefs "github.com/rclone/rclone/fs"
+	drivev3 "google.golang.org/api/drive/v3"
 )
 
 func TestRemoteObjectFromRclone_MapsFields(t *testing.T) {
@@ -42,8 +43,9 @@ func TestRcloneFS_Stat_Cases(t *testing.T) {
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		if _, err := r.Stat(context.Background(), "missing.txt"); err == nil {
-			t.Fatal("expected an error for a missing object")
+		_, err := r.Stat(context.Background(), "missing.txt")
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Stat error = %v, want ErrNotFound (issue #152: bisync confirms deletions with it)", err)
 		}
 	})
 }
@@ -58,7 +60,7 @@ func TestRcloneFS_List(t *testing.T) {
 			fakeObject{remote: "sub/b.txt", size: 2, id: "id-b"},
 		},
 	}}
-	r := &RcloneFS{log: slog.Default(), fsObj: fsys}
+	r := &RcloneFS{log: slog.Default(), fsObj: fsys, pathCache: newIDPathCache()}
 
 	objs, err := r.List(context.Background(), "")
 	if err != nil {
@@ -70,6 +72,27 @@ func TestRcloneFS_List(t *testing.T) {
 	got := map[string]bool{objs[0].Path: true, objs[1].Path: true}
 	if !got["a.txt"] || !got["sub/b.txt"] {
 		t.Errorf("List = %+v, want a.txt and sub/b.txt", objs)
+	}
+}
+
+// TestRcloneFS_List_SeedsPathCache covers issue #152: a Removed Drive change
+// carries only a file ID, so IDs seen by bisync's List must resolve to paths
+// (files and folders), or the deletion is dropped as "unknown path".
+func TestRcloneFS_List_SeedsPathCache(t *testing.T) {
+	fsys := &fakeListingFS{tree: map[string][]rclonefs.DirEntry{
+		"":    {fakeDirectory{remote: "sub", id: "sub-id"}},
+		"sub": {fakeObject{remote: "sub/b.txt", size: 2, id: "id-b"}},
+	}}
+	r := &RcloneFS{log: slog.Default(), fsObj: fsys, pathCache: newIDPathCache()}
+	if _, err := r.List(context.Background(), ""); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	// the file first: removing the folder evicts everything beneath it
+	for _, c := range []struct{ id, want string }{{"id-b", "sub/b.txt"}, {"sub-id", "sub"}} {
+		ch, ok := r.translateChange(&drivev3.Change{FileId: c.id, Removed: true})
+		if !ok || !ch.Deleted || ch.Path != c.want {
+			t.Errorf("removed %s = (%+v, %v), want deleted %q", c.id, ch, ok, c.want)
+		}
 	}
 }
 
@@ -377,5 +400,34 @@ func TestRcloneFS_DeleteFile_Cases(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// R2 (#152 review): a trashed or removed ID must stop resolving, or a later
+// Removed change for the old ID resolves to a path that now belongs to a new,
+// live file and deletes it locally.
+func TestTranslateChange_EvictsTrashedAndRemovedIDs(t *testing.T) {
+	r := &RcloneFS{log: slog.Default(), pathCache: newIDPathCache()}
+	r.pathCache.put("old-A", "A")
+
+	trashed, ok := r.translateChange(&drivev3.Change{
+		FileId: "old-A", File: &drivev3.File{Name: "A", Trashed: true},
+	})
+	if !ok || !trashed.Deleted || trashed.ID != "old-A" {
+		t.Fatalf("trashed change = %+v, %v; want Deleted with ID old-A", trashed, ok)
+	}
+	// a new folder A is created under a new ID
+	r.pathCache.put("new-A", "A")
+
+	if ch, ok := r.translateChange(&drivev3.Change{FileId: "old-A", Removed: true}); ok {
+		t.Errorf("Removed for the evicted old ID resolved to %q; want it dropped", ch.Path)
+	}
+	// the live ID is untouched until it is itself removed, and carries its ID
+	ch, ok := r.translateChange(&drivev3.Change{FileId: "new-A", Removed: true})
+	if !ok || ch.Path != "A" || ch.ID != "new-A" {
+		t.Errorf("Removed for the live ID = %+v, %v; want path A, ID new-A", ch, ok)
+	}
+	if _, still := r.pathCache.get("new-A"); still {
+		t.Error("removed ID still cached")
 	}
 }

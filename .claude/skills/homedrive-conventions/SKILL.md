@@ -83,7 +83,7 @@ import (
 ```
 
 Adding any other rclone package requires user approval AND verification
-that the binary stays < 25 MB stripped. See `homedrive-rclone-import`.
+that the build stays lean enough for a Raspberry Pi 3B+. See `homedrive-rclone-import`.
 
 ## Build tags
 

@@ -2,7 +2,10 @@
 // serving /status, /pause, /resume, /resync, /reload, /healthz, and /metrics.
 package http
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // StatusInfo holds the current agent state returned by GET /status.
 type StatusInfo struct {
@@ -18,6 +21,46 @@ type StatusInfo struct {
 	BytesDown24h  int64  `json:"bytes_down_24h"`
 	DryRun        bool   `json:"dry_run"`
 	UptimeSeconds int64  `json:"uptime_seconds"`
+
+	// BisyncDeleteBlocked is set while the bisync mass-deletion guard is
+	// vetoing the deletions of the last run that planned any (issue #156).
+	// Under status v2 (#144) it maps to bisync.delete_blocked.
+	BisyncDeleteBlocked *DeleteBlock `json:"bisync_delete_blocked,omitempty"`
+
+	// LocalRootBlocked is set while pulls, pushes and bisync are paused
+	// because local_root is missing or is not the synced tree (issue #170);
+	// State is then "root_blocked".
+	LocalRootBlocked *RootBlock `json:"local_root_blocked,omitempty"`
+}
+
+// RootBlock says why local_root is not being synced.
+type RootBlock struct {
+	Reason string `json:"reason"`
+	Detail string `json:"detail,omitempty"`
+	Since  string `json:"since"`
+}
+
+// DeleteBlock describes deletions vetoed by the bisync mass-deletion guard.
+type DeleteBlock struct {
+	Planned   int    `json:"planned"`
+	Threshold int    `json:"threshold"`
+	Reason    string `json:"reason"`
+	Since     string `json:"since"`
+}
+
+// ErrLocalRootBlocked is returned by Resyncable and ChainRepairer while
+// local_root is not the synced tree (issue #170); the endpoints answer 503.
+var ErrLocalRootBlocked = errors.New("local_root is not the synced tree: sync is paused")
+
+// ErrNothingBlocked is returned by DeleteOverrider.AllowNextDeletes when no
+// bisync deletions are blocked; the endpoint answers 409.
+var ErrNothingBlocked = errors.New("no bisync deletions are blocked, nothing to allow")
+
+// DeleteOverrider is implemented by the syncer to arm the one-shot override
+// of the bisync mass-deletion guard: the next bisync run's deletions go
+// through once, then the override resets.
+type DeleteOverrider interface {
+	AllowNextDeletes(ctx context.Context) error
 }
 
 // ComponentHealth reports the health of a single subsystem.

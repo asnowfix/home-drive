@@ -33,7 +33,7 @@ func TestPuller_FolderChange(t *testing.T) {
 			}
 			store := newMockStore()
 			p := NewPuller(
-				PullerConfig{
+				PullerConfig{Remover: osRemover{},
 					Interval: 30 * time.Second, LocalRoot: localRoot,
 					ConflictPolicy: PolicyNewerWins, DryRun: tt.dryRun,
 				},
@@ -81,7 +81,8 @@ func TestPuller_FolderDelete(t *testing.T) {
 	del := func(p string) Change { return Change{Path: p, Deleted: true} }
 	tests := []struct {
 		name     string
-		files    []string // local files to create under localRoot
+		files    []string // synced local files (journaled with a baseline)
+		unsynced []string // local files with no journal entry
 		dirs     []string // local directories to create under localRoot
 		changes  []Change
 		wantGone []string
@@ -95,7 +96,7 @@ func TestPuller_FolderDelete(t *testing.T) {
 		},
 		{
 			name:     "NonEmptyDirKeepsUnsyncedFiles",
-			files:    []string{"d/unsynced.txt", "d/sub/deep.txt"},
+			unsynced: []string{"d/unsynced.txt", "d/sub/deep.txt"},
 			changes:  []Change{del("d")},
 			wantKept: []string{"d", "d/unsynced.txt", "d/sub/deep.txt"},
 		},
@@ -109,8 +110,7 @@ func TestPuller_FolderDelete(t *testing.T) {
 			name:     "ParentThenChildren",
 			files:    []string{"d/a.txt"},
 			changes:  []Change{del("d"), del("d/a.txt")},
-			wantGone: []string{"d/a.txt"},
-			wantKept: []string{"d"},
+			wantGone: []string{"d/a.txt", "d"},
 		},
 	}
 	for _, tt := range tests {
@@ -122,7 +122,8 @@ func TestPuller_FolderDelete(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			for _, f := range tt.files {
+			store := newMockStore()
+			for _, f := range append(append([]string{}, tt.files...), tt.unsynced...) {
 				fp := filepath.Join(localRoot, f)
 				if err := os.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
 					t.Fatal(err)
@@ -131,13 +132,21 @@ func TestPuller_FolderDelete(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			for _, f := range tt.files {
+				info, err := os.Stat(filepath.Join(localRoot, f))
+				if err != nil {
+					t.Fatal(err)
+				}
+				_ = store.Put(context.Background(), JournalEntry{
+					Path: f, LocalMtime: info.ModTime(), RemoteMtime: info.ModTime(), RemoteMD5: "m",
+				})
+			}
 
 			remote := newMockRemoteFS()
 			remote.startToken = "start-1"
 			remote.changes["start-1"] = Changes{Items: tt.changes, NextPageToken: "token-2"}
-			store := newMockStore()
 			p := NewPuller(
-				PullerConfig{
+				PullerConfig{Remover: osRemover{},
 					Interval: 30 * time.Second, LocalRoot: localRoot,
 					ConflictPolicy: PolicyNewerWins,
 				},
@@ -199,12 +208,20 @@ func TestPuller_FileDeleteStrict(t *testing.T) {
 				Items:         []Change{{Path: tt.path, Deleted: true}},
 				NextPageToken: "token-2",
 			}
+			fi, err := os.Stat(fp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			journal := newMockStore()
+			_ = journal.Put(context.Background(), JournalEntry{
+				Path: tt.path, LocalMtime: fi.ModTime(), RemoteMtime: fi.ModTime(), RemoteMD5: "m",
+			})
 			p := NewPuller(
-				PullerConfig{
+				PullerConfig{Remover: osRemover{},
 					Interval: 30 * time.Second, LocalRoot: localRoot,
 					ConflictPolicy: PolicyNewerWins,
 				},
-				remote, newMockStore(), newMockAuditLogger(), newMockPublisher(),
+				remote, journal, newMockAuditLogger(), newMockPublisher(),
 				newDiscardLogger(), fixedClock(now),
 			)
 			if err := p.PollOnce(context.Background()); err == nil {

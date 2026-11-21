@@ -25,6 +25,7 @@ import (
 	"github.com/asnowfix/home-drive/homedrive/internal/stats"
 	"github.com/asnowfix/home-drive/homedrive/internal/store"
 	"github.com/asnowfix/home-drive/homedrive/internal/syncer"
+	"github.com/asnowfix/home-drive/homedrive/internal/trash"
 	"github.com/asnowfix/home-drive/homedrive/internal/watcher"
 )
 
@@ -51,10 +52,26 @@ type Agent struct {
 
 	mqttReal *mqtt.Client // non-nil only when MQTT is enabled and connected
 
+	// rootGuard pauses pull, push and bisync while local_root is missing or
+	// is not the tree being synced (issue #170).
+	rootGuard *syncer.RootGuard
+	// rootResumed is set when the guard passes again after a block; cancelRun
+	// (set by Run) then stops the agent, which returns ErrRootResumed.
+	rootResumed atomic.Bool
+	cancelRun   context.CancelFunc
+
 	watch      *watcher.Watcher
 	pushSyncer *syncer.Syncer
 	puller     *syncer.Puller
 	bisync     *syncer.Bisync
+
+	// trasher performs every local deletion made by sync (freedesktop.org
+	// trash, issue #155) and purges the entries it trashed.
+	trasher *trash.Trasher
+
+	// deleteGuard wraps trasher and records each local deletion so the push
+	// syncer does not echo it back to Drive (issue #154).
+	deleteGuard *syncer.DeleteGuard
 
 	// bisyncMu is shared between the push syncer (RLock), the pull loop
 	// (RLock, taken by this package around each PollOnce call since
@@ -107,16 +124,9 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 		cfg.DryRun = true
 	}
 
-	if err := os.MkdirAll(filepath.Dir(cfg.State.Path), 0o755); err != nil {
-		return nil, fmt.Errorf("create state dir: %w", err)
-	}
-	if err := os.MkdirAll(cfg.LocalRoot, 0o755); err != nil {
-		return nil, fmt.Errorf("create local root: %w", err)
-	}
-
-	journal, err := store.OpenJournal(cfg.State.Path, log)
+	journal, err := openState(cfg, log)
 	if err != nil {
-		return nil, fmt.Errorf("open journal: %w", err)
+		return nil, err
 	}
 
 	auditAdapter, auditor, rawAudit, auditFile, err := buildAuditLog(cfg, log)
@@ -129,6 +139,7 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 		Remote:     cfg.Remote,
 		ConfigPath: cfg.RcloneConfig,
 		Exclude:    cfg.Watcher.Exclude,
+		IDResolver: journal,
 		Log:        log,
 	})
 	if err != nil {
@@ -172,6 +183,10 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 	a.reloadedDryRun.Store(cfg.DryRun)
 
 	a.buildStats()
+	a.rootGuard = a.newRootGuard(journal, auditor, pub)
+
+	a.trasher = newTrasher(cfg, journal, auditor, log)
+	a.buildDeleteGuard()
 
 	if err := a.buildWatcher(); err != nil {
 		a.closeResources()
@@ -186,6 +201,19 @@ func newAgent(ctx context.Context, opts AgentOpts) (*Agent, error) {
 	}
 
 	return a, nil
+}
+
+// newTrasher builds the freedesktop.org trash used for every local deletion
+// made by sync, and for purging the entries it trashed (issue #155).
+func newTrasher(cfg *config.Config, j *store.Journal, auditor *store.Auditor, log *slog.Logger) *trash.Trasher {
+	return trash.New(trash.Config{
+		PurgeAge:  cfg.Trash.PurgeAfterOrDefault(),
+		DryRun:    cfg.DryRun,
+		LocalRoot: cfg.LocalRoot,
+		Records:   j,
+		Audit:     auditor,
+		Log:       log,
+	})
 }
 
 // buildAuditLog opens the JSONL audit log file (if configured) and returns
@@ -291,6 +319,8 @@ func (a *Agent) buildPushSyncer(pub syncer.Publisher, audit syncer.AuditLogger) 
 		a.log,
 		syncer.WithBisyncMutex(a.bisyncMu),
 		syncer.WithRecorder(a.stats),
+		syncer.WithRootGate(a.rootGuard),
+		syncer.WithDeleteGuard(a.deleteGuard),
 	)
 }
 
@@ -310,6 +340,9 @@ func (a *Agent) buildPuller(pub syncer.Publisher, audit syncer.AuditLogger, audi
 			Matcher:        a.oldSuffixMatcher,
 			Retention:      retentionPolicy(a.cfg.Conflict.Retention),
 			Auditor:        auditor,
+			Exclude:        a.cfg.Watcher.Exclude,
+			Remover:        a.localRemover(),
+			Gate:           a.rootGuard,
 			DryRun:         a.cfg.DryRun,
 			Recorder:       a.stats,
 		},
@@ -339,6 +372,10 @@ func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer, auditor *s
 			SweepInterval: a.cfg.Conflict.Retention.SweepInterval.Duration,
 			RepairChains:  a.cfg.Conflict.RepairChains == nil || *a.cfg.Conflict.RepairChains,
 			Exclude:       a.cfg.Watcher.Exclude,
+
+			MaxDeleteCount: derefInt(a.cfg.Bisync.MaxDeleteCount),
+			MaxDeletePct:   derefInt(a.cfg.Bisync.MaxDeletePct),
+			Remover:        a.localRemover(),
 		},
 		Remote:   a.rfs,
 		Journal:  &bisyncJournalAdapter{j: a.journal},
@@ -347,9 +384,18 @@ func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer, auditor *s
 		Logger:   a.log,
 		Mu:       a.bisyncMu,
 		Auditor:  auditor,
+		Gate:     a.rootGuard,
 		Recorder: a.stats,
 	})
 	a.bisync = b
+}
+
+// derefInt returns *p, or 0 (meaning "use the default") for nil.
+func derefInt(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
 
 // retentionPolicy converts config.RetentionCfg (YAML-facing) to
@@ -372,12 +418,13 @@ func (a *Agent) buildHTTPServer() error {
 			AuthToken:     a.cfg.HTTP.AuthToken,
 		},
 		httpctl.Deps{
-			Pausable:       a,
-			Resyncable:     a,
-			Reloadable:     a,
-			StatusProvider: a,
-			HealthChecker:  a,
-			ChainRepairer:  a,
+			Pausable:        a,
+			Resyncable:      a,
+			DeleteOverrider: a,
+			Reloadable:      a,
+			StatusProvider:  a,
+			HealthChecker:   a,
+			ChainRepairer:   a,
 		},
 		nil,
 		a.log,
@@ -396,4 +443,25 @@ func (a *Agent) closeResources() {
 		_ = a.journal.Close()
 	}
 	closeAuditFile(a.auditFile, a.log)
+}
+
+// buildDeleteGuard wraps the trasher so the push syncer can recognise (and
+// not echo) the deletions sync makes locally (issue #154). No trasher, no
+// guard: sync then refuses to delete anything.
+func (a *Agent) buildDeleteGuard() {
+	if a.trasher == nil {
+		return
+	}
+	a.deleteGuard = syncer.NewDeleteGuard(a.cfg.LocalRoot, a.trasher,
+		syncer.DefaultDeleteGuardTTL, time.Now)
+}
+
+// localRemover returns the remover for sync's local deletions: the trash
+// wrapped by the delete guard. It is a true nil interface when the agent has
+// no trasher, so removeLocalPath refuses to delete (ErrNoRemover).
+func (a *Agent) localRemover() syncer.LocalRemover {
+	if a.deleteGuard == nil {
+		return nil
+	}
+	return a.deleteGuard
 }

@@ -52,6 +52,19 @@ type PullerConfig struct {
 	// reaches the log.
 	Auditor *Auditor
 
+	// Exclude is the watcher.exclude doublestar pattern list. A journaled
+	// descendant of a deleted Drive folder that matches it is never
+	// removed locally (issue #152), the same filter push and bisync use.
+	Exclude []string
+
+	// Remover performs the puller's local deletions (trash, issue #155).
+	// Nil means os.Remove.
+	Remover LocalRemover
+
+	// Gate, if non-nil, is consulted at the start of every poll cycle; a
+	// refusal skips the cycle with ErrRootBlocked (issue #170).
+	Gate RootGate
+
 	// DryRun when true logs intended actions without writing.
 	DryRun bool
 
@@ -83,6 +96,10 @@ type Puller struct {
 	danglingMu sync.Mutex
 	dangling   map[danglingKey]struct{}
 }
+
+// LocalRemover returns the remover the puller deletes through. It exists so
+// the agent wiring (the delete guard, issue #154) can be asserted.
+func (p *Puller) LocalRemover() LocalRemover { return p.cfg.Remover }
 
 // NewPuller creates a Puller. Pass a nil Publisher to disable MQTT events.
 func NewPuller(
@@ -213,6 +230,9 @@ func (p *Puller) PollOnce(ctx context.Context) error {
 
 // poll executes one pull cycle: fetch changes, process each one.
 func (p *Puller) poll(ctx context.Context) error {
+	if err := p.gateErr(); err != nil {
+		return err
+	}
 	token, err := p.ensurePageToken(ctx)
 	if err != nil {
 		p.log.Error("failed to get page token",
@@ -260,7 +280,12 @@ func (p *Puller) poll(ctx context.Context) error {
 		}
 	}
 
-	// Persist the new token only after processing all changes.
+	// Persist the new token only after processing all changes, and only if
+	// local_root is still the synced tree: if the disk dropped mid-cycle the
+	// changes must be replayed after recovery, not skipped (issue #170).
+	if err := p.gateErr(); err != nil {
+		return err
+	}
 	if err := p.persistToken(ctx, changes.NextPageToken); err != nil {
 		p.recordOutcome(Outcome{Op: OutPoll, Err: err})
 		return err
@@ -268,6 +293,14 @@ func (p *Puller) poll(ctx context.Context) error {
 	p.recordOutcome(Outcome{Op: OutPoll})
 
 	return lastErr
+}
+
+// gateErr returns nil when the root gate (if any) lets the cycle act.
+func (p *Puller) gateErr() error {
+	if p.cfg.Gate == nil {
+		return nil
+	}
+	return p.cfg.Gate.Check()
 }
 
 // ensurePageToken retrieves the persisted page token from the store,

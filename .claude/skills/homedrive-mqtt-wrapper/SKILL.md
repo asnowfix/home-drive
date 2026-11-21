@@ -92,7 +92,10 @@ Topic: `homedrive/<host>/<user>/events/<type>` (QoS 1, retain false).
 
 Allowed types: `push.success`, `push.failure`, `pull.success`,
 `pull.failure`, `conflict.detected`, `conflict.resolved`, `dir_rename`,
-`quota.warning`, `quota.exhausted`, `oauth.refresh_failed`.
+`quota.warning`, `quota.exhausted`, `oauth.refresh_failed`,
+`bisync.delete_blocked` (topic `events/bisync/delete_blocked`),
+`root.blocked` / `root.resumed` (topics `events/root/blocked` and
+`events/root/resumed`).
 
 JSON payload format includes always: `ts` (RFC3339 UTC with `Z`, never a local offset), `type`.
 Also emitted today: `conflict.pruned` and the slash-separated `events/bisync/started|completed`. Other

@@ -46,6 +46,12 @@ type RcloneFSConfig struct {
 	// from Drive (PLAN.md §7, issue #50 point 5 / #54 filter parity).
 	Exclude []string
 
+	// IDResolver, when non-nil, resolves the Drive file ID of a Removed
+	// change that is not in the in-memory path cache (typically after a
+	// restart) from the journal. Nil keeps the previous behaviour: such
+	// changes are dropped and the hourly bisync catches them (issue #163).
+	IDResolver RemoteIDResolver
+
 	// Log is the structured logger.
 	Log *slog.Logger
 }
@@ -58,6 +64,7 @@ type RcloneFS struct {
 	fsObj      rclonefs.Fs
 	exclude    []string
 	log        *slog.Logger
+	idResolver RemoteIDResolver
 
 	// mu guards changesSvc and rootID, which are lazily resolved on first
 	// use of the Drive Changes API and cached for the life of the process,
@@ -130,6 +137,7 @@ func newRcloneFS(ctx context.Context, cfg RcloneFSConfig, validate func(*RcloneF
 		remoteName: remoteSectionName(remote),
 		exclude:    cfg.Exclude,
 		log:        log,
+		idResolver: cfg.IDResolver,
 		pathCache:  newIDPathCache(),
 	}
 
@@ -253,6 +261,9 @@ func (r *RcloneFS) MoveDir(ctx context.Context, src, dst string) error {
 func (r *RcloneFS) Stat(ctx context.Context, remotePath string) (RemoteObject, error) {
 	obj, err := r.fsObj.NewObject(ctx, remotePath)
 	if err != nil {
+		if errors.Is(err, rclonefs.ErrorObjectNotFound) {
+			return RemoteObject{}, fmt.Errorf("rcloneclient: stat %q: %w", remotePath, ErrNotFound)
+		}
 		return RemoteObject{}, fmt.Errorf("rcloneclient: stat %q: %w", remotePath, err)
 	}
 	return remoteObjectFromRclone(obj), nil
@@ -401,11 +412,20 @@ func (r *RcloneFS) DownloadFile(ctx context.Context, remotePath, localPath strin
 // List returns every object under dir, recursively (dir "" is the remote
 // root). Object paths are relative to the remote root, like Stat and
 // DownloadFile expect. Unlike listRecursive (the Changes walk), it applies no
-// watcher.exclude filtering and does not touch the id-path cache: it feeds the
-// bisync diff, which compares against an unfiltered local walk (issue #135).
+// watcher.exclude filtering: it feeds the bisync diff, which compares against
+// an unfiltered local walk (issue #135). It does seed the id-path cache, so a
+// later Removed change (which carries only an ID) for anything bisync has seen
+// resolves to a path. The cache is memory only: after a restart it is empty
+// until the first bisync pass (or the Changes full walk) has run, and a
+// Removed change for an unknown ID is dropped until then (issue #152).
 func (r *RcloneFS) List(ctx context.Context, dir string) ([]RemoteObject, error) {
 	var objs []RemoteObject
 	if err := r.listObjects(ctx, dir, &objs); err != nil {
+		if dir != "" && errors.Is(err, rclonefs.ErrorDirNotFound) {
+			// a directory that does not exist holds no objects; the puller
+			// uses this to confirm a deleted folder is really gone
+			return nil, nil
+		}
 		return nil, err
 	}
 	return objs, nil
@@ -421,8 +441,11 @@ func (r *RcloneFS) listObjects(ctx context.Context, dir string, objs *[]RemoteOb
 	for _, entry := range entries {
 		switch v := entry.(type) {
 		case rclonefs.Object:
-			*objs = append(*objs, remoteObjectFromRclone(v))
+			ro := remoteObjectFromRclone(v)
+			r.pathCache.put(ro.RemoteID, ro.Path)
+			*objs = append(*objs, ro)
 		case rclonefs.Directory:
+			r.pathCache.put(v.ID(), entry.Remote())
 			if err := r.listObjects(ctx, entry.Remote(), objs); err != nil {
 				return err
 			}

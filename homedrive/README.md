@@ -28,7 +28,7 @@ Key properties:
 - **Home Assistant integration**: MQTT auto-discovery publishes sync
   status, queue depth, quota usage, and conflict events.
 - **Minimal binary**: only the `drive` rclone backend is linked,
-  keeping the stripped binary under 25 MB.
+  keeping the build lean enough for a Raspberry Pi 3B+.
 
 ## Features
 
@@ -40,7 +40,7 @@ Key properties:
 | Conflict handling | `newer_wins` / `local_wins` / `remote_wins` policies, `.old.<N>` archive |
 | Loop prevention | mtime-based echo suppression via the local journal |
 | Quota awareness | MQTT warning at 90%, push pause at 99%, hysteresis resume |
-| HTTP control | `/status`, `/pause`, `/resume`, `/resync`, `/reload`, `/healthz`, `/metrics` |
+| HTTP control | `/status`, `/pause`, `/resume`, `/resync`, `/bisync/allow-deletes`, `/reload`, `/healthz`, `/metrics` |
 | MQTT publishing | HA Discovery, state sensors, event stream, LWT |
 | Dry-run mode | `--dry-run` flag logs intended actions without remote writes |
 | Exclusion filters | Glob patterns for `.git`, editor temps, `node_modules`, etc. (exclude-only, no includes -- see [migration doc](docs/migrating-rclone-filters.md)) |
@@ -264,6 +264,53 @@ initialized`, `starting homedrive agent`, `http server starting`,
 - `/etc/default/homedrive` is not read; log defaults are in the unit and can
   be overridden in `~/.config/homedrive/env`.
 
+### Local trash
+
+When a file is deleted on Drive, homedrive moves its local copy to the
+[freedesktop.org Trash](https://specifications.freedesktop.org/trash-spec/latest/)
+instead of erasing it (issue #155). Empty directories are simply removed:
+there is nothing in them to recover. The Drive side keeps rclone's default
+(Drive's own trash).
+
+Where the trash lives:
+
+- **User unit (`homedrive.service`)**: the home trash,
+  `$XDG_DATA_HOME/Trash` (`~/.local/share/Trash`), by a plain rename. GNOME
+  shows it.
+- **System unit (`homedrive@<user>.service`)**: `ProtectHome=read-only` and a
+  per-path `ReadWritePaths` give the service its own bind mounts, so renaming
+  into the home trash fails (`EXDEV`/`EROFS`). homedrive then uses the spec's
+  topdir trash of the mount that holds the file, found in
+  `/proc/self/mountinfo`. When `local_root` is itself a mount point, as on the
+  NAS, that is **`<local_root>/.Trash-<uid>`**, inside the synced tree. A
+  valid admin-created `<topdir>/.Trash/<uid>` is used instead when it exists.
+  GNOME does not show this trash on a headless NAS; browse it on disk
+  (`files/` holds the data, `info/*.trashinfo` the original path and date).
+- `.Trash-<uid>` and `.Trash` directly under `local_root` are **always
+  excluded** (watcher, push, bisync, pull), whatever `watcher.exclude`
+  says, so trashed files are never pushed back to Drive. A Drive folder
+  named `.Trash` or `.Trash-<digits>` at the root of the remote therefore
+  stops syncing too.
+- A topdir trash is refused (the file is kept and an error logged) when the
+  file's mount is nested *inside* `local_root`, because that trash would sit
+  in the synced tree under a name that is not excluded. Trash directories
+  that are symlinks are never used or purged through.
+- Conflict-loser retention (`.old.<N>` eviction) still deletes outright; it
+  does not use the trash.
+- If neither trash can take a file, homedrive never copies it and never
+  erases it: it logs an error, writes an audit line (`op: trash` with an
+  `error`), and leaves the file and its journal entry, so the deletion is
+  replanned on the next pull or bisync.
+
+Purging: GNOME's housekeeping does not run on a headless host, so homedrive
+purges **only the entries it trashed itself** (recorded in its state
+database, with the trash directory, entry name and `DeletionDate`) once they
+are older than `trash.purge_after` (default `720h`, 30 days; `0s` disables).
+An entry is purged only while its `.trashinfo` still matches the record;
+anything else in a trash is never touched. Each trash and each purge writes
+one audit line (`op: trash`, `op: trash_purge`). With `--dry-run` nothing is
+trashed or purged; the deletion is audited as before.
+
 ## Configuration
 
 homedrive uses two configuration layers:
@@ -305,6 +352,16 @@ pull:
   changes_api_interval: 30s
   bisync_interval: 1h
 
+bisync:
+  # Mass-deletion guard: a bisync run's deletions (local + Drive together) are
+  # blocked when there are more than 10 AND (more than max_delete_count OR more
+  # than max_delete_pct % of the journaled entries). An empty local walk or an
+  # empty Drive listing against a non-empty journal blocks them whatever the
+  # count. Pushes, pulls and conflicts of that run still happen. Allow one run:
+  # `homedrive ctl allow-deletes` then `homedrive ctl resync`.
+  max_delete_count: 50  # >= 1
+  max_delete_pct: 10    # 1..100
+
 conflict:
   policy: newer_wins
   retention:
@@ -312,6 +369,9 @@ conflict:
     max_age: 0s         # expire siblings older than this; 0s = never (default)
     sweep_interval: 24h  # periodic full-journal sweep; 0s = disabled
   repair_chains: true  # one-time collapse of pre-existing nested chains, see PLAN.md §11.5
+
+trash:
+  purge_after: 720h  # purge entries homedrive trashed after this age; 0s = never (default 720h = 30 days)
 
 state:
   path: /var/lib/homedrive/state.db
@@ -333,6 +393,129 @@ dry_run: false
 
 See [PLAN.md](PLAN.md) section 4 for the full configuration reference
 with all available fields.
+
+### Bisync mass-deletion guard
+
+Bisync propagates deletions both ways from the journal, so a bad listing, a
+stale journal or an unmounted `local_root` could plan many at once. Before it
+executes anything, bisync counts the deletions it planned (local deletions of
+files removed on Drive, plus Drive deletions of files removed locally) as `n`
+and vetoes all of them when
+
+- `n > 10` **and** (`n > bisync.max_delete_count` **or** `n` is more than
+  `bisync.max_delete_pct` percent of the journaled entries); or
+- the local walk, or the Drive listing, is empty while `n > 0` (the journal
+  is non-empty by construction): an unmounted or emptied `local_root`, or a
+  replaced root folder or an rclone remote re-pointed to another account.
+  This blocks whatever the count, and **aborts the whole bisync pass**
+  (no pushes, pulls or conflict handling either), so the agent cannot
+  repopulate an empty side or push to a wrong remote and let the next run
+  slip under the floor. The block persists until the operator overrides it
+  or the side really holds files again.
+
+Runs with 10 deletions or fewer are blocked only by the empty-side rule. A
+blocked run still pushes, pulls and resolves conflicts, and leaves the
+journal untouched for the vetoed paths, so the next run plans the same
+deletions. It writes a `delete_blocked` audit line (planned count, threshold,
+reason, first 20 paths), publishes `<base_topic>/<host>/<user>/events/bisync/delete_blocked`
+(`{ts,type,planned,threshold,reason,paths,dry_run}`; `reason` is `threshold`,
+`empty_local` or `empty_remote`) and shows `bisync_delete_blocked`
+(`planned`, `threshold`, `reason`, `since`) in `/status` until a run is no
+longer vetoed. In dry-run mode the same report is made and nothing is deleted.
+
+To allow the deletions once, after checking they are intended:
+
+```bash
+homedrive ctl allow-deletes   # POST /bisync/allow-deletes (loopback, like /resync)
+homedrive ctl resync
+```
+
+The override can only be armed while a run is blocked (otherwise the
+endpoint answers 409). It is consumed by the next bisync run (hourly or
+forced), whether or not that run had anything to delete, and releases only
+a block of the same reason with no more planned deletions than the one it
+was armed against; anything else is blocked again with its own figures. The
+journal denominator counts only rows with a sync baseline that are not
+excluded. The Changes API pull path has no count guard of its own; it is
+covered by the `local_root` guard below.
+
+### local_root guard (`.homedrive-root`)
+
+The puller, the push syncer and bisync act on `local_root`. If the data disk
+holding it is absent they would act on whatever sits at that path (the root
+filesystem, an empty mount point). Before each unit of work the agent checks
+that `local_root` resolves (symlinks followed) to a directory that carries
+the identity it recorded:
+
+- On the first start (empty journal) the agent writes a random id to
+  `<local_root>/.homedrive-root` (atomically: temp file, fsync, rename) and
+  then records it in the state DB. The marker is local bookkeeping: it is
+  never synced and a Drive entry of that name is ignored. **Do not delete
+  it.** Upgrading an existing install adopts the tree once, provided at
+  least one journaled path exists under `local_root`. `dry_run` writes
+  nothing.
+- When the check fails (reason `missing`, `marker_missing`,
+  `identity_mismatch` or `unreadable`) pulls, pushes, bisync, `ctl resync`,
+  `ctl conflict repair` (both answer 503) and the trash purge do nothing: no
+  download, no local delete or trash, no journal change, no remote
+  operation. `/status` shows `"state":"root_blocked"` and
+  `"local_root_blocked":{"reason","detail","since"}`, an ERROR log names the
+  reason, the audit log gets a `root_blocked` line (`root_resumed` on
+  recovery), and MQTT gets `events/root/blocked` / `events/root/resumed`
+  (`{ts,type:"root.blocked"|"root.resumed",reason,detail}`, not retained).
+- If the data disk is absent when the agent starts and the journal is
+  populated, the agent does not create `local_root`; it starts in a
+  blocked-only mode (HTTP, MQTT, audit and logs, no watcher, pull, push or
+  bisync) and re-checks every `pull.changes_api_interval`.
+- **Recovery is a restart.** When the check passes again the agent logs it,
+  audits `root_resumed`, publishes the event and exits non-zero, so the
+  supervisor (`Restart=on-failure`, `RestartSec=60` in the shipped units)
+  restarts it with fresh inotify watches. The old watches die with the
+  unmounted tree and are not re-armed in process. Changes made while paused
+  are picked up by the next bisync pass.
+
+Notes:
+
+- **systemd `ReadWritePaths=`**: write the `local_root` entry with the `-`
+  prefix (`ReadWritePaths=-/path/to/local_root`). Without it systemd refuses
+  to start the unit with `226/NAMESPACE` when the path does not exist (an
+  absent data disk), so the agent never reaches the blocked-only mode above.
+  `make install` now generates it that way. A unit installed earlier needs the
+  same one-character edit in its drop-in (for the system unit,
+  `/etc/systemd/system/homedrive@<user>.service.d/rw-paths.conf`), followed
+  by `systemctl daemon-reload`; this is not done automatically on existing
+  hosts.
+- **After a resume restart** the watcher starts from scratch and local
+  changes made while paused are only picked up by the next bisync pass, which
+  can be up to `pull.bisync_interval` (one hour by default) after the
+  restart. `ctl resync` forces it.
+- **Never reset (delete) the state DB while the data disk is absent.** The
+  guard cannot protect that case. With an empty journal and a `local_root`
+  that is a real directory (not a symlink) under an unmounted mount point,
+  the agent sees a first install: it records a new identity for that stray
+  empty directory and starts downloading the whole Drive into it, on the root
+  filesystem. Once the disk is mounted again that copy stays hidden under the
+  mount point, and the agent is blocked with `identity_mismatch` (the disk's marker
+  differs from the new id). To clean up: stop the agent, unmount the disk,
+  delete the stray files left in the mount point directory, mount the disk,
+  restore the previous state DB (or, if there is no copy, delete the new one
+  so the next start adopts the disk's own marker and rebuilds the journal
+  from a bisync pass), then start the agent. Do not edit the
+  marker to match. Upgrading an install that predates the guard adopts the
+  tree only when a journaled path exists under the resolved `local_root`.
+
+If the tree is correct but the marker was lost (deleted by hand, a copy that
+skipped dotfiles), the block reason is `marker_missing` and `detail` carries
+the expected id. With the agent running, restore the marker (the agent then
+exits and restarts by itself):
+
+```bash
+printf '%s\n' <expected-id> > <local_root>/.homedrive-root
+```
+
+For `identity_mismatch` the directory belongs to another install or tree:
+fix the mount or `local_root`; do not edit the marker to match unless you
+are certain it is the right tree.
 
 ### HTTP control endpoint auth
 
@@ -383,6 +566,8 @@ Commands:
   ctl pause         Pause sync operations
   ctl resume        Resume sync operations
   ctl resync        Force an immediate bisync
+  ctl allow-deletes Allow the next bisync run's deletions once, bypassing
+                    the mass-deletion guard
   ctl conflict repair [--dry-run]
                     Collapse pre-existing nested .old.<N> chains onto
                     their base file (PLAN.md §11.5); runs automatically
@@ -477,7 +662,7 @@ orb run -m dev -- go test -race ./homedrive/internal/watcher/...
 
 Every PR must pass these checks:
 
-- Binary size < 25 MB (stripped)
+- Runs on a Raspberry Pi 3B+ alongside other workloads (binary size reported, not gated)
 - Exactly 1 rclone backend registered (`drive`)
 - Test coverage > 70%
 - No `panic` outside `main`

@@ -19,6 +19,9 @@ import (
 // cancelled (SIGTERM/SIGINT), then drains in-flight work and shuts down
 // cleanly. See PLAN.md §3.2 for the runtime topology.
 func (a *Agent) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	a.cancelRun = cancel
 	a.startTime = time.Now()
 	a.log.Info("starting homedrive agent",
 		"version", a.version,
@@ -29,7 +32,20 @@ func (a *Agent) Run(ctx context.Context) error {
 	)
 
 	var wg sync.WaitGroup
-	a.startComponents(ctx, &wg)
+	// Startup check (issue #170): records the identity on a first install.
+	// A missing or foreign local_root is reported and nothing else starts
+	// (no watcher, pull, push, bisync, purge); the agent exits once it passes.
+	if err := a.rootGuard.Check(); err != nil {
+		a.log.Error("starting in blocked-only mode: status, MQTT and logs report; no sync runs",
+			"op", "root_guard", "error", err)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.runRootRecheck(ctx)
+		}()
+	} else {
+		a.startComponents(ctx, &wg)
+	}
 
 	httpErrCh := make(chan error, 1)
 	go func() { httpErrCh <- a.httpSrv.ListenAndServe() }()
@@ -40,12 +56,15 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.log.Info("shutdown signal received, draining in-flight work")
 
 	a.shutdownHTTP(httpErrCh)
-	wg.Wait()      // watcher, pump, push syncer, pull loop, bisync all drained
+	wg.Wait()        // watcher, pump, push syncer, pull loop, bisync all drained
 	a.finalPublish() // nothing else writes counters now; last retained doc is exact
 	a.shutdownMQTT()
 	a.shutdownStore()
 
 	a.log.Info("homedrive agent stopped")
+	if a.rootResumed.Load() {
+		return ErrRootResumed
+	}
 	return nil
 }
 
@@ -76,6 +95,12 @@ func (a *Agent) startComponents(ctx context.Context, wg *sync.WaitGroup) {
 	go func() {
 		defer wg.Done()
 		a.runPullLoop(ctx)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.runTrashPurge(ctx)
 	}()
 
 	wg.Add(1)
@@ -204,6 +229,9 @@ func (a *Agent) pollOnceGuarded(ctx context.Context) {
 	defer a.bisyncMu.RUnlock()
 
 	err := a.puller.PollOnce(ctx)
+	if errors.Is(err, syncer.ErrRootBlocked) {
+		return // paused: the guard already logged, audited and published it
+	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		a.log.Error("poll error", "error", err)
 		return
@@ -272,5 +300,40 @@ func toSyncerOp(op watcher.Op) syncer.Op {
 		return syncer.OpRename
 	default:
 		return syncer.OpWrite
+	}
+}
+
+// trashPurgeInterval is how often the agent purges the trash entries it
+// created that are older than trash.purge_after (issue #155).
+const trashPurgeInterval = time.Hour
+
+// runTrashPurge purges aged homedrive-trashed entries at start and then
+// every trashPurgeInterval, until ctx is canceled.
+func (a *Agent) runTrashPurge(ctx context.Context) {
+	if a.trasher == nil { // partially wired agent (tests)
+		return
+	}
+	ticker := time.NewTicker(trashPurgeInterval)
+	defer ticker.Stop()
+	for {
+		a.purgeTrash()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// purgeTrash runs one purge pass unless local_root is not the synced tree:
+// the topdir trash lives on the data disk, and a purge with the disk absent
+// would drop every due record as "trash directory is gone" (issue #170).
+func (a *Agent) purgeTrash() {
+	if err := a.rootGuard.Check(); err != nil {
+		a.log.Debug("trash purge skipped: local_root is not the synced tree", "op", "trash_purge")
+		return
+	}
+	if _, err := a.trasher.Purge(); err != nil {
+		a.log.Warn("trash purge incomplete", "op", "trash_purge", "error", err)
 	}
 }

@@ -90,6 +90,17 @@ func ctlRunStatus(cmd *cobra.Command) error {
 		"dry_run", info.DryRun,
 		"uptime_seconds", info.UptimeSeconds,
 	)
+	if blk := info.BisyncDeleteBlocked; blk != nil {
+		slog.Warn("bisync deletions blocked by the mass-deletion guard; "+
+			"run `ctl allow-deletes` then `ctl resync` to allow them once",
+			"planned", blk.Planned, "threshold", blk.Threshold,
+			"reason", blk.Reason, "since", blk.Since)
+	}
+	if blk := info.LocalRootBlocked; blk != nil {
+		slog.Error("pulls, pushes and bisync paused: local_root is not the synced tree; "+
+			"they resume by themselves once it is back",
+			"reason", blk.Reason, "detail", blk.Detail, "since", blk.Since)
+	}
 	return nil
 }
 

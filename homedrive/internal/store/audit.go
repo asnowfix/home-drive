@@ -21,8 +21,13 @@ type AuditEntry struct {
 	// Reason explains a "conflict_gc" entry: "max_per_file" or "max_age"
 	// (see PLAN.md §11.5).
 	Reason string `json:"reason,omitempty"`
-	DryRun bool   `json:"dry_run,omitempty"`
-	Error  string `json:"error,omitempty"`
+	// Threshold and Paths describe a "delete_blocked" entry (issue #156):
+	// the largest deletion count the guard would have allowed and the first
+	// few vetoed paths.
+	Threshold int      `json:"threshold,omitempty"`
+	Paths     []string `json:"paths,omitempty"`
+	DryRun    bool     `json:"dry_run,omitempty"`
+	Error     string   `json:"error,omitempty"`
 }
 
 // Auditor appends JSONL lines to a writer (typically a file).

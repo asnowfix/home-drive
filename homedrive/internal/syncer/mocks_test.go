@@ -45,6 +45,13 @@ type mockRemoteFS struct {
 	// error hooks for push tests
 	copyErr func(path string) error
 	delErr  func(path string) error
+	// listErr, if set, makes List fail (a failed or partial listing).
+	listErr error
+	// listHidden paths exist (Stat finds them) but List omits them, like
+	// objects a recursive listing structurally cannot return.
+	listHidden map[string]bool
+	// statErr, if set, makes Stat fail with it instead of consulting files.
+	statErr error
 	// moveDirErr, if set, is consulted by MoveDir.
 	moveDirErr func(src string) error
 
@@ -153,9 +160,12 @@ func (m *mockRemoteFS) MoveDir(_ context.Context, src, dst string) error {
 func (m *mockRemoteFS) Stat(_ context.Context, path string) (RemoteObject, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.statErr != nil {
+		return RemoteObject{}, m.statErr
+	}
 	obj, ok := m.files[path]
 	if !ok {
-		return RemoteObject{}, fmt.Errorf("not found: %s", path)
+		return RemoteObject{}, fmt.Errorf("not found: %s: %w", path, ErrRemoteNotFound)
 	}
 	return obj, nil
 }
@@ -208,8 +218,14 @@ func (m *mockRemoteFS) DownloadFile(_ context.Context, remotePath, localPath str
 func (m *mockRemoteFS) List(_ context.Context, dir string) ([]RemoteObject, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
 	result := make([]RemoteObject, 0, len(m.files))
 	for p, obj := range m.files {
+		if m.listHidden[p] {
+			continue
+		}
 		if dir == "" || strings.HasPrefix(p, dir+"/") {
 			result = append(result, obj)
 		}

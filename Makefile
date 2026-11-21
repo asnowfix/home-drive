@@ -166,7 +166,7 @@ ifeq ($(shell uname -s),Linux)
 	sudo install -m 0644 $(LINUX_DIR)/homedrive.logrotate /etc/logrotate.d/homedrive
 	@if [ -n "$(LOCAL_ROOT)" ]; then \
 		sudo install -d -m 0755 $(UNIT_DIR)/$(SERVICE).d; \
-		printf '[Service]\nReadWritePaths=%s %s/.config/rclone\n' "$(LOCAL_ROOT)" "$(HOME)" \
+		printf '[Service]\nReadWritePaths=-%s %s/.config/rclone\n' "$(LOCAL_ROOT)" "$(HOME)" \
 			| sudo tee $(UNIT_DIR)/$(SERVICE).d/rw-paths.conf >/dev/null; \
 	else \
 		echo "note: $(USER_CONFIG) not found; skipping the ReadWritePaths drop-in (re-run 'make install' after creating it)"; \

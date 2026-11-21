@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -36,6 +37,10 @@ func main() {
 
 	root := newRootCmd(logLevel)
 	if err := root.ExecuteContext(context.Background()); err != nil {
+		if errors.Is(err, ErrRootResumed) {
+			slog.Warn("planned restart", "error", err) // still exits non-zero for Restart=on-failure
+			os.Exit(1)
+		}
 		slog.Error("fatal error", "error", err)
 		os.Exit(1)
 	}
@@ -132,6 +137,7 @@ func newCtlCmd() *cobra.Command {
 	ctl.AddCommand(newCtlPauseCmd())
 	ctl.AddCommand(newCtlResumeCmd())
 	ctl.AddCommand(newCtlResyncCmd())
+	ctl.AddCommand(newCtlAllowDeletesCmd())
 	ctl.AddCommand(newCtlConflictCmd())
 
 	return ctl
@@ -173,6 +179,17 @@ func newCtlResyncCmd() *cobra.Command {
 		Short: "Force an immediate bisync",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return ctlRunAction(cmd, "resync")
+		},
+	}
+}
+
+func newCtlAllowDeletesCmd() *cobra.Command {
+	return &cobra.Command{
+		Use: "allow-deletes",
+		Short: "Allow the next bisync run's deletions once, bypassing the mass-deletion guard " +
+			"(then run `ctl resync`)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return ctlRunAction(cmd, "bisync/allow-deletes")
 		},
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,6 +47,29 @@ conflict:
 	}
 	if cfg.Conflict.RepairChains == nil || !*cfg.Conflict.RepairChains {
 		t.Errorf("RepairChains = %v, want a non-nil pointer to true", cfg.Conflict.RepairChains)
+	}
+}
+
+func TestLoad_TrashPurgeAfter_Cases(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want time.Duration
+	}{
+		{"omitted_defaults_to_30_days", "local_root: /tmp/sync\n", 30 * 24 * time.Hour},
+		{"explicit", "trash:\n  purge_after: 48h\n", 48 * time.Hour},
+		{"zero_disables", "trash:\n  purge_after: 0s\n", 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, tc.yaml))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got := cfg.Trash.PurgeAfterOrDefault(); got != tc.want {
+				t.Errorf("PurgeAfterOrDefault = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -142,4 +166,50 @@ func TestLoad_MissingFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("Load: expected error for missing file, got nil")
 	}
+}
+
+func TestLoad_BisyncGuard_Cases(t *testing.T) {
+	tests := []struct {
+		name      string
+		yaml      string
+		wantCount int
+		wantPct   int
+		wantErr   string
+	}{
+		{name: "omitted_stays_unset", yaml: "local_root: /x\n"},
+		{name: "explicit_values", yaml: "bisync:\n  max_delete_count: 5\n  max_delete_pct: 100\n", wantCount: 5, wantPct: 100},
+		{name: "partial_keeps_other_default", yaml: "bisync:\n  max_delete_pct: 25\n", wantPct: 25},
+		{name: "count_zero_rejected", yaml: "bisync:\n  max_delete_count: 0\n", wantErr: "max_delete_count"},
+		{name: "count_negative_rejected", yaml: "bisync:\n  max_delete_count: -3\n", wantErr: "max_delete_count"},
+		{name: "pct_zero_rejected", yaml: "bisync:\n  max_delete_pct: 0\n", wantErr: "max_delete_pct"},
+		{name: "pct_above_100_rejected", yaml: "bisync:\n  max_delete_pct: 101\n", wantErr: "max_delete_pct"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, tc.yaml))
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want one mentioning %s", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			// 0 means unset: the syncer applies its defaults (50 and 10).
+			if got := derefOr0(cfg.Bisync.MaxDeleteCount); got != tc.wantCount {
+				t.Errorf("max_delete_count = %d, want %d", got, tc.wantCount)
+			}
+			if got := derefOr0(cfg.Bisync.MaxDeletePct); got != tc.wantPct {
+				t.Errorf("max_delete_pct = %d, want %d", got, tc.wantPct)
+			}
+		})
+	}
+}
+
+func derefOr0(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
 }

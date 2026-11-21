@@ -35,12 +35,13 @@ type ServerConfig struct {
 
 // Deps groups the component interfaces the server controls.
 type Deps struct {
-	Pausable       Pausable
-	Resyncable     Resyncable
-	Reloadable     Reloadable
-	StatusProvider StatusProvider
-	HealthChecker  HealthChecker
-	ChainRepairer  ChainRepairer
+	Pausable        Pausable
+	Resyncable      Resyncable
+	Reloadable      Reloadable
+	StatusProvider  StatusProvider
+	HealthChecker   HealthChecker
+	ChainRepairer   ChainRepairer
+	DeleteOverrider DeleteOverrider
 }
 
 // Server is the HTTP control endpoint for the homedrive agent.
@@ -151,6 +152,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/pause", s.methodOnly(http.MethodPost, s.handlePause))
 	mux.HandleFunc("/resume", s.methodOnly(http.MethodPost, s.handleResume))
 	mux.HandleFunc("/resync", s.methodOnly(http.MethodPost, s.handleResync))
+	mux.HandleFunc("/bisync/allow-deletes", s.methodOnly(http.MethodPost, s.handleAllowDeletes))
 	mux.HandleFunc("/reload", s.methodOnly(http.MethodPost, s.handleReload))
 	mux.HandleFunc("/conflict/repair", s.methodOnly(http.MethodPost, s.handleConflictRepair))
 	mux.HandleFunc("/healthz", s.methodOnly(http.MethodGet, s.handleHealthz))

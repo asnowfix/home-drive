@@ -4,7 +4,30 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/asnowfix/home-drive/homedrive/internal/pathfilter"
 )
+
+// skipTrashEvent reports whether ev concerns a topdir trash directory
+// directly under the local root (".Trash-<uid>", ".Trash"), which is never
+// pushed (issue #155). The watcher already excludes it; this keeps the push
+// path safe on its own.
+func (s *Syncer) skipTrashEvent(ev Event) bool {
+	return pathfilter.IsTrash(filepath.ToSlash(ev.Path))
+}
+
+// skipUnpairedRename reports whether ev is an unpaired OpRename (the old path
+// of a file moved out of the watched tree, e.g. into the trash). It makes no
+// Drive call: converting it into a removal could delete a conflict winner
+// while the pull path swaps the file in (issue #155 review). A journaled file
+// moved out of the root is propagated by bisync's journal-driven deletion.
+func (s *Syncer) skipUnpairedRename(logger *slog.Logger, ev Event) bool {
+	if ev.Op != OpRename {
+		return false
+	}
+	logger.Debug("ignoring unpaired rename: no Drive call", "origin", "local")
+	return true
+}
 
 // skipDirEvent reports whether ev is a create/write event for a local
 // directory, which must not be uploaded as a file (issue #105). Directories
