@@ -1077,6 +1077,18 @@ two independent copies of one algorithm that could silently drift apart.
 - [x] MQTT reconnect gap capped at 2 min (paho defaults to 10 min).
 - [ ] #142: auth observer, non-fatal MQTT connect, `state:"error"` on failed start.
 
+### Desktop mode (D0-D5)
+
+Design: [`docs/design/desktop-mode.md`](docs/design/desktop-mode.md) (accepted,
+option O1, epic #147). Each phase is one PR.
+
+- [x] D0: supported session-bound `rclone mount` user unit + docs (#175).
+- [ ] D1: `homedrive mount` skeleton (#176).
+- [ ] D2: `GuardFs` + bounded timeouts (#177).
+- [ ] D3: session unit, suspend/resume (#178).
+- [ ] D4: conflicts (#179).
+- [ ] D5: pinning + observability (#180).
+
 ---
 
 ## 15. Packaging
