@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"github.com/asnowfix/home-drive/homedrive/internal/mqtt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -206,7 +207,14 @@ func (f *fakeStatusPub) first() (homedrive.StatusV2, bool) {
 // guards.local_root) must still be published: that is the case schema 2.1
 // exists to report.
 func TestAgent_Run_BlockedOnlyPublishesStatus(t *testing.T) {
-	a, _, logs := newBlockedRootAgent(t)
+	// No prior Check(): the real startup path must evaluate the guard
+	// before the first document is built.
+	a, _ := newIntegrationTestAgent(t)
+	if err := os.RemoveAll(a.cfg.LocalRoot); err != nil {
+		t.Fatal(err)
+	}
+	logs := &syncBuf{}
+	a.log = slog.New(slog.NewJSONHandler(logs, nil))
 	a.stats = stats.New(stats.Config{})
 	pub := &fakeStatusPub{}
 	a.statePub = mqtt.NewStatePublisher(pub,
