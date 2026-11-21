@@ -5,19 +5,21 @@
 # USER unit. Copy to ~/.config/systemd/user/ and enable with `systemctl --user`.
 # Never WantedBy=default.target: with linger that would mount at boot, without a session.
 #
-# Paths, each written once (user-manager specifiers):
-#   %h/GoogleDrive              mount point
-#   %C/home-drive               rclone cache ($XDG_CACHE_HOME/home-drive, default ~/.cache/home-drive)
-#   %E/homedrive/rclone.conf    private token file ($XDG_CONFIG_HOME/..., default ~/.config/...)
-# This unit expects a remote named "gdrive" in that token file.
+# Defaults are written once, in [Service] Environment=, and can be overridden in
+# %E/homedrive/desktop-rclone.env (HD_MOUNT, HD_REMOTE, HD_RCLONE, HD_CONFIG,
+# RCLONE_VFS_CACHE_MAX_SIZE). The token file path is the one value that is also
+# written in AssertPathExists= (which cannot read variables): change both if
+# you move it. The cache dir is %C/home-drive ($XDG_CACHE_HOME/home-drive,
+# default ~/.cache/home-drive); %C and %E follow the user manager's environment.
 [Unit]
-Description=homedrive desktop mode baseline: rclone mount of Google Drive on %h/GoogleDrive
+Description=homedrive desktop mode baseline: rclone mount of Google Drive
 Documentation=https://github.com/asnowfix/home-drive/blob/main/homedrive/docs/desktop-rclone-mount.md
 PartOf=graphical-session.target
-After=graphical-session.target network-online.target
+After=graphical-session.target
 Requisite=graphical-session.target
-# Never start without the private token file; never fall back to ~/.config/rclone/rclone.conf.
-ConditionPathExists=%E/homedrive/rclone.conf
+# A missing private token file is a visible failure (never a fallback to
+# ~/.config/rclone/rclone.conf): see `systemctl --user status`.
+AssertPathExists=%E/homedrive/rclone.conf
 # Retry forever (a lost network is not a reason to give up), like the NAS unit (#88).
 StartLimitIntervalSec=0
 
@@ -25,28 +27,38 @@ StartLimitIntervalSec=0
 # rclone v1.76.0 foreground mount calls sd_notify READY=1 once the mount is live
 # (cmd/mountlib/mount.go -> lib/systemd.Notify), and STOPPING=1 on exit.
 Type=notify
-# Optional, user-owned: RCLONE_VFS_CACHE_MAX_SIZE=<size> (the cache cap, see the docs).
+Environment=HD_MOUNT=%h/GoogleDrive HD_REMOTE=gdrive: HD_RCLONE=%h/.local/bin/rclone HD_CONFIG=%E/homedrive/rclone.conf
+# Optional, user-owned overrides (see above). Loaded after Environment=.
 EnvironmentFile=-%E/homedrive/desktop-rclone.env
-ExecStartPre=/bin/mkdir -p %h/GoogleDrive
-# Clear a stale mount left by a crash ("Transport endpoint is not connected"); failure is fine.
-ExecStartPre=-/bin/sh -c 'fusermount3 -u "$1" || fusermount3 -uz "$1"' sh %h/GoogleDrive
-# --vfs-cache-max-age is 10 years: rclone's 1 h default would empty the cache hourly.
-# Eviction is by size cap (RCLONE_VFS_CACHE_MAX_SIZE) and --vfs-cache-min-free-space only.
-ExecStart=/usr/bin/rclone mount gdrive: %h/GoogleDrive \
-    --config %E/homedrive/rclone.conf \
+# Clear the leftover of a crashed mount first, before mkdir (mkdir fails on a dead
+# endpoint). Only when it is an rclone FUSE mount whose daemon is gone (stat fails);
+# a live mount that is not ours is never touched.
+ExecStartPre=-/bin/sh -c 'if findmnt -rn -t fuse.rclone -M "$HD_MOUNT" >/dev/null && ! stat "$HD_MOUNT" >/dev/null 2>&1; then fusermount3 -uz "$HD_MOUNT"; fi'
+ExecStartPre=/bin/sh -c 'mkdir -p "$HD_MOUNT"'
+# The executable cannot be a systemd variable, hence the exec through sh (same PID,
+# so Type=notify still works). --vfs-cache-max-age is 10 years: rclone's 1 h default
+# would empty the cache hourly. Eviction is by size cap (RCLONE_VFS_CACHE_MAX_SIZE)
+# and --vfs-cache-min-free-space only.
+ExecStart=/bin/sh -c 'exec "$HD_RCLONE" mount "$HD_REMOTE" "$HD_MOUNT" \
+    --config "$HD_CONFIG" \
     --cache-dir %C/home-drive \
     --vfs-cache-mode full \
     --vfs-cache-min-free-space 5G \
     --vfs-cache-max-age 87600h \
     --vfs-cache-poll-interval 10s \
     --poll-interval 15s \
-    --dir-cache-time 1h
-# SIGTERM makes rclone unmount and flush queued uploads; allow time for that.
-# Afterwards (also after a kill or crash) make sure nothing stays mounted: plain, then lazy.
-ExecStopPost=-/bin/sh -c 'fusermount3 -u "$1" || fusermount3 -uz "$1"' sh %h/GoogleDrive
-TimeoutStopSec=90
+    --dir-cache-time 1h'
+# SIGTERM: rclone v1.76.0 unmounts, cancels in-flight uploads and exits at once. It
+# does NOT drain the upload queue; dirty files stay in the cache and upload at the
+# next start. Same guarded cleanup as ExecStartPre= (after a crash or kill only).
+ExecStopPost=-/bin/sh -c 'if findmnt -rn -t fuse.rclone -M "$HD_MOUNT" >/dev/null && ! stat "$HD_MOUNT" >/dev/null 2>&1; then fusermount3 -uz "$HD_MOUNT"; fi'
+# Headroom for a slow unmount; there is no flush to wait for.
+TimeoutStopSec=45
+# rclone exits 143 (128+SIGTERM) on a clean stop: not a failure.
+SuccessExitStatus=143
 Restart=on-failure
-RestartSec=10
+# 60 s, as the NAS unit: a bad token must not hammer Google's OAuth endpoint.
+RestartSec=60
 # No NoNewPrivileges/ProtectHome: fusermount3 is setuid and the mount lives under $HOME.
 
 [Install]
