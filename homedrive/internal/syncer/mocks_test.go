@@ -61,6 +61,13 @@ type mockRemoteFS struct {
 	movedFiles      []moveCall
 	movedDirs       []moveCall
 	deletedFiles    []string
+
+	// dirs are explicit remote folders (issue #174): DeleteFile on one
+	// reports ErrRemoteIsDir, RemoveEmptyDir trashes it when empty.
+	dirs map[string]bool
+	// rmDirErr, if set, is consulted first by RemoveEmptyDir.
+	rmDirErr    func(path string) error
+	removedDirs []string
 }
 
 type downloadCall struct {
@@ -124,6 +131,9 @@ func (m *mockRemoteFS) DeleteFile(_ context.Context, path string) error {
 		if err := m.delErr(path); err != nil {
 			return err
 		}
+	}
+	if _, isFile := m.files[path]; !isFile && m.dirs[path] {
+		return fmt.Errorf("mock delete %s: %w", path, ErrRemoteIsDir)
 	}
 	delete(m.files, path)
 	return nil

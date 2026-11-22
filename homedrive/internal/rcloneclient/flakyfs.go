@@ -113,6 +113,14 @@ func (f *FlakyFS) DeleteFile(ctx context.Context, path string) error {
 	return f.inner.DeleteFile(ctx, path)
 }
 
+// RemoveEmptyDir implements RemoteFS.
+func (f *FlakyFS) RemoveEmptyDir(ctx context.Context, path string) error {
+	if err := f.applyRule(ctx, "RemoveEmptyDir", path); err != nil {
+		return err
+	}
+	return f.inner.RemoveEmptyDir(ctx, path)
+}
+
 // MoveFile implements RemoteFS.
 func (f *FlakyFS) MoveFile(ctx context.Context, src, dst string) error {
 	if err := f.applyRule(ctx, "MoveFile", src); err != nil {
