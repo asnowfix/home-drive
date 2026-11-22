@@ -42,6 +42,9 @@ type MemFS struct {
 	quota      Quota
 	idSeq      int64
 	startToken string
+	// dirs holds explicit folders seeded with SeedDir (issue #174); a
+	// folder also exists implicitly while a file lives under it.
+	dirs map[string]struct{}
 }
 
 // NewMemFS creates a new in-memory remote filesystem.
@@ -145,6 +148,9 @@ func (m *MemFS) DeleteFile(_ context.Context, remotePath string) error {
 
 	obj, ok := m.files[remotePath]
 	if !ok {
+		if m.isDirLocked(remotePath) {
+			return fmt.Errorf("delete %q: %w", remotePath, ErrIsDir)
+		}
 		return fmt.Errorf("delete %q: %w", remotePath, ErrNotFound)
 	}
 	m.quota.Used -= obj.Size

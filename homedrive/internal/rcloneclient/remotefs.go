@@ -93,6 +93,13 @@ type RemoteFS interface {
 	// DeleteFile removes the file at the given remote path.
 	DeleteFile(ctx context.Context, path string) error
 
+	// RemoveEmptyDir moves the remote folder at path to the trash, only if
+	// it has no child at all, and never recursively (issue #174). It
+	// refuses the remote root, reports a missing folder as ErrNotFound and
+	// a folder with any child (trashed or unknown included) as
+	// ErrDirNotEmpty. It never deletes permanently.
+	RemoveEmptyDir(ctx context.Context, path string) error
+
 	// MoveFile renames or moves a remote file from src to dst.
 	MoveFile(ctx context.Context, src, dst string) error
 

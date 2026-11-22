@@ -47,6 +47,16 @@ func (d *DryRunFS) DeleteFile(_ context.Context, remotePath string) error {
 	return nil
 }
 
+// RemoveEmptyDir logs the intended folder trash and returns success
+// without touching the remote.
+func (d *DryRunFS) RemoveEmptyDir(_ context.Context, remotePath string) error {
+	d.log.Info("would remove empty directory",
+		"op", "RemoveEmptyDir",
+		"path", remotePath,
+	)
+	return nil
+}
+
 // MoveFile logs the intended move and returns success.
 func (d *DryRunFS) MoveFile(_ context.Context, src, dst string) error {
 	d.log.Info("would move file",
