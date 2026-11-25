@@ -24,7 +24,8 @@ func (f flushRecorder) DirCacheFlush() { *f.flushes++ }
 type fakeDrive struct {
 	mu        sync.Mutex
 	folders   []string // ids returned for the folder lookup
-	children  []string // ids returned for the child query
+	children  []string // non-trashed children of the folder
+	trashed   []string // children already in the Drive trash
 	listErr   bool     // child query fails with HTTP 500
 	queries   []string
 	patches   []map[string]any
@@ -45,7 +46,12 @@ func (d *fakeDrive) handler(t *testing.T) http.HandlerFunc {
 					http.Error(w, "boom", http.StatusInternalServerError)
 					return
 				}
+				// Honour the query like Drive does: trashed children
+				// only show up when it does not filter them out.
 				ids = d.children
+				if !strings.Contains(q, "trashed = false") {
+					ids = append(append([]string(nil), ids...), d.trashed...)
+				}
 			}
 			list := &drivev3.FileList{}
 			for _, id := range ids {
@@ -73,8 +79,11 @@ func TestRemoveEmptyDir_Cases(t *testing.T) {
 		wantTrash bool
 	}{
 		{name: "empty folder trashed", path: "a/d", drive: &fakeDrive{folders: []string{"fid"}}, wantTrash: true},
-		{name: "any child refuses", path: "d",
-			drive: &fakeDrive{folders: []string{"fid"}, children: []string{"trashed-child"}}, wantErr: ErrDirNotEmpty},
+		{name: "only trashed children: folder trashed", path: "d",
+			drive: &fakeDrive{folders: []string{"fid"}, trashed: []string{"trashed-child"}}, wantTrash: true},
+		{name: "non-trashed child refuses", path: "d",
+			drive:   &fakeDrive{folders: []string{"fid"}, children: []string{"live-child"}, trashed: []string{"t"}},
+			wantErr: ErrDirNotEmpty},
 		{name: "missing folder", path: "d", drive: &fakeDrive{}, wantErr: ErrNotFound},
 		{name: "duplicate folder names refused", path: "d",
 			drive: &fakeDrive{folders: []string{"f1", "f2"}}, wantErr: ErrDirNotEmpty},
@@ -118,8 +127,8 @@ func TestRemoveEmptyDir_Cases(t *testing.T) {
 				t.Errorf("non-trash write requests: %v", d.forbidden)
 			}
 			for _, q := range d.queries {
-				if strings.HasPrefix(q, "'") && strings.Contains(q, "trashed") {
-					t.Errorf("child query %q filters on trashed: trashed children must count", q)
+				if strings.HasPrefix(q, "'") && !strings.Contains(q, "trashed = false") {
+					t.Errorf("child query %q must count only non-trashed children", q)
 				}
 			}
 		})
