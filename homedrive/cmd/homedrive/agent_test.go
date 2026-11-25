@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -146,6 +147,74 @@ func TestAgent_LocalEditPushesToRemote(t *testing.T) {
 		case <-deadline:
 			t.Fatal("timed out waiting for the local edit to be pushed to the remote")
 		}
+	}
+}
+
+// TestAgent_RootMissingAtStart_BlockedThenRestart walks the whole NAS story
+// end to end (issue #173): local_root is absent when the agent starts, the
+// agent runs blocked-only (no sync, status says root_blocked), the tree
+// returns, and the agent exits with ErrRootResumed for a supervised restart.
+func TestAgent_RootMissingAtStart_BlockedThenRestart(t *testing.T) {
+	a, remote := newIntegrationTestAgent(t)
+	root := a.cfg.LocalRoot
+	disk := root + ".disk"
+	// A synced tree whose disk is absent: populated journal, no root, and no
+	// marker yet (an install that predates the guard, so adoption applies).
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.journal.Put(store.JournalEntry{Path: "a.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(root, disk); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg.Pull.ChangesAPIInterval = config.Duration{Duration: 20 * time.Millisecond}
+	done := runAgentUntilExit(t, a)
+
+	waitFor(t, "blocked state", func() bool { return a.rootGuard.Block() != nil })
+	info, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State != "root_blocked" || info.LocalRootBlocked == nil ||
+		info.LocalRootBlocked.Reason != syncer.RootBlockMissing {
+		t.Fatalf("status = %q block=%+v, want root_blocked/missing", info.State, info.LocalRootBlocked)
+	}
+	time.Sleep(100 * time.Millisecond) // several recheck ticks: still blocked, still running
+	select {
+	case err := <-done:
+		t.Fatalf("agent exited while local_root was missing: %v", err)
+	default:
+	}
+	if !a.stats.Snapshot(time.Now()).LastPull.IsZero() || remote.HasCopiedFrom(filepath.Join(root, "a.txt")) {
+		t.Error("sync activity while blocked")
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("the agent must not create a missing local_root of a synced tree: %v", err)
+	}
+
+	if err := os.Rename(disk, root); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrRootResumed) {
+			t.Fatalf("Run = %v, want ErrRootResumed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("agent did not exit after local_root came back")
+	}
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

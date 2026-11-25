@@ -186,6 +186,55 @@ func TestRootGuard_Check(t *testing.T) {
 	}
 }
 
+// TestRootGuard_Adoption covers the upgrade path (journal populated, no
+// marker, no stored id): only a journaled path strictly under the root is
+// evidence. Entries resolving to the root itself or outside it are not.
+func TestRootGuard_Adoption(t *testing.T) {
+	tests := []struct {
+		name      string
+		journal   []string
+		files     []string
+		wantAdopt bool
+	}{
+		{name: "one_genuine_path_adopts", journal: []string{"a.txt", "b.txt"}, files: []string{"b.txt"}, wantAdopt: true},
+		{name: "nested_genuine_path_adopts", journal: []string{"d/e/f.txt"}, files: []string{"d/e/f.txt"}, wantAdopt: true},
+		{name: "no_path_present_blocks", journal: []string{"a.txt"}},
+		{name: "dot_entry_does_not_adopt", journal: []string{"."}},
+		{name: "empty_entry_does_not_adopt", journal: []string{""}},
+		{name: "slash_entry_does_not_adopt", journal: []string{"/"}},
+		{name: "dot_dot_inside_resolves_to_root", journal: []string{"x/.."}},
+		{name: "parent_escape_does_not_adopt", journal: []string{".."}},
+		{name: "root_entry_plus_missing_blocks", journal: []string{".", "a.txt"}},
+		{name: "root_entry_plus_genuine_adopts", journal: []string{".", "a.txt"}, files: []string{"a.txt"}, wantAdopt: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newRootGuardEnv(t, false)
+			e.mkRoot(t)
+			e.seedJournal(tc.journal...)
+			for _, f := range tc.files {
+				e.writeFile(t, f)
+			}
+			err := e.guard.Check()
+			if tc.wantAdopt {
+				if err != nil || e.marker() == "" {
+					t.Fatalf("want adoption, got err=%v marker=%q", err, e.marker())
+				}
+				return
+			}
+			if !errors.Is(err, ErrRootBlocked) {
+				t.Fatalf("want ErrRootBlocked, got %v", err)
+			}
+			if blk := e.guard.Block(); blk == nil || blk.Reason != RootBlockNoMarker {
+				t.Fatalf("want %s block, got %+v", RootBlockNoMarker, blk)
+			}
+			if e.marker() != "" {
+				t.Error("a blocked root must not receive a marker")
+			}
+		})
+	}
+}
+
 func TestRootGuard_FirstInstallRecordsIdentity(t *testing.T) {
 	e := newRootGuardEnv(t, false)
 	e.mkRoot(t)

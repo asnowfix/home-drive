@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -224,11 +225,17 @@ func (g *RootGuard) establish(resolved string) (reason, detail string) {
 // errScanDone stops the journal scan at the first journaled path found locally.
 var errScanDone = errors.New("scan done")
 
-// scanJournal counts journal entries until one exists under resolved.
+// scanJournal counts journal entries until one exists strictly under resolved.
 func (g *RootGuard) scanJournal(resolved string) (entries int, present bool, err error) {
 	err = g.cfg.Identity.ForEach(func(e JournalEntry) error {
 		entries++
-		if _, statErr := os.Lstat(filepath.Join(resolved, filepath.FromSlash(e.Path))); statErr == nil {
+		p := filepath.Join(resolved, filepath.FromSlash(e.Path))
+		// An entry that resolves to the root itself (or outside it) exists
+		// in any directory, so it proves nothing about the tree.
+		if p == resolved || !strings.HasPrefix(p, resolved+string(filepath.Separator)) {
+			return nil
+		}
+		if _, statErr := os.Lstat(p); statErr == nil {
 			present = true
 			return errScanDone
 		}
