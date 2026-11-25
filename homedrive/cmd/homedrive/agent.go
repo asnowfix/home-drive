@@ -247,6 +247,8 @@ func closeAuditFile(f *os.File, log *slog.Logger) {
 // buildPublisher constructs a real MQTT publisher when cfg.MQTT.Enabled is
 // true, or a no-op publisher otherwise. This is the fix for the gap
 // described in issue #49: production previously always used noopPublisher.
+// A broker that is unreachable at start is not an error (issue #185): the
+// client keeps retrying in the background.
 func buildPublisher(cfg *config.Config, log *slog.Logger) (syncer.Publisher, *mqtt.Client, error) {
 	if !cfg.MQTT.Enabled {
 		return noopPublisher{}, nil, nil

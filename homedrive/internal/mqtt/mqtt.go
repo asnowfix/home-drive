@@ -72,6 +72,12 @@ type Client struct {
 	paho   paho.Client
 	errors atomic.Int64
 
+	// connectedOnce flips on the first successful connect; before that,
+	// publishes are dropped quietly instead of erroring (connect.go).
+	connectedOnce atomic.Bool
+	dropped       atomic.Int64
+	done          chan struct{} // closed by Close; stops the connect loop
+
 	// mu protects closed to prevent double-close races.
 	mu     sync.Mutex
 	closed bool
@@ -79,7 +85,9 @@ type Client struct {
 
 // New creates a new MQTT Client and connects to the broker. It
 // configures LWT, auto-reconnect, and publishes the "online" retained
-// message after a successful connection.
+// message after a successful connection. An unreachable broker is not an
+// error: New waits briefly, logs one warning, and keeps retrying in the
+// background with capped exponential backoff (connect.go, issue #185).
 func New(cfg Config, host, user string, log *slog.Logger) (*Client, error) {
 	cfg = withDefaults(cfg)
 
@@ -96,6 +104,7 @@ func New(cfg Config, host, user string, log *slog.Logger) (*Client, error) {
 		AddBroker(cfg.Broker).
 		SetClientID(clientID(cfg.ClientIDPrefix, host, user)).
 		SetKeepAlive(cfg.KeepAlive).
+		SetConnectTimeout(connectAttemptTimeout).
 		SetMaxReconnectInterval(cfg.ReconnectMax).
 		SetAutoReconnect(true).
 		SetCleanSession(true).
@@ -109,13 +118,8 @@ func New(cfg Config, host, user string, log *slog.Logger) (*Client, error) {
 	}
 
 	c.paho = paho.NewClient(opts)
-	token := c.paho.Connect()
-	if !token.WaitTimeout(10 * time.Second) {
-		return nil, fmt.Errorf("mqtt connect timeout: broker=%s", cfg.Broker)
-	}
-	if err := token.Error(); err != nil {
-		return nil, fmt.Errorf("mqtt connect: %w", err)
-	}
+	c.done = make(chan struct{})
+	c.startConnect()
 
 	return c, nil
 }
@@ -125,6 +129,12 @@ func New(cfg Config, host, user string, log *slog.Logger) (*Client, error) {
 // are non-blocking: errors are logged and counted but not returned to
 // avoid blocking the caller on network hiccups.
 func (c *Client) Publish(topic string, qos byte, retain bool, payload any) error {
+	if !c.connectedOnce.Load() {
+		// Never connected yet: do not queue (bounded memory) and do not
+		// log per message (issue #185).
+		c.dropped.Add(1)
+		return nil
+	}
 	data, err := toBytes(payload)
 	if err != nil {
 		c.errors.Add(1)
@@ -194,6 +204,7 @@ func (c *Client) Close(ctx context.Context) error {
 		return nil
 	}
 	c.closed = true
+	close(c.done)
 
 	// Publish offline status before disconnecting, but only if the
 	// connection is currently open. Attempting to publish while
@@ -226,6 +237,7 @@ func (c *Client) Connected() bool {
 // onConnect is the paho OnConnect callback. It publishes the "online"
 // retained message after each (re)connection.
 func (c *Client) onConnect(_ paho.Client) {
+	c.connectedOnce.Store(true)
 	c.log.Info("mqtt connected", "broker", c.cfg.Broker)
 	onlineTopic := c.Topic("online")
 	token := c.paho.Publish(onlineTopic, c.cfg.QoS, true, []byte("online"))
