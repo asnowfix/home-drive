@@ -150,11 +150,14 @@ func TestExecRemove_DirCases(t *testing.T) {
 			wantAuditOp: "remove_dir_kept", wantResolution: keptNotEmpty,
 		},
 		{
-			name: "child List cannot see (trashed) kept", path: "d",
+			// A non-trashed child that List does not return (e.g. an
+			// excluded path or a native Google Doc) is still caught by
+			// RemoveEmptyDir's own check.
+			name: "child only RemoveEmptyDir sees kept", path: "d",
 			setup: func(e *dirRemoveEnv) {
 				synced(e)
 				e.remote.rmDirErr = func(string) error {
-					return fmt.Errorf("trashed child: %w", rcloneclient.ErrDirNotEmpty)
+					return fmt.Errorf("unlisted child: %w", rcloneclient.ErrDirNotEmpty)
 				}
 			},
 			wantRmCalls: maxAttempts, wantDelCalls: maxAttempts,

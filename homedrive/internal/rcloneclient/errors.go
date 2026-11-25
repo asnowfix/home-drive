@@ -19,7 +19,7 @@ var (
 	ErrIsDir = errors.New("remote path is a directory")
 
 	// ErrDirNotEmpty indicates RemoveEmptyDir refused a folder because it
-	// still has a child on the remote (any child, trashed or unknown
+	// still has a child outside the trash on the remote (unknown ones
 	// included), or because the path is ambiguous (issue #174).
 	ErrDirNotEmpty = errors.New("remote directory is not empty")
 

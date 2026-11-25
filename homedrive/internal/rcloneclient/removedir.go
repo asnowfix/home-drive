@@ -17,15 +17,18 @@ const folderMimeType = "application/vnd.google-apps.folder"
 //
 //   - the remote root ("" or ".") is refused;
 //   - a missing folder is reported as ErrNotFound (the desired end state);
-//   - the folder's children are listed at call time WITHOUT the usual
-//     "trashed = false" filter, so a trashed child, or one homedrive does
-//     not know about, makes it refuse with ErrDirNotEmpty;
+//   - the folder's children are listed at call time, and any child that
+//     is not in the trash, including one homedrive does not know about,
+//     makes it refuse with ErrDirNotEmpty. Children already in the trash
+//     do not count: homedrive's own file deletes trash files (rclone
+//     use_trash, default true), and trashing their folder leaves them
+//     exactly as they are (still trashed, still restorable);
 //   - several folders with the same name at that path are refused with
 //     ErrDirNotEmpty too: which one is "the" synced folder is unknown.
 //
 // The trash is a files.update(trashed=true) call made here rather than
-// rclone's Rmdir, whose emptiness check ignores trashed children and which
-// deletes permanently when the remote has use_trash=false.
+// rclone's Rmdir, which deletes permanently when the remote has
+// use_trash=false.
 func (r *RcloneFS) RemoveEmptyDir(ctx context.Context, remotePath string) error {
 	rel := strings.Trim(remotePath, "/")
 	if rel == "" || rel == "." {
@@ -97,10 +100,11 @@ func lookupFolderID(ctx context.Context, svc *drivev3.Service, rootID, rel strin
 	return id, nil
 }
 
-// checkNoChildren returns ErrDirNotEmpty if the folder id has any child,
-// trashed or not (no "trashed = false" filter on purpose).
+// checkNoChildren returns ErrDirNotEmpty if the folder id has any child
+// that is not in the trash (issue #174, maintainer decision: trashed
+// children do not block trashing their folder).
 func checkNoChildren(ctx context.Context, svc *drivev3.Service, id string) error {
-	q := fmt.Sprintf("'%s' in parents", id)
+	q := fmt.Sprintf("'%s' in parents and trashed = false", id)
 	list, err := svc.Files.List().Q(q).Fields("files(id)").PageSize(1).
 		SupportsAllDrives(true).IncludeItemsFromAllDrives(true).
 		Context(ctx).Do()

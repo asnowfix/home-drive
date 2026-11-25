@@ -51,7 +51,7 @@ func (s *Syncer) execRemove(ctx context.Context, rel string) (removeOutcome, err
 // when every guard agrees (issue #174): the path is not the root, the local
 // directory is still gone, the folder is known to be synced, and Drive
 // holds nothing under it, both by a List at call time and by
-// RemoveEmptyDir's own check of every child (trashed ones included). A
+// RemoveEmptyDir's own check of every child outside the trash. A
 // folder that still holds something returns ErrDirNotEmpty, so retryFunc
 // gives in-flight child deletions (rm -r) time to land; a List error is
 // retried the same way and never deletes. Anything else keeps the folder.
