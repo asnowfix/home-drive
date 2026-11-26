@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
 	"testing"
 	"time"
 
@@ -169,4 +170,65 @@ func TestAgent_ShutdownMQTT_ClosesRealClient(t *testing.T) {
 func TestAgent_ShutdownMQTT_NilIsNoop(t *testing.T) {
 	a := &Agent{log: slog.Default()}
 	a.shutdownMQTT() // must not panic
+}
+
+// TestBuildPublisher_BrokerDownAtStart proves issue #185: an unreachable
+// broker at start must not abort the agent. buildPublisher returns a live
+// (disconnected) client, and it connects once the broker appears.
+func TestBuildPublisher_BrokerDownAtStart(t *testing.T) {
+	tests := []struct {
+		name       string
+		brokerLate bool
+	}{
+		{"never_comes_up", false},
+		{"comes_up_later", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			addr := ln.Addr().String()
+			_ = ln.Close()
+
+			cfg := &config.Config{MQTT: config.MQTTConfig{
+				Enabled: true, Broker: "tcp://" + addr, BaseTopic: "homedrive", QoS: 1,
+			}}
+			pub, client, err := buildPublisher(cfg, slog.Default())
+			if err != nil {
+				t.Fatalf("buildPublisher must not fail with the broker down: %v", err)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				_ = client.Close(ctx)
+			})
+			if client.Connected() {
+				t.Fatal("client cannot be connected to a dead broker")
+			}
+			if err := pub.PublishJSON(pub.Topic("events", "x"), map[string]string{"a": "b"}); err != nil {
+				t.Errorf("publish while disconnected must not error: %v", err)
+			}
+			if !tc.brokerLate {
+				return
+			}
+
+			srv := mqttserver.New(&mqttserver.Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+			_ = srv.AddHook(new(auth.AllowHook), nil)
+			if err := srv.AddListener(listeners.NewTCP(listeners.Config{ID: "late", Address: addr})); err != nil {
+				t.Skipf("could not rebind broker port: %v", err)
+			}
+			go func() { _ = srv.Serve() }()
+			t.Cleanup(func() { _ = srv.Close() })
+
+			deadline := time.Now().Add(15 * time.Second)
+			for !client.Connected() && time.Now().Before(deadline) {
+				time.Sleep(50 * time.Millisecond)
+			}
+			if !client.Connected() {
+				t.Fatal("client did not connect after the broker came up")
+			}
+		})
+	}
 }
