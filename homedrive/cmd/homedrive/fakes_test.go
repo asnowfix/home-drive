@@ -87,6 +87,12 @@ func (f *fakeRemoteFS) DeleteFile(_ context.Context, path string) error {
 	return nil
 }
 
+// RemoveEmptyDir implements RemoteFS; the fake has no folders, so any
+// folder is already absent.
+func (f *fakeRemoteFS) RemoveEmptyDir(_ context.Context, path string) error {
+	return fmt.Errorf("fakeRemoteFS: rmdir %s: %w", path, rcloneclient.ErrNotFound)
+}
+
 // hasDeleted reports whether DeleteFile was called for path.
 func (f *fakeRemoteFS) hasDeleted(path string) bool {
 	f.mu.Lock()
