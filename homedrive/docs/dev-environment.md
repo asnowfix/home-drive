@@ -157,6 +157,45 @@ Tests that use the filesystem but do not depend on inotify-specific
 behavior (e.g., config loading, store operations, HTTP endpoint tests)
 run on both macOS and Linux.
 
+## FUSE tests and the snap go command
+
+`TestRcloneMounter_FUSE` (and `homedrive mount` itself) mounts through the
+real `fusermount3`. On Ubuntu 26.04 (fuse3 3.18.2) this fails with
+`file descriptor 3 is not a socket` when the **parent process is
+AppArmor-confined**. The usual culprit is the snap-packaged `go`
+(`/snap/bin/go`): everything started by `go test` or `go run` inherits the
+label `snap.go.go`, and the enforcing `/etc/apparmor.d/fusermount3` profile
+denies the FUSE control socket created by that peer (the kernel audit log
+shows `operation="file_inherit" ... profile="fusermount3" ... peer="snap.go.go"`).
+Unconfined parents (a login shell, a desktop session, a systemd user unit)
+mount fine, so a normal `homedrive mount` is not affected. See #184.
+
+The test detects this by reading `/proc/self/attr/current`: when the label
+is not `unconfined` and the mount fails, it skips with a message naming
+AppArmor; on an unconfined process a mount failure fails the test. The
+`homedrive mount` error carries the same hint.
+
+Workarounds, pick one:
+
+1. Install the official (non-snap) Go tarball under `~/.local` and put it
+   first on `PATH`, so `go` is no longer a snap-confined front end:
+
+   ```bash
+   mkdir -p ~/.local && tar -C ~/.local -xzf go<version>.linux-<arch>.tar.gz
+   export PATH="$HOME/.local/go/bin:$PATH"   # add to your shell profile
+   ```
+
+2. Compile the test with `go test -c` and run the binary directly from an
+   unconfined shell:
+
+   ```bash
+   go test -c -o desktop.test ./homedrive/internal/desktop/
+   ./desktop.test -test.run TestRcloneMounter_FUSE -test.v
+   ```
+
+Do not loosen the AppArmor policy (for example a local override of the
+`fusermount3` profile) to work around this.
+
 ## VS Code configuration
 
 Recommended `.vscode/settings.json` for the repository:

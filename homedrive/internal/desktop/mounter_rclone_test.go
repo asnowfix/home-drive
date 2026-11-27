@@ -102,11 +102,17 @@ func TestRcloneMounter_FUSE(t *testing.T) {
 
 	m, err := RcloneMounter{}.Mount(context.Background(), spec)
 	if err != nil {
-		// Seen with fuse3 3.18.2 (Ubuntu 26.04): fusermount3 rejects the unixgram
-		// socketpair go-fuse v2.11.0 (rclone v1.76.0 mount2) hands it ("file
-		// descriptor 3 is not a socket"). Skip rather than fail so the suite stays
-		// green on such hosts; CI hosts with an older fuse3 run this test.
-		t.Skipf("FUSE mount failed in this environment (see comment): %v", err)
+		// Issue #184: Ubuntu's enforcing fusermount3 AppArmor profile refuses the
+		// control socket of an AppArmor-confined parent (e.g. the snap "go"
+		// running "go test"), reported as "file descriptor 3 is not a socket".
+		// That environment cannot mount, so skip with the cause; any other
+		// failure is a real failure.
+		if label, confined := appArmorLabel(); confined {
+			t.Skipf("process is AppArmor-confined (label %q): fusermount3 cannot receive the FUSE socket from it. "+
+				"Run the test from an unconfined shell: go test -c -o desktop.test ./homedrive/internal/desktop/ && ./desktop.test -test.run TestRcloneMounter_FUSE "+
+				"(see homedrive/docs/dev-environment.md); mount error: %v", label, err)
+		}
+		t.Fatalf("FUSE mount failed: %v", err)
 	}
 	mounted := true
 	defer func() {
