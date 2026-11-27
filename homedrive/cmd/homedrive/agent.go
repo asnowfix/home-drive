@@ -73,6 +73,10 @@ type Agent struct {
 	// syncer does not echo it back to Drive (issue #154).
 	deleteGuard *syncer.DeleteGuard
 
+	// symlinks tracks symlinks skipped by push and bisync (issue #191),
+	// shared by both so a path is reported once.
+	symlinks *syncer.SymlinkTracker
+
 	// bisyncMu is shared between the push syncer (RLock), the pull loop
 	// (RLock, taken by this package around each PollOnce call since
 	// syncer.Puller does not itself coordinate with bisync), and bisync
@@ -321,6 +325,7 @@ func (a *Agent) buildPushSyncer(pub syncer.Publisher, audit syncer.AuditLogger) 
 		syncer.WithRecorder(a.stats),
 		syncer.WithRootGate(a.rootGuard),
 		syncer.WithDeleteGuard(a.deleteGuard),
+		syncer.WithSymlinkTracker(a.symlinkTracker()),
 	)
 }
 
@@ -377,6 +382,7 @@ func (a *Agent) buildBisync(pub syncer.Publisher, rawAudit io.Writer, auditor *s
 			MaxDeletePct:   derefInt(a.cfg.Bisync.MaxDeletePct),
 			Remover:        a.localRemover(),
 		},
+		Links:    a.symlinkTracker(),
 		Remote:   a.rfs,
 		Journal:  &bisyncJournalAdapter{j: a.journal},
 		MQTT:     pub,
@@ -464,4 +470,14 @@ func (a *Agent) localRemover() syncer.LocalRemover {
 		return nil
 	}
 	return a.deleteGuard
+}
+
+// symlinkTracker returns the agent's shared skipped-symlink tracker,
+// creating it on first use.
+func (a *Agent) symlinkTracker() *syncer.SymlinkTracker {
+	if a.symlinks == nil {
+		a.symlinks = syncer.NewSymlinkTracker(a.log)
+		a.symlinks.SetPolicy(syncer.NewLinkPolicy(a.copyResolvedLinks()))
+	}
+	return a.symlinks
 }

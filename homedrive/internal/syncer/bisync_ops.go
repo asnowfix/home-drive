@@ -53,7 +53,7 @@ func (b *Bisync) diff(ctx context.Context) ([]FileDiff, error) {
 	var diffs []FileDiff
 	diffs = b.diffLocalAgainstRemote(localMap, remoteMap, diffs)
 	diffs = b.diffRemoteAgainstLocal(localMap, remoteMap, diffs)
-	return diffs, nil
+	return b.pushOnlyUnderLinks(diffs), nil
 }
 
 // recordLocalTree reports the local file count and total size seen by the
@@ -106,6 +106,13 @@ func (b *Bisync) diffRemoteAgainstLocal(
 ) []FileDiff {
 	for path, remote := range remoteMap {
 		if _, exists := localMap[path]; !exists {
+			if hasLinkPrefix(b.linkPaths, path) {
+				// A skipped local symlink sits here, or above (issue #191):
+				// it is not "locally deleted", so Drive's copy (pushed
+				// through the link by an earlier version) is neither
+				// deleted nor pulled into the link's target.
+				continue
+			}
 			diffs = append(diffs, b.remoteOnlyDiff(path, remote))
 		}
 	}
@@ -117,6 +124,7 @@ func (b *Bisync) diffRemoteAgainstLocal(
 func (b *Bisync) walkLocal(ctx context.Context) ([]LocalFileInfo, error) {
 	var files []LocalFileInfo
 	root := b.cfg.LocalRoot
+	w := &linkWalk{found: make(map[string]skippedLink), deref: make(map[string]struct{})}
 
 	err := filepath.WalkDir(root, func(
 		path string, d os.DirEntry, err error,
@@ -141,6 +149,16 @@ func (b *Bisync) walkLocal(ctx context.Context) ([]LocalFileInfo, error) {
 		if pathfilter.Excluded(b.cfg.Exclude, relPath) {
 			return nil
 		}
+		if d.Type()&os.ModeSymlink != 0 {
+			// Skipped and reported unless opted in (issue #191).
+			handled, lerr := b.walkLink(ctx, w, path, relPath)
+			if lerr != nil {
+				return lerr
+			}
+			if handled {
+				return nil
+			}
+		}
 		info, err := d.Info()
 		if err != nil {
 			return fmt.Errorf("stat %s: %w", path, err)
@@ -155,6 +173,13 @@ func (b *Bisync) walkLocal(ctx context.Context) ([]LocalFileInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("walk local root %s: %w", root, err)
 	}
+	files = append(files, w.files...)
+	b.links.Reconcile(w.found)
+	b.linkPaths = make(map[string]struct{}, len(w.found))
+	for p := range w.found {
+		b.linkPaths[p] = struct{}{}
+	}
+	b.derefPaths = w.deref
 	return files, nil
 }
 

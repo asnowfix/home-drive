@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/asnowfix/home-drive/homedrive/internal/config"
 	httpctl "github.com/asnowfix/home-drive/homedrive/internal/http"
 	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 	"github.com/asnowfix/home-drive/homedrive/internal/stats"
@@ -340,3 +343,68 @@ func TestParseLogLevel_Cases(t *testing.T) {
 // without bisyncMu explicitly set in a test (guards against future field
 // additions breaking these lightweight test constructions).
 var _ = sync.RWMutex{}
+
+// issue #191: /status carries the number of skipped symlinks.
+func TestAgent_Status_SkippedSymlinks(t *testing.T) {
+	tr := syncer.NewSymlinkTracker(slog.New(slog.DiscardHandler))
+	a := &Agent{log: slog.Default(), rfs: newFakeRemoteFS(), stats: stats.New(stats.Config{}), symlinks: tr}
+
+	info, err := a.Status(context.Background())
+	if err != nil || info.SkippedSymlinks != 0 {
+		t.Fatalf("no links: info.SkippedSymlinks=%d err=%v, want 0", info.SkippedSymlinks, err)
+	}
+	b, _ := json.Marshal(info)
+	if strings.Contains(string(b), "skipped_symlinks") {
+		t.Errorf("zero count must be omitted: %s", b)
+	}
+
+	tr.Report("a", syncer.LinkUnresolved, "tgt")
+	tr.Report("b", syncer.LinkOutsideRoot, "tgt")
+	info, _ = a.Status(context.Background())
+	if info.SkippedSymlinks != 2 {
+		t.Errorf("SkippedSymlinks = %d, want 2", info.SkippedSymlinks)
+	}
+	b, _ = json.Marshal(info)
+	if !strings.Contains(string(b), `"skipped_symlinks":2`) {
+		t.Errorf("status JSON lacks skipped_symlinks: %s", b)
+	}
+}
+
+// issue #191: /status lists the effective symlinks.copy_resolved_links
+// patterns and their count; both are absent with the default empty list.
+func TestAgent_Status_CopyResolvedLinks(t *testing.T) {
+	tests := []struct {
+		name     string
+		patterns []string
+		wantKeys bool
+	}{
+		{"DefaultEmpty", nil, false},
+		{"TwoPatterns", []string{"Brain/.claude/skills/**", "Brain/shared/**"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Symlinks: config.SymlinksConfig{CopyResolvedLinks: tt.patterns}}
+			a := &Agent{log: slog.Default(), cfg: cfg, rfs: newFakeRemoteFS(), stats: stats.New(stats.Config{})}
+
+			info, err := a.Status(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := json.Marshal(info)
+			if got := strings.Contains(string(b), "copy_resolved_links"); got != tt.wantKeys {
+				t.Fatalf("copy_resolved_links present = %v, want %v: %s", got, tt.wantKeys, b)
+			}
+			if info.CopyResolvedLinksCount != len(tt.patterns) || len(info.CopyResolvedLinks) != len(tt.patterns) {
+				t.Errorf("count=%d list=%v, want %v", info.CopyResolvedLinksCount, info.CopyResolvedLinks, tt.patterns)
+			}
+			for i, p := range tt.patterns {
+				if info.CopyResolvedLinks[i] != p {
+					t.Errorf("pattern %d = %q, want %q", i, info.CopyResolvedLinks[i], p)
+				}
+			}
+			if tt.wantKeys && !strings.Contains(string(b), `"copy_resolved_links_count":2`) {
+				t.Errorf("status JSON lacks the count: %s", b)
+			}
+		})
+	}
+}

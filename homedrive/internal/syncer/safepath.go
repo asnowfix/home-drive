@@ -3,6 +3,7 @@ package syncer
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -20,8 +21,11 @@ var ErrUnsafeRemotePath = errors.New("unsafe remote path")
 // result must still lie strictly under root. Joins that are not Drive-fed do
 // not use it: paths from the local walk, or journal paths that were
 // validated before being journaled (chain repair, retention GC, the
-// pull_subtree sweep, bisync's read-only Lstat in deleteRemote). It checks
-// the path lexically only; a symlinked directory under root is #166.
+// pull_subtree sweep, bisync's read-only Lstat in deleteRemote). Besides the
+// lexical check it refuses a path whose existing components, the last one
+// included, are symlinks (ErrThroughSymlink): a Drive-fed write, rename or
+// delete must never go through a link (issue #191; the copy_resolved_links
+// opt-in puts Drive paths at and under links on purpose, push-only).
 func localPathFor(root, rel string) (string, error) {
 	if !rcloneclient.ValidRemotePath(rel) {
 		return "", fmt.Errorf("%w: %q", ErrUnsafeRemotePath, rel)
@@ -33,5 +37,29 @@ func localPathFor(root, rel string) (string, error) {
 		strings.HasPrefix(r, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("%w: %q", ErrUnsafeRemotePath, rel)
 	}
+	if err := rejectSymlinkedPath(clean, r); err != nil {
+		return "", err
+	}
 	return full, nil
+}
+
+// ErrThroughSymlink is returned when a local path to write goes through, or
+// is, a symlink under the root. It wraps ErrUnsafeRemotePath.
+var ErrThroughSymlink = fmt.Errorf("%w: through a symlink", ErrUnsafeRemotePath)
+
+// rejectSymlinkedPath Lstats each component of rel under root, stopping at
+// the first one that does not exist (nothing below it can be a link).
+func rejectSymlinkedPath(root, rel string) error {
+	cur := root
+	for _, comp := range strings.Split(rel, string(filepath.Separator)) {
+		cur = filepath.Join(cur, comp)
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			return nil
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: %q", ErrThroughSymlink, filepath.ToSlash(rel))
+		}
+	}
+	return nil
 }

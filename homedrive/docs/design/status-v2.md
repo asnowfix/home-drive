@@ -190,7 +190,7 @@ exits non-zero as it does today. Each crash-loop attempt, one per 60s with `Rest
 leaves a visible trace: a new `started_at`, `counts.*.starts` rising, and `last_error`. Today an
 OAuth rejection exits before MQTT even connects.
 
-### 5.3 Topic and payload: status schema 2.1
+### 5.3 Topic and payload: status schema 2.3
 
 Topic `homedrive/<host>/<user>/status`, QoS 1, **retain=true**, every `mqtt.publish_interval`
 (default 30s). It is also published immediately on start, on clean shutdown (after the final stats flush), and on `/reload`; the error-exit publish is #142.
@@ -203,7 +203,7 @@ alerting, **N** = nice to have and safe to cut.
 
 | Field | Type / unit | Semantics | Tag |
 |---|---|---|---|
-| `schema` | string `"2.1"` | `major.minor` of this contract. 2.0 had no `guards`; 2.1 is additive (see §12). | A |
+| `schema` | string `"2.3"` | `major.minor` of this contract. 2.0 had no `guards`; 2.1, 2.2 and 2.3 are additive (see §12). | A |
 | `ts` | timestamp | When this document was built | A |
 | `publish_interval_s` | int, s | **Always present and > 0** (a zero or unset `mqtt.publish_interval` publishes as 30). So consumers derive staleness instead of hard-coding it. | A |
 | `version` | string | Binary version (ldflags) | P |
@@ -221,7 +221,8 @@ alerting, **N** = nice to have and safe to cut.
 | `auth` | object | `{state, last_refresh_ok, last_refresh_error:{ts,message}\|null}`. `state` is one of `ok`, `unknown`, `client_missing`, `client_misconfigured`, `token_invalid`, `refresh_failing`. | A |
 | `bisync` | object/null | `{at, result:"ok"\|"error", duration_ms, files_changed, error}` for the last completed pass. `files_changed` is pushed + pulled + deleted files, the same figure as `files_changed` in the `bisync.completed` event of that pass. `error` is the one exception to "absent is null": the key is omitted when `result` is `ok`. Persisted. | P; A (safety net) |
 | `local` | object/null | `{files, bytes, scanned_at}` from the last bisync `walkLocal`. Excludes apply. Not real-time. It is recorded before the delete guard runs, so a pass aborted with `guards.bisync_deletes.reason == "empty_local"` shows `files: 0`. | N |
-| `guards` | object | Added in 2.1; **always present**. `{local_root, bisync_deletes}`, each `null` when its guard is not blocking. `local_root` is `{reason, since}` with `reason` one of `missing`, `marker_missing`, `identity_mismatch`, `unreadable` (the agent also reports `state:"root_blocked"`). `bisync_deletes` is `{reason, planned, threshold, since}` with `reason` one of `threshold`, `empty_local`, `empty_remote`: bisync held back `planned` deletions because the limit was `threshold` (0 for an empty side); released with `homedrive ctl allow-deletes` (#156). Codes and counts only: never a path, a file name or an error message. A blocked guard is an alert condition; it clears on its own (root) or when the next pass is released or finds nothing to veto (deletes). | A |
+| `guards` | object | Added in 2.1; **always present**. `{local_root, bisync_deletes, skipped_symlinks}`, each `null` when its guard is not blocking. `skipped_symlinks` (added in 2.2, #191) is `{count, since}`: the number of symlinks in `local_root` that are skipped because homedrive never syncs symlinks (dangling, resolving outside `local_root`, or inside it); each is logged once at ERROR with its path, never in this document. `local_root` is `{reason, since}` with `reason` one of `missing`, `marker_missing`, `identity_mismatch`, `unreadable` (the agent also reports `state:"root_blocked"`). `bisync_deletes` is `{reason, planned, threshold, since}` with `reason` one of `threshold`, `empty_local`, `empty_remote`: bisync held back `planned` deletions because the limit was `threshold` (0 for an empty side); released with `homedrive ctl allow-deletes` (#156). Codes and counts only: never a path, a file name or an error message. A blocked guard is an alert condition; it clears on its own (root) or when the next pass is released or finds nothing to veto (deletes). | A |
+| `copy_resolved_links` | int | Added in 2.3 (#191), **always present**: the number of `symlinks.copy_resolved_links` patterns this host applies (0 = default, every symlink is skipped). Count only; the patterns are in `GET /status`. | N |
 | `quota_used_pct` | number/null | Drive usage, cached and refreshed at most every 5 min. **Never** a live call per tick. Today's HTTP path makes a live call (agent_control.go:122-128). | P |
 
 **Deliberately not added:**
@@ -388,7 +389,7 @@ Tests (table-driven `TestXxx_Case`, one `_test.go` per file, injectable clock):
 - `rcloneclient`: the notifying TokenSource against an httptest token endpoint (ok and
   `invalid_grant`).
 - `mqtt`: embedded mochi-mqtt on `127.0.0.1:0`. Assert one retained `…/status` JSON with
-  `schema:"2.1"` per tick and all timestamps ending in `Z`. Assert startup succeeds with the
+  `schema:"2.3"` per tick and all timestamps ending in `Z`. Assert startup succeeds with the
   broker down and status arrives once it comes up.
 - `cmd/homedrive`: with fake remote and journal, `Status()` 24h fields equal the tracker counts;
   a startup OAuth failure publishes `state:"error"` before returning the error.
@@ -453,6 +454,14 @@ bisync mass-deletion guard (#156), the document gained the always-present `guard
 was bumped and a consumer built against 2.0 keeps working. `GET /status` is unchanged.
 Consumers: alert on `guards.local_root != null` and on `guards.bisync_deletes != null`
 (both mean sync is deliberately not making progress and needs a human).
+
+**Schema 2.2 (#191).** `guards.skipped_symlinks` (`{count, since}`, null at zero) counts symlinks
+in `local_root` that homedrive skips (it never syncs symlinks). Additive. Consumers: alert on
+`guards.skipped_symlinks != null`; the paths are in the agent log (ERROR, once per path per run).
+
+**Schema 2.3 (#191).** `copy_resolved_links` (int, always present) is the number of
+`symlinks.copy_resolved_links` patterns in force on this host. Additive; a consumer built
+against 2.2 keeps working.
 
 The example documents below are also shipped as fixtures in
 `homedrive/pkg/homedrive/testdata/status-*.json`, which myhome can pin a test against.

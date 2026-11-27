@@ -78,6 +78,16 @@ type Bisync struct {
 	// Same locking as snapshot.
 	unrepresentable map[string]struct{}
 
+	// links tracks skipped symlinks (issue #191); never nil after
+	// NewBisync. linkPaths is the set found by the current pass's walk:
+	// remote entries at those paths are neither pulled nor deleted.
+	// linkPaths has the same locking as snapshot.
+	links     *SymlinkTracker
+	linkPaths map[string]struct{}
+	// derefPaths are the symlinks copied as content this pass (opt-in):
+	// paths at or under them are push-only. Same locking as snapshot.
+	derefPaths map[string]struct{}
+
 	// localCount and remoteCount are the sizes of the current pass's local
 	// walk and (filtered) remote listing; the delete guard treats an empty
 	// side as suspect (issue #156). Same locking as snapshot.
@@ -129,6 +139,10 @@ type BisyncOpts struct {
 	// Recorder, if non-nil, receives one Outcome per final per-file
 	// result and one per pass (OutBisync), plus the local tree size.
 	Recorder Recorder
+
+	// Links, if non-nil, is the tracker shared with the push syncer; a
+	// private one is created otherwise.
+	Links *SymlinkTracker
 }
 
 // NewBisync creates a new bisync runner. The returned ForceCh can be
@@ -153,7 +167,12 @@ func NewBisync(opts BisyncOpts) (*Bisync, chan<- struct{}) {
 
 	forceCh := make(chan struct{}, 1)
 
+	links := opts.Links
+	if links == nil {
+		links = NewSymlinkTracker(logger)
+	}
 	b := &Bisync{
+		links:   links,
 		cfg:     cfg,
 		remote:  opts.Remote,
 		journal: opts.Journal,

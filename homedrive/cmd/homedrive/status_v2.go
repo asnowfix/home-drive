@@ -90,7 +90,17 @@ func (a *Agent) statusGuards() homedrive.Guards {
 	if a.bisync != nil {
 		g.BisyncDeletes = deleteGuardStatus(a.bisync.DeleteBlock())
 	}
+	g.SkippedSymlinks = symlinkGuardStatus(a.symlinks)
 	return g
+}
+
+// symlinkGuardStatus maps the skipped-symlink tracker onto the document;
+// nil stays nil when nothing is skipped.
+func symlinkGuardStatus(t *syncer.SymlinkTracker) *homedrive.SymlinkGuard {
+	if t == nil || t.Count() == 0 {
+		return nil
+	}
+	return &homedrive.SymlinkGuard{Count: t.Count(), Since: homedrive.Timestamp{Time: t.Since()}}
 }
 
 // rootGuardStatus maps a root block onto the document; nil stays nil.
@@ -141,6 +151,8 @@ func (a *Agent) buildStatusV2(now time.Time) homedrive.StatusV2 {
 		Local:        snap.Local,
 		QuotaUsedPct: a.quota.get(),
 		Guards:       a.statusGuards(),
+
+		CopyResolvedLinks: len(a.copyResolvedLinks()),
 	}
 	return doc
 }

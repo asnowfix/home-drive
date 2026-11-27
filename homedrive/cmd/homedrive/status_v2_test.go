@@ -6,6 +6,7 @@ import (
 	"github.com/asnowfix/home-drive/homedrive/internal/mqtt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -234,5 +235,58 @@ func TestAgent_Run_BlockedOnlyPublishesStatus(t *testing.T) {
 			t.Fatalf("no status document published in blocked-only mode: %s", logs.String())
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// issue #191: guards.skipped_symlinks is null with no skipped link, else a
+// count and since, never a path.
+func TestStatusGuards_SkippedSymlinks(t *testing.T) {
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	tr := syncer.NewSymlinkTracker(slog.New(slog.DiscardHandler))
+	a := &Agent{log: slog.Default(), stats: stats.New(stats.Config{}), symlinks: tr}
+
+	if g := a.buildStatusV2(now).Guards.SkippedSymlinks; g != nil {
+		t.Fatalf("guards.skipped_symlinks = %+v, want nil", g)
+	}
+	tr.Report("secret/path/link", syncer.LinkUnresolved, "tgt")
+	tr.Report("other", syncer.LinkInRoot, "tgt")
+	d := a.buildStatusV2(now)
+	g := d.Guards.SkippedSymlinks
+	if g == nil || g.Count != 2 || g.Since.IsZero() {
+		t.Fatalf("guards.skipped_symlinks = %+v, want count 2 with since", g)
+	}
+	out, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "secret/path") {
+		t.Errorf("status document leaks a path: %s", out)
+	}
+	if d.State != homedrive.StateRunning {
+		t.Errorf("state = %q: skipped links must not change it", d.State)
+	}
+}
+
+// issue #191: the retained document carries the pattern count only, never
+// the patterns, and always (0 by default).
+func TestStatusV2_CopyResolvedLinksCount(t *testing.T) {
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	for _, patterns := range [][]string{nil, {"secret/area/**", "b/**"}} {
+		cfg := &config.Config{Symlinks: config.SymlinksConfig{CopyResolvedLinks: patterns}}
+		a := &Agent{log: slog.Default(), cfg: cfg, stats: stats.New(stats.Config{})}
+		d := a.buildStatusV2(now)
+		out, err := json.Marshal(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.CopyResolvedLinks != len(patterns) {
+			t.Errorf("CopyResolvedLinks = %d, want %d", d.CopyResolvedLinks, len(patterns))
+		}
+		if !strings.Contains(string(out), `"copy_resolved_links":`+strconv.Itoa(len(patterns))) {
+			t.Errorf("document lacks the count: %s", out)
+		}
+		if strings.Contains(string(out), "secret/area") {
+			t.Errorf("document leaks a pattern: %s", out)
+		}
 	}
 }

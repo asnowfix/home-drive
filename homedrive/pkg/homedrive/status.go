@@ -11,7 +11,9 @@ import (
 // homedrive/docs/design/status-v2.md §5.3 (the wire contract).
 //
 // 2.1 adds the "guards" object and the "root_blocked" state (additive).
-const StatusSchema = "2.1"
+// 2.2 adds guards.skipped_symlinks (additive).
+// 2.3 adds copy_resolved_links (additive).
+const StatusSchema = "2.3"
 
 // Status document "state" values. Consumers must treat unknown values as
 // "degraded: show raw", so new values may be added in a minor release.
@@ -129,11 +131,20 @@ type DeleteGuard struct {
 	Since     Timestamp `json:"since"`
 }
 
+// SymlinkGuard reports symlinks in local_root that are skipped because
+// they are never synced (issue #191). Count is a number, never file names.
+type SymlinkGuard struct {
+	Count int       `json:"count"`
+	Since Timestamp `json:"since"`
+}
+
 // Guards describes the safety guards currently holding work back. Each
 // member is null when its guard is not blocking. Added in schema 2.1.
 type Guards struct {
 	LocalRoot     *RootGuard   `json:"local_root"`
 	BisyncDeletes *DeleteGuard `json:"bisync_deletes"`
+	// SkippedSymlinks is null when no symlink is skipped. Added in 2.2.
+	SkippedSymlinks *SymlinkGuard `json:"skipped_symlinks"`
 }
 
 // StatusV2 is the retained JSON document published on the status topic.
@@ -163,4 +174,10 @@ type StatusV2 struct {
 
 	// Guards is always present (members null when not blocking).
 	Guards Guards `json:"guards"`
+
+	// CopyResolvedLinks is the number of symlinks.copy_resolved_links
+	// patterns this host applies (0 = the default: every link is skipped).
+	// The patterns themselves are in GET /status, not in this retained
+	// document. Added in 2.3.
+	CopyResolvedLinks int `json:"copy_resolved_links"`
 }
