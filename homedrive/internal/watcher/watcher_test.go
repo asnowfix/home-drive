@@ -389,3 +389,29 @@ func TestWatcher_NewDirMovedIn(t *testing.T) {
 		})
 	}
 }
+
+// issue #191: a symlink to a directory is not watched through: files
+// changing in its target (here outside the root) must produce no event.
+func TestWatcher_SymlinkedDirNotWatched(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires Linux inotify cookies")
+	}
+	w, root := newTestWatcher(t)
+	startWatcher(t, w)
+
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	// Let the link's own create event (and any watch attempt) settle.
+	collectEvents(t, w, 300*time.Millisecond)
+
+	if err := os.WriteFile(filepath.Join(outside, "leak.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range collectEvents(t, w, 400*time.Millisecond) {
+		if ev.Event != nil && filepath.Base(ev.Event.Path) == "leak.txt" {
+			t.Errorf("event for a file behind a symlinked directory: %+v", ev.Event)
+		}
+	}
+}
