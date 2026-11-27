@@ -80,6 +80,14 @@ func (a *Agent) Run(ctx context.Context) error {
 // startComponents launches the watcher, pump, push syncer, pull loop, and
 // bisync ticker as tracked goroutines.
 func (a *Agent) startComponents(ctx context.Context, wg *sync.WaitGroup) {
+	if pol := a.symlinkTracker().Policy(); pol.Enabled() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pol.WarnUnmatched(ctx, a.cfg.LocalRoot, a.log)
+		}()
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

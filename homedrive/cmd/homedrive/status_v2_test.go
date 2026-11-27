@@ -6,6 +6,7 @@ import (
 	"github.com/asnowfix/home-drive/homedrive/internal/mqtt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -263,5 +264,29 @@ func TestStatusGuards_SkippedSymlinks(t *testing.T) {
 	}
 	if d.State != homedrive.StateRunning {
 		t.Errorf("state = %q: skipped links must not change it", d.State)
+	}
+}
+
+// issue #191: the retained document carries the pattern count only, never
+// the patterns, and always (0 by default).
+func TestStatusV2_CopyResolvedLinksCount(t *testing.T) {
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	for _, patterns := range [][]string{nil, {"secret/area/**", "b/**"}} {
+		cfg := &config.Config{Symlinks: config.SymlinksConfig{CopyResolvedLinks: patterns}}
+		a := &Agent{log: slog.Default(), cfg: cfg, stats: stats.New(stats.Config{})}
+		d := a.buildStatusV2(now)
+		out, err := json.Marshal(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.CopyResolvedLinks != len(patterns) {
+			t.Errorf("CopyResolvedLinks = %d, want %d", d.CopyResolvedLinks, len(patterns))
+		}
+		if !strings.Contains(string(out), `"copy_resolved_links":`+strconv.Itoa(len(patterns))) {
+			t.Errorf("document lacks the count: %s", out)
+		}
+		if strings.Contains(string(out), "secret/area") {
+			t.Errorf("document leaks a pattern: %s", out)
+		}
 	}
 }
