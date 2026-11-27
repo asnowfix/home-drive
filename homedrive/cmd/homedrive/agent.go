@@ -479,7 +479,6 @@ func (a *Agent) localRemover() syncer.LocalRemover {
 func (a *Agent) symlinkTracker() *syncer.SymlinkTracker {
 	if a.symlinks == nil {
 		a.symlinks = syncer.NewSymlinkTracker(a.log)
-		a.symlinks.SetPolicy(syncer.NewLinkPolicy(a.copyResolvedLinks()))
 	}
 	return a.symlinks
 }

@@ -56,17 +56,6 @@ bisync:
   max_delete_count: 50  # >= 1
   max_delete_pct: 10    # 1..100
 
-# Symlinks are never synced by default. copy_resolved_links is a machine-local
-# opt-in (never read from the synced tree): a list of glob patterns relative to
-# local_root. A link under a matched folder is copied as content when it
-# resolves, on the same filesystem, to a regular file or a directory tree
-# inside local_root that is itself under a matched folder. Anything else stays
-# skipped and reported. Patterns must be relative and free of "..".
-# symlinks:
-#   copy_resolved_links:
-#     - "Brain/.claude/skills/**"
-#     - "Brain/shared/**"
-
 conflict:
   policy: newer_wins
   old_suffix_format: ".old.%d"

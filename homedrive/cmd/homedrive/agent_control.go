@@ -135,8 +135,8 @@ func (a *Agent) Reload(_ context.Context) error {
 		"dry_run", newCfg.DryRun,
 	)
 	a.log.Warn("reload applies log level and status-reported dry_run only; " +
-		"local_root, remote, watcher excludes, symlinks.copy_resolved_links, " +
-		"push workers, and retry settings require a full restart to take effect")
+		"local_root, remote, watcher excludes, push workers, and retry " +
+		"settings require a full restart to take effect")
 	return nil
 }
 
@@ -171,9 +171,6 @@ func (a *Agent) Status(ctx context.Context) (httpctl.StatusInfo, error) {
 		BisyncDeleteBlocked: a.bisyncDeleteBlock(),
 		LocalRootBlocked:    rootBlock,
 		SkippedSymlinks:     a.skippedSymlinks(),
-		CopyResolvedLinks:   a.copyResolvedLinks(),
-
-		CopyResolvedLinksCount: len(a.copyResolvedLinks()),
 	}, nil
 }
 
@@ -300,15 +297,6 @@ func parseLogLevel(level string) slog.Level {
 	default:
 		return slog.LevelInfo
 	}
-}
-
-// copyResolvedLinks is the effective symlinks.copy_resolved_links list
-// (issue #191): what this host applies, nil by default.
-func (a *Agent) copyResolvedLinks() []string {
-	if a.cfg == nil {
-		return nil
-	}
-	return a.cfg.Symlinks.CopyResolvedLinks
 }
 
 // skippedSymlinks is the number of symlinks skipped as never synced (#191).

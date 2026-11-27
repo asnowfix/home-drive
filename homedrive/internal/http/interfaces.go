@@ -36,12 +36,6 @@ type StatusInfo struct {
 	// because they are never synced (issue #191); omitted when zero. Under
 	// status v2 it maps to guards.skipped_symlinks.
 	SkippedSymlinks int `json:"skipped_symlinks,omitempty"`
-
-	// CopyResolvedLinks is the effective symlinks.copy_resolved_links list
-	// (machine-local opt-in, issue #191) and CopyResolvedLinksCount its
-	// length; both omitted when the list is empty (the default).
-	CopyResolvedLinks      []string `json:"copy_resolved_links,omitempty"`
-	CopyResolvedLinksCount int      `json:"copy_resolved_links_count,omitempty"`
 }
 
 // RootBlock says why local_root is not being synced.

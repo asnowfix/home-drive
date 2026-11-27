@@ -84,9 +84,6 @@ type Bisync struct {
 	// linkPaths has the same locking as snapshot.
 	links     *SymlinkTracker
 	linkPaths map[string]struct{}
-	// derefPaths are the symlinks copied as content this pass (opt-in):
-	// paths at or under them are push-only. Same locking as snapshot.
-	derefPaths map[string]struct{}
 
 	// localCount and remoteCount are the sizes of the current pass's local
 	// walk and (filtered) remote listing; the delete guard treats an empty

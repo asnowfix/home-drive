@@ -79,15 +79,7 @@ type SymlinkTracker struct {
 	links    map[string]string // root-relative slash path -> reason, <= maxTrackedLinks
 	overflow int               // links past the bound, as last counted by Reconcile
 	since    time.Time         // first report of the current non-empty period
-	policy   *LinkPolicy       // copy_resolved_links opt-in; nil copies nothing
 }
-
-// SetPolicy installs the copy_resolved_links opt-in. Call it before the
-// tracker is shared with the push syncer and bisync.
-func (t *SymlinkTracker) SetPolicy(p *LinkPolicy) { t.policy = p }
-
-// Policy returns the installed opt-in (nil when none).
-func (t *SymlinkTracker) Policy() *LinkPolicy { return t.policy }
 
 // NewSymlinkTracker returns an empty tracker logging to log.
 func NewSymlinkTracker(log *slog.Logger) *SymlinkTracker {
@@ -185,24 +177,12 @@ func (s *Syncer) skipSymlinkEvent(logger *slog.Logger, ev Event) bool {
 		s.links.Clear(ev.Path)
 		return false
 	}
-	dec := decideLink(s.cfg.LocalRoot, filepath.Join(s.cfg.LocalRoot, filepath.FromSlash(ev.Path)), ev.Path, s.links.policy)
-	switch {
-	case !dec.isLink:
+	isLink, reason, target := classifyLink(s.cfg.LocalRoot, filepath.Join(s.cfg.LocalRoot, filepath.FromSlash(ev.Path)))
+	if !isLink {
 		s.links.Clear(ev.Path)
 		return false
-	case dec.copy && !dec.dir:
-		// Opted in (symlinks.copy_resolved_links): the content is pushed
-		// like a regular file (the upload opens the link, which reads it).
-		s.links.Clear(ev.Path)
-		return false
-	case dec.copy:
-		// A link to a directory tree: bisync copies its files; there is no
-		// watch through it, so nothing to push for the link itself.
-		s.links.Clear(ev.Path)
-		logger.Debug("symlink to a directory: copied by bisync", "origin", "local")
-		return true
 	}
-	s.links.Report(ev.Path, dec.reason, dec.raw)
-	logger.Debug("skipping symlink: never pushed", "origin", "local", "reason", dec.reason)
+	s.links.Report(ev.Path, reason, target)
+	logger.Debug("skipping symlink: never pushed", "origin", "local", "reason", reason)
 	return true
 }

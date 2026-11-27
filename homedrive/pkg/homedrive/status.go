@@ -12,8 +12,7 @@ import (
 //
 // 2.1 adds the "guards" object and the "root_blocked" state (additive).
 // 2.2 adds guards.skipped_symlinks (additive).
-// 2.3 adds copy_resolved_links (additive).
-const StatusSchema = "2.3"
+const StatusSchema = "2.2"
 
 // Status document "state" values. Consumers must treat unknown values as
 // "degraded: show raw", so new values may be added in a minor release.
@@ -174,10 +173,4 @@ type StatusV2 struct {
 
 	// Guards is always present (members null when not blocking).
 	Guards Guards `json:"guards"`
-
-	// CopyResolvedLinks is the number of symlinks.copy_resolved_links
-	// patterns this host applies (0 = the default: every link is skipped).
-	// The patterns themselves are in GET /status, not in this retained
-	// document. Added in 2.3.
-	CopyResolvedLinks int `json:"copy_resolved_links"`
 }
