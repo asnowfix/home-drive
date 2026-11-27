@@ -1088,12 +1088,15 @@ beside NAS mode's `homedrive run`, in the same binary.
   XDG paths, start-up checks, token-file lock shared with NAS mode,
   flush-then-unmount, `Type=notify`, allow-list CI grep, NAS-mode footprint
   recorded (design section 7) (#176).
-  - [ ] End-to-end mount (write, flush, unmount) verified on a real FUSE
-    host. Not yet: on fuse3 3.18.2 (Ubuntu 26.04) `fusermount3` rejects the
-    socketpair of go-fuse v2.11.0/v2.12.1 and of `cmd/mount` (bazil) alike
-    ("file descriptor 3 is not a socket"), while the system `rclone mount`
-    works, so `TestRcloneMounter_FUSE` skips there. Needs an upstream fix or
-    a different mounter before D1 can claim a working mount.
+  - [x] End-to-end mount (write, flush, unmount) verified on a real FUSE
+    host: `TestRcloneMounter_FUSE` (local backend, no Drive) passes on
+    fuse3 3.18.2 (Ubuntu 26.04) when run from an unconfined process. The
+    earlier "file descriptor 3 is not a socket" failure was AppArmor, not
+    go-fuse or fuse3: a snap-confined parent (the snap `go` running
+    `go test`) is refused by the enforcing `fusermount3` profile. The test
+    skips with that cause there and the mount error carries a hint; see
+    `homedrive/docs/dev-environment.md` and #184. Not verified against a
+    real Drive remote.
 - [ ] D2: `GuardFs` + bounded timeouts (#177).
 - [ ] D3: session unit, suspend/resume (#178).
 - [ ] D4: conflicts (#179).
