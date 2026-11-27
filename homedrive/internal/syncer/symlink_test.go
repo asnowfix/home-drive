@@ -349,3 +349,51 @@ func TestBisync_Symlinks_NotDeletedFromDrive(t *testing.T) {
 		t.Errorf("downloads = %v, want none (no write through the link)", remote.downloadedFiles)
 	}
 }
+
+// A skipped link to a directory protects the Drive children below it: they
+// are not locally deleted, and nothing is pulled through the link.
+func TestBisync_Symlinks_DirChildrenProtected(t *testing.T) {
+	root := linkFixture(t)
+	b, _, remote, journal, _, _ := newTestBisync(t, root, false)
+	seedBystander(t, root, remote, journal)
+	for _, p := range []string{"outsidedir/a.txt", "outsidedir/sub/b.txt"} {
+		remote.Seed(p, deleteT0, "m0")
+		seedBaseline(journal, p)
+	}
+
+	b.execute(context.Background())
+
+	if got := remote.getDeleteCalls(); len(got) != 0 {
+		t.Errorf("remote deletes = %v, want none", got)
+	}
+	if !remote.HasFile("outsidedir/a.txt") || !remote.HasFile("outsidedir/sub/b.txt") {
+		t.Error("Drive children of a skipped link directory were removed")
+	}
+	if len(remote.downloadedFiles) != 0 {
+		t.Errorf("downloads = %v, want none (no write through the link)", remote.downloadedFiles)
+	}
+}
+
+func TestHasLinkPrefix_Cases(t *testing.T) {
+	set := map[string]struct{}{"a/link": {}}
+	tests := []struct {
+		name string
+		rel  string
+		want bool
+	}{
+		{"Exact", "a/link", true},
+		{"Child", "a/link/x/y.txt", true},
+		{"Sibling", "a/linkage", false},
+		{"Parent", "a", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasLinkPrefix(set, tt.rel); got != tt.want {
+				t.Errorf("hasLinkPrefix(%q) = %v, want %v", tt.rel, got, tt.want)
+			}
+		})
+	}
+	if hasLinkPrefix(nil, "a") {
+		t.Error("empty set matched")
+	}
+}

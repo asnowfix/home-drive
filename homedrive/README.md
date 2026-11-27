@@ -451,7 +451,9 @@ synced`, with `path` and `reason` `unresolved`, `outside_root` or `in_root`).
 clear once the links are deleted or replaced by regular files (the next
 bisync pass notices). No MQTT event is published: the retained status topic
 carries the alert state. A symlink already pushed to Drive as a file by an
-earlier version is left alone on Drive (not deleted, not overwritten).
+earlier version is left alone on Drive (not deleted, not overwritten), and
+so are the Drive children of a skipped link to a directory (a skipped link
+never looks like a local delete).
 Replace links with real copies to sync their content.
 
 ### local_root guard (`.homedrive-root`)

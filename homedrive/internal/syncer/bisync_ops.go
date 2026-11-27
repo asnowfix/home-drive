@@ -106,10 +106,11 @@ func (b *Bisync) diffRemoteAgainstLocal(
 ) []FileDiff {
 	for path, remote := range remoteMap {
 		if _, exists := localMap[path]; !exists {
-			if _, link := b.linkPaths[path]; link {
-				// A skipped local symlink sits here (issue #191): it is not
-				// "locally deleted", so Drive's copy (pushed as a file by an
-				// earlier version) is neither deleted nor overwritten.
+			if hasLinkPrefix(b.linkPaths, path) {
+				// A skipped local symlink sits here, or above (issue #191):
+				// it is not "locally deleted", so Drive's copy (pushed
+				// through the link by an earlier version) is neither
+				// deleted nor pulled through the link.
 				continue
 			}
 			diffs = append(diffs, b.remoteOnlyDiff(path, remote))

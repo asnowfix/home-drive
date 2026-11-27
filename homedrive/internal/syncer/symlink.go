@@ -10,6 +10,7 @@ package syncer
 import (
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -185,4 +186,19 @@ func (s *Syncer) skipSymlinkEvent(logger *slog.Logger, ev Event) bool {
 	s.links.Report(ev.Path, reason, target)
 	logger.Debug("skipping symlink: never pushed", "origin", "local", "reason", reason)
 	return true
+}
+
+// hasLinkPrefix reports whether rel, or any ancestor folder of it, is in
+// set. A skipped link to a directory protects its Drive children: they are
+// not under a real local folder, but they are not locally deleted either.
+func hasLinkPrefix(set map[string]struct{}, rel string) bool {
+	if len(set) == 0 {
+		return false
+	}
+	for p := rel; p != "." && p != "" && p != "/"; p = path.Dir(p) {
+		if _, ok := set[p]; ok {
+			return true
+		}
+	}
+	return false
 }
