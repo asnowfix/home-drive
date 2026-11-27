@@ -247,8 +247,8 @@ func TestStatusGuards_SkippedSymlinks(t *testing.T) {
 	if g := a.buildStatusV2(now).Guards.SkippedSymlinks; g != nil {
 		t.Fatalf("guards.skipped_symlinks = %+v, want nil", g)
 	}
-	tr.Report("secret/path/link", syncer.LinkUnresolved)
-	tr.Report("other", syncer.LinkInRoot)
+	tr.Report("secret/path/link", syncer.LinkUnresolved, "tgt")
+	tr.Report("other", syncer.LinkInRoot, "tgt")
 	d := a.buildStatusV2(now)
 	g := d.Guards.SkippedSymlinks
 	if g == nil || g.Count != 2 || g.Since.IsZero() {

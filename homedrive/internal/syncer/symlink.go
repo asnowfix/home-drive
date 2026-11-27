@@ -36,17 +36,27 @@ const (
 // neither named in the set nor logged individually.
 const maxTrackedLinks = 1024
 
+// skippedLink is what the walk learned about one skipped symlink: why, and
+// the raw link value (readlink output, never resolved).
+type skippedLink struct {
+	reason string
+	target string
+}
+
 // classifyLink reports whether path (absolute) is a symlink and, if so, why
-// it is skipped. It uses Lstat, so it never follows the link itself. A path
-// that cannot be lstat-ed is not a link as far as this helper knows.
-func classifyLink(root, path string) (isLink bool, reason string) {
+// it is skipped and its raw target string (os.Readlink, unresolved, "" when
+// unreadable). It uses Lstat and Readlink, so it never reads through the
+// link to its target. A path that cannot be lstat-ed is not a link as far as
+// this helper knows.
+func classifyLink(root, path string) (isLink bool, reason, rawTarget string) {
 	fi, err := os.Lstat(path)
 	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
-		return false, ""
+		return false, "", ""
 	}
+	rawTarget, _ = os.Readlink(path)
 	target, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return true, LinkUnresolved
+		return true, LinkUnresolved, rawTarget
 	}
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -54,9 +64,9 @@ func classifyLink(root, path string) (isLink bool, reason string) {
 	}
 	rel, err := filepath.Rel(realRoot, target)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return true, LinkOutsideRoot
+		return true, LinkOutsideRoot, rawTarget
 	}
-	return true, LinkInRoot
+	return true, LinkInRoot, rawTarget
 }
 
 // SymlinkTracker remembers the symlinks reported as skipped, so each is
@@ -81,14 +91,14 @@ func NewSymlinkTracker(log *slog.Logger) *SymlinkTracker {
 
 // Report records rel as a skipped symlink and logs it at ERROR the first
 // time only.
-func (t *SymlinkTracker) Report(rel, reason string) {
+func (t *SymlinkTracker) Report(rel, reason, target string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.addLocked(rel, reason)
+	t.addLocked(rel, skippedLink{reason: reason, target: target})
 }
 
 // addLocked adds rel if new. It returns false when the set is full.
-func (t *SymlinkTracker) addLocked(rel, reason string) bool {
+func (t *SymlinkTracker) addLocked(rel string, l skippedLink) bool {
 	if _, ok := t.links[rel]; ok {
 		return true
 	}
@@ -98,9 +108,9 @@ func (t *SymlinkTracker) addLocked(rel, reason string) bool {
 	if len(t.links) == 0 && t.overflow == 0 {
 		t.since = t.now()
 	}
-	t.links[rel] = reason
+	t.links[rel] = l.reason
 	t.log.Error("symlink skipped: not synced", "op", "symlink_skip",
-		"origin", "local", "path", rel, "reason", reason)
+		"origin", "local", "path", rel, "reason", l.reason, "target", l.target)
 	return true
 }
 
@@ -114,7 +124,7 @@ func (t *SymlinkTracker) Clear(rel string) {
 // Reconcile replaces the tracked set with found, the complete result of a
 // full local walk: paths no longer links leave the set, new ones are
 // reported, and links past the bound are only counted.
-func (t *SymlinkTracker) Reconcile(found map[string]string) {
+func (t *SymlinkTracker) Reconcile(found map[string]skippedLink) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for p := range t.links {
@@ -123,8 +133,8 @@ func (t *SymlinkTracker) Reconcile(found map[string]string) {
 		}
 	}
 	t.overflow = 0
-	for p, reason := range found {
-		if !t.addLocked(p, reason) {
+	for p, l := range found {
+		if !t.addLocked(p, l) {
 			t.overflow++
 		}
 	}
@@ -167,12 +177,12 @@ func (s *Syncer) skipSymlinkEvent(logger *slog.Logger, ev Event) bool {
 		s.links.Clear(ev.Path)
 		return false
 	}
-	isLink, reason := classifyLink(s.cfg.LocalRoot, filepath.Join(s.cfg.LocalRoot, filepath.FromSlash(ev.Path)))
+	isLink, reason, target := classifyLink(s.cfg.LocalRoot, filepath.Join(s.cfg.LocalRoot, filepath.FromSlash(ev.Path)))
 	if !isLink {
 		s.links.Clear(ev.Path)
 		return false
 	}
-	s.links.Report(ev.Path, reason)
+	s.links.Report(ev.Path, reason, target)
 	logger.Debug("skipping symlink: never pushed", "origin", "local", "reason", reason)
 	return true
 }

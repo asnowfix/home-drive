@@ -357,8 +357,8 @@ func TestAgent_Status_SkippedSymlinks(t *testing.T) {
 		t.Errorf("zero count must be omitted: %s", b)
 	}
 
-	tr.Report("a", syncer.LinkUnresolved)
-	tr.Report("b", syncer.LinkOutsideRoot)
+	tr.Report("a", syncer.LinkUnresolved, "tgt")
+	tr.Report("b", syncer.LinkOutsideRoot, "tgt")
 	info, _ = a.Status(context.Background())
 	if info.SkippedSymlinks != 2 {
 		t.Errorf("SkippedSymlinks = %d, want 2", info.SkippedSymlinks)
