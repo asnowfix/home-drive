@@ -53,7 +53,8 @@ func (r RcloneMounter) Mount(ctx context.Context, spec Spec) (Mount, error) {
 	// Mount (not mountlib's cobra command): that command would notify
 	// systemd and install its own signal handling; homedrive owns both.
 	if _, err := mp.Mount(); err != nil {
-		return nil, fmt.Errorf("desktop: %w", err)
+		label, confined := appArmorLabel()
+		return nil, withAppArmorHint(fmt.Errorf("desktop: %w", err), label, confined)
 	}
 	return &rcloneMount{mp: mp}, nil
 }
