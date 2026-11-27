@@ -3,6 +3,7 @@ package syncer
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -62,6 +63,44 @@ func linkFixture(t *testing.T) (root string) {
 	return root
 }
 
+// linkTargets returns the raw link value of each fixture link, as readlink
+// prints it, keyed by link name.
+func linkTargets(root string) map[string]string {
+	base := filepath.Dir(root)
+	return map[string]string{
+		"dangling":   filepath.Join(base, "missing"),
+		"outside":    filepath.Join(base, "outside", "out.txt"),
+		"outsidedir": filepath.Join(base, "outside"),
+		"inroot":     filepath.Join(root, "real.txt"),
+		"loop":       "loop",
+	}
+}
+
+// errTargets parses the JSON log and returns path -> target for every
+// "symlink skipped" ERROR, failing on a record without the target attribute.
+func errTargets(t *testing.T, buf *bytes.Buffer) map[string]string {
+	t.Helper()
+	out := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("bad log line %q: %v", line, err)
+		}
+		if rec["msg"] != "symlink skipped: not synced" {
+			continue
+		}
+		target, ok := rec["target"].(string)
+		if !ok {
+			t.Errorf("ERROR for %v has no target attribute: %s", rec["path"], line)
+		}
+		out[rec["path"].(string)] = target
+	}
+	return out
+}
+
 func TestClassifyLink_Cases(t *testing.T) {
 	root := linkFixture(t)
 	tests := []struct {
@@ -69,20 +108,22 @@ func TestClassifyLink_Cases(t *testing.T) {
 		rel        string
 		wantLink   bool
 		wantReason string
+		wantTarget string
 	}{
-		{"Dangling", "dangling", true, LinkUnresolved},
-		{"Loop", "loop", true, LinkUnresolved},
-		{"OutsideFile", "outside", true, LinkOutsideRoot},
-		{"OutsideDir", "outsidedir", true, LinkOutsideRoot},
-		{"InRoot", "inroot", true, LinkInRoot},
-		{"RegularFile", "real.txt", false, ""},
-		{"Missing", "nope", false, ""},
+		{"Dangling", "dangling", true, LinkUnresolved, linkTargets(root)["dangling"]},
+		{"Loop", "loop", true, LinkUnresolved, "loop"},
+		{"OutsideFile", "outside", true, LinkOutsideRoot, linkTargets(root)["outside"]},
+		{"OutsideDir", "outsidedir", true, LinkOutsideRoot, linkTargets(root)["outsidedir"]},
+		{"InRoot", "inroot", true, LinkInRoot, linkTargets(root)["inroot"]},
+		{"RegularFile", "real.txt", false, "", ""},
+		{"Missing", "nope", false, "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			isLink, reason := classifyLink(root, filepath.Join(root, tt.rel))
-			if isLink != tt.wantLink || reason != tt.wantReason {
-				t.Errorf("classifyLink = (%v, %q), want (%v, %q)", isLink, reason, tt.wantLink, tt.wantReason)
+			isLink, reason, target := classifyLink(root, filepath.Join(root, tt.rel))
+			if isLink != tt.wantLink || reason != tt.wantReason || target != tt.wantTarget {
+				t.Errorf("classifyLink = (%v, %q, %q), want (%v, %q, %q)",
+					isLink, reason, target, tt.wantLink, tt.wantReason, tt.wantTarget)
 			}
 		})
 	}
@@ -93,11 +134,14 @@ func TestSymlinkTracker_Cases(t *testing.T) {
 	tr := NewSymlinkTracker(slog.New(slog.NewJSONHandler(&buf, nil)))
 	errLines := func() int { return strings.Count(buf.String(), `"level":"ERROR"`) }
 
-	tr.Report("a", LinkUnresolved)
-	tr.Report("a", LinkUnresolved)
-	tr.Report("b", LinkInRoot)
+	tr.Report("a", LinkUnresolved, "../gone")
+	tr.Report("a", LinkUnresolved, "../gone")
+	tr.Report("b", LinkInRoot, "real.txt")
 	if tr.Count() != 2 || errLines() != 2 {
 		t.Fatalf("after reports: count=%d errors=%d, want 2 and 2", tr.Count(), errLines())
+	}
+	if got := errTargets(t, &buf); got["a"] != "../gone" || got["b"] != "real.txt" {
+		t.Errorf("targets after Report = %v", got)
 	}
 	if tr.Since().IsZero() {
 		t.Error("Since is zero while links are tracked")
@@ -108,11 +152,14 @@ func TestSymlinkTracker_Cases(t *testing.T) {
 	}
 	// Reconcile: b left, c is new; a cleared earlier is reported again if it
 	// reappears (a new problem).
-	tr.Reconcile(map[string]string{"c": LinkOutsideRoot})
+	tr.Reconcile(map[string]skippedLink{"c": {LinkOutsideRoot, "/etc/passwd"}})
 	if tr.Count() != 1 || errLines() != 3 {
 		t.Errorf("after Reconcile: count=%d errors=%d, want 1 and 3", tr.Count(), errLines())
 	}
-	tr.Reconcile(map[string]string{"c": LinkOutsideRoot})
+	if got := errTargets(t, &buf); got["c"] != "/etc/passwd" {
+		t.Errorf("Reconcile target = %q, want /etc/passwd", got["c"])
+	}
+	tr.Reconcile(map[string]skippedLink{"c": {LinkOutsideRoot, "/etc/passwd"}})
 	if errLines() != 3 {
 		t.Errorf("repeated Reconcile logged again: errors=%d, want 3", errLines())
 	}
@@ -124,9 +171,9 @@ func TestSymlinkTracker_Cases(t *testing.T) {
 
 func TestSymlinkTracker_Bound(t *testing.T) {
 	tr := NewSymlinkTracker(newDiscardLogger())
-	found := make(map[string]string)
+	found := make(map[string]skippedLink)
 	for i := 0; i < maxTrackedLinks+50; i++ {
-		found[string(rune('a'+i%26))+strings.Repeat("x", i/26)] = LinkUnresolved
+		found[string(rune('a'+i%26))+strings.Repeat("x", i/26)] = skippedLink{LinkUnresolved, "t"}
 	}
 	tr.Reconcile(found)
 	if tr.Count() != len(found) {
@@ -198,6 +245,11 @@ func TestSyncer_SymlinkEvents_SkippedNotRetried(t *testing.T) {
 			if strings.Contains(logBuf.String(), `"msg":"push failed"`) {
 				t.Error("a push failure was logged for a skipped link")
 			}
+			if tt.wantCount > 0 {
+				if got, want := errTargets(t, &logBuf)[tt.link], linkTargets(root)[tt.link]; got != want {
+					t.Errorf("ERROR target = %q, want raw link value %q", got, want)
+				}
+			}
 		})
 	}
 }
@@ -259,6 +311,13 @@ func TestBisync_Symlinks_SkippedAndReportedOnce(t *testing.T) {
 	}
 	if got := strings.Count(logBuf.String(), `"msg":"symlink skipped: not synced"`); got != 5 {
 		t.Errorf("ERROR lines over 3 passes = %d, want 5 (once per path)", got)
+	}
+	wantT := linkTargets(root)
+	gotT := errTargets(t, &logBuf)
+	for name, want := range wantT {
+		if gotT[name] != want {
+			t.Errorf("ERROR target for %q = %q, want %q", name, gotT[name], want)
+		}
 	}
 	if err := os.Remove(filepath.Join(root, "dangling")); err != nil {
 		t.Fatal(err)

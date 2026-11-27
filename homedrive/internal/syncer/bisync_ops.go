@@ -123,7 +123,7 @@ func (b *Bisync) diffRemoteAgainstLocal(
 func (b *Bisync) walkLocal(ctx context.Context) ([]LocalFileInfo, error) {
 	var files []LocalFileInfo
 	root := b.cfg.LocalRoot
-	found := make(map[string]string)
+	found := make(map[string]skippedLink)
 
 	err := filepath.WalkDir(root, func(
 		path string, d os.DirEntry, err error,
@@ -150,8 +150,8 @@ func (b *Bisync) walkLocal(ctx context.Context) ([]LocalFileInfo, error) {
 		}
 		if d.Type()&os.ModeSymlink != 0 {
 			// Never a file to sync (issue #191): reported, not listed.
-			if isLink, reason := classifyLink(root, path); isLink {
-				found[relPath] = reason
+			if isLink, reason, target := classifyLink(root, path); isLink {
+				found[relPath] = skippedLink{reason: reason, target: target}
 				return nil
 			}
 		}
