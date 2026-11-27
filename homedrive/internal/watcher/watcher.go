@@ -215,7 +215,9 @@ func (w *Watcher) handleFSEvent(ev fsnotify.Event) {
 		}
 
 		// Not a paired rename. If it is a new directory, add a watch.
-		if info, err := os.Stat(path); err == nil && info.IsDir() {
+		// Lstat: never add a watch through a symlink to a directory
+		// (issue #191); a link is not a directory to watch or walk.
+		if info, err := os.Lstat(path); err == nil && info.IsDir() {
 			if addErr := w.addWatch(path); addErr != nil {
 				w.log.Warn("failed to add watch on new directory",
 					"path", path,

@@ -106,6 +106,12 @@ func (b *Bisync) diffRemoteAgainstLocal(
 ) []FileDiff {
 	for path, remote := range remoteMap {
 		if _, exists := localMap[path]; !exists {
+			if _, link := b.linkPaths[path]; link {
+				// A skipped local symlink sits here (issue #191): it is not
+				// "locally deleted", so Drive's copy (pushed as a file by an
+				// earlier version) is neither deleted nor overwritten.
+				continue
+			}
 			diffs = append(diffs, b.remoteOnlyDiff(path, remote))
 		}
 	}
@@ -117,6 +123,7 @@ func (b *Bisync) diffRemoteAgainstLocal(
 func (b *Bisync) walkLocal(ctx context.Context) ([]LocalFileInfo, error) {
 	var files []LocalFileInfo
 	root := b.cfg.LocalRoot
+	found := make(map[string]string)
 
 	err := filepath.WalkDir(root, func(
 		path string, d os.DirEntry, err error,
@@ -141,6 +148,13 @@ func (b *Bisync) walkLocal(ctx context.Context) ([]LocalFileInfo, error) {
 		if pathfilter.Excluded(b.cfg.Exclude, relPath) {
 			return nil
 		}
+		if d.Type()&os.ModeSymlink != 0 {
+			// Never a file to sync (issue #191): reported, not listed.
+			if isLink, reason := classifyLink(root, path); isLink {
+				found[relPath] = reason
+				return nil
+			}
+		}
 		info, err := d.Info()
 		if err != nil {
 			return fmt.Errorf("stat %s: %w", path, err)
@@ -154,6 +168,11 @@ func (b *Bisync) walkLocal(ctx context.Context) ([]LocalFileInfo, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("walk local root %s: %w", root, err)
+	}
+	b.links.Reconcile(found)
+	b.linkPaths = make(map[string]struct{}, len(found))
+	for p := range found {
+		b.linkPaths[p] = struct{}{}
 	}
 	return files, nil
 }

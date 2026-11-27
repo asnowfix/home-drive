@@ -31,6 +31,11 @@ type StatusInfo struct {
 	// because local_root is missing or is not the synced tree (issue #170);
 	// State is then "root_blocked".
 	LocalRootBlocked *RootBlock `json:"local_root_blocked,omitempty"`
+
+	// SkippedSymlinks is the number of symlinks in local_root skipped
+	// because they are never synced (issue #191); omitted when zero. Under
+	// status v2 it maps to guards.skipped_symlinks.
+	SkippedSymlinks int `json:"skipped_symlinks,omitempty"`
 }
 
 // RootBlock says why local_root is not being synced.

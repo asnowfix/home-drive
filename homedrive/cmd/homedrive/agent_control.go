@@ -170,6 +170,7 @@ func (a *Agent) Status(ctx context.Context) (httpctl.StatusInfo, error) {
 
 		BisyncDeleteBlocked: a.bisyncDeleteBlock(),
 		LocalRootBlocked:    rootBlock,
+		SkippedSymlinks:     a.skippedSymlinks(),
 	}, nil
 }
 
@@ -296,4 +297,12 @@ func parseLogLevel(level string) slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+// skippedSymlinks is the number of symlinks skipped as never synced (#191).
+func (a *Agent) skippedSymlinks() int {
+	if a.symlinks == nil {
+		return 0
+	}
+	return a.symlinks.Count()
 }
