@@ -452,7 +452,44 @@ clear once the links are deleted or replaced by regular files (the next
 bisync pass notices). No MQTT event is published: the retained status topic
 carries the alert state. A symlink already pushed to Drive as a file by an
 earlier version is left alone on Drive (not deleted, not overwritten).
-Replace links with real copies to sync their content.
+By default, replace links with real copies to sync their content, or opt in
+as below.
+
+#### Opt-in: `symlinks.copy_resolved_links`
+
+```yaml
+symlinks:
+  copy_resolved_links:
+    - "Brain/.claude/skills/**"   # links under here are candidates
+    - "Brain/shared/**"           # ...and their targets must be under here
+```
+
+The default is an empty list: nothing changes. The list is machine-local
+config, read only from this file (never from the synced tree, so nothing
+written remotely can enable it), and applies after a restart. A symlink under
+a folder matched by a pattern (patterns are `doublestar` globs relative to
+`local_root`; absolute patterns and `..` are rejected at start-up) is copied
+to Drive as content, not skipped, only when all of these hold:
+
+1. the link resolves (Lstat, Readlink, then resolve) to a regular file or a
+   directory tree, on the same filesystem as the link (same device ID);
+2. the resolved target is inside `local_root`, under a folder that is itself
+   matched by a pattern in the same list (targets outside `local_root` are
+   not copied);
+3. a directory tree is copied recursively, and any symlink inside it is
+   skipped and reported by the rule above (never dereferenced).
+
+A link failing a check stays skipped and reported, with the reason in the
+ERROR line: `unresolved`, `outside_root`, `in_root` (not under a matched
+folder), `target_not_matched`, `cross_device` or `not_regular`. A pattern that
+matches no folder logs one WARN at start. Content behind a copied link is
+push-only: it is uploaded on a file event (a link to a file) or by bisync (a
+link to a directory, and later changes), never pulled, deleted locally or
+renamed through the link, and Drive-side changes there are left alone with a
+WARN. Drive paths that are or go through any symlink are refused for every
+local write, copied or not. `GET /status` lists the effective patterns
+(`copy_resolved_links`, `copy_resolved_links_count`); the status v2 document
+carries `copy_resolved_links` (the count only).
 
 ### local_root guard (`.homedrive-root`)
 

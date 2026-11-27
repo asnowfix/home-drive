@@ -151,6 +151,8 @@ func (a *Agent) buildStatusV2(now time.Time) homedrive.StatusV2 {
 		Local:        snap.Local,
 		QuotaUsedPct: a.quota.get(),
 		Guards:       a.statusGuards(),
+
+		CopyResolvedLinks: len(a.copyResolvedLinks()),
 	}
 	return doc
 }

@@ -53,7 +53,7 @@ func (b *Bisync) diff(ctx context.Context) ([]FileDiff, error) {
 	var diffs []FileDiff
 	diffs = b.diffLocalAgainstRemote(localMap, remoteMap, diffs)
 	diffs = b.diffRemoteAgainstLocal(localMap, remoteMap, diffs)
-	return diffs, nil
+	return b.pushOnlyUnderLinks(diffs), nil
 }
 
 // recordLocalTree reports the local file count and total size seen by the
@@ -106,10 +106,11 @@ func (b *Bisync) diffRemoteAgainstLocal(
 ) []FileDiff {
 	for path, remote := range remoteMap {
 		if _, exists := localMap[path]; !exists {
-			if _, link := b.linkPaths[path]; link {
-				// A skipped local symlink sits here (issue #191): it is not
-				// "locally deleted", so Drive's copy (pushed as a file by an
-				// earlier version) is neither deleted nor overwritten.
+			if hasLinkPrefix(b.linkPaths, path) {
+				// A skipped local symlink sits here, or above (issue #191):
+				// it is not "locally deleted", so Drive's copy (pushed
+				// through the link by an earlier version) is neither
+				// deleted nor pulled into the link's target.
 				continue
 			}
 			diffs = append(diffs, b.remoteOnlyDiff(path, remote))
@@ -123,7 +124,7 @@ func (b *Bisync) diffRemoteAgainstLocal(
 func (b *Bisync) walkLocal(ctx context.Context) ([]LocalFileInfo, error) {
 	var files []LocalFileInfo
 	root := b.cfg.LocalRoot
-	found := make(map[string]skippedLink)
+	w := &linkWalk{found: make(map[string]skippedLink), deref: make(map[string]struct{})}
 
 	err := filepath.WalkDir(root, func(
 		path string, d os.DirEntry, err error,
@@ -149,9 +150,12 @@ func (b *Bisync) walkLocal(ctx context.Context) ([]LocalFileInfo, error) {
 			return nil
 		}
 		if d.Type()&os.ModeSymlink != 0 {
-			// Never a file to sync (issue #191): reported, not listed.
-			if isLink, reason, target := classifyLink(root, path); isLink {
-				found[relPath] = skippedLink{reason: reason, target: target}
+			// Skipped and reported unless opted in (issue #191).
+			handled, lerr := b.walkLink(ctx, w, path, relPath)
+			if lerr != nil {
+				return lerr
+			}
+			if handled {
 				return nil
 			}
 		}
@@ -169,11 +173,13 @@ func (b *Bisync) walkLocal(ctx context.Context) ([]LocalFileInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("walk local root %s: %w", root, err)
 	}
-	b.links.Reconcile(found)
-	b.linkPaths = make(map[string]struct{}, len(found))
-	for p := range found {
+	files = append(files, w.files...)
+	b.links.Reconcile(w.found)
+	b.linkPaths = make(map[string]struct{}, len(w.found))
+	for p := range w.found {
 		b.linkPaths[p] = struct{}{}
 	}
+	b.derefPaths = w.deref
 	return files, nil
 }
 

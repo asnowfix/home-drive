@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/asnowfix/home-drive/homedrive/internal/config"
 	httpctl "github.com/asnowfix/home-drive/homedrive/internal/http"
 	"github.com/asnowfix/home-drive/homedrive/internal/rcloneclient"
 	"github.com/asnowfix/home-drive/homedrive/internal/stats"
@@ -366,5 +367,44 @@ func TestAgent_Status_SkippedSymlinks(t *testing.T) {
 	b, _ = json.Marshal(info)
 	if !strings.Contains(string(b), `"skipped_symlinks":2`) {
 		t.Errorf("status JSON lacks skipped_symlinks: %s", b)
+	}
+}
+
+// issue #191: /status lists the effective symlinks.copy_resolved_links
+// patterns and their count; both are absent with the default empty list.
+func TestAgent_Status_CopyResolvedLinks(t *testing.T) {
+	tests := []struct {
+		name     string
+		patterns []string
+		wantKeys bool
+	}{
+		{"DefaultEmpty", nil, false},
+		{"TwoPatterns", []string{"Brain/.claude/skills/**", "Brain/shared/**"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Symlinks: config.SymlinksConfig{CopyResolvedLinks: tt.patterns}}
+			a := &Agent{log: slog.Default(), cfg: cfg, rfs: newFakeRemoteFS(), stats: stats.New(stats.Config{})}
+
+			info, err := a.Status(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := json.Marshal(info)
+			if got := strings.Contains(string(b), "copy_resolved_links"); got != tt.wantKeys {
+				t.Fatalf("copy_resolved_links present = %v, want %v: %s", got, tt.wantKeys, b)
+			}
+			if info.CopyResolvedLinksCount != len(tt.patterns) || len(info.CopyResolvedLinks) != len(tt.patterns) {
+				t.Errorf("count=%d list=%v, want %v", info.CopyResolvedLinksCount, info.CopyResolvedLinks, tt.patterns)
+			}
+			for i, p := range tt.patterns {
+				if info.CopyResolvedLinks[i] != p {
+					t.Errorf("pattern %d = %q, want %q", i, info.CopyResolvedLinks[i], p)
+				}
+			}
+			if tt.wantKeys && !strings.Contains(string(b), `"copy_resolved_links_count":2`) {
+				t.Errorf("status JSON lacks the count: %s", b)
+			}
+		})
 	}
 }

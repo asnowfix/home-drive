@@ -14,21 +14,22 @@ import (
 
 // Config is the root homedrive configuration.
 type Config struct {
-	LocalRoot    string        `yaml:"local_root"`
-	Remote       string        `yaml:"remote"`
-	RcloneConfig string        `yaml:"rclone_config"`
-	Watcher      WatcherConfig `yaml:"watcher"`
-	Push         PushConfig    `yaml:"push"`
-	Pull         PullConfig    `yaml:"pull"`
-	Conflict     ConflictCfg   `yaml:"conflict"`
-	State        StateConfig   `yaml:"state"`
-	HTTP         HTTPConfig    `yaml:"http"`
-	MQTT         MQTTConfig    `yaml:"mqtt"`
-	Logging      LoggingConfig `yaml:"logging"`
-	Quota        QuotaConfig   `yaml:"quota"`
-	Bisync       BisyncConfig  `yaml:"bisync"`
-	Trash        TrashConfig   `yaml:"trash"`
-	DryRun       bool          `yaml:"dry_run"`
+	LocalRoot    string         `yaml:"local_root"`
+	Remote       string         `yaml:"remote"`
+	RcloneConfig string         `yaml:"rclone_config"`
+	Watcher      WatcherConfig  `yaml:"watcher"`
+	Push         PushConfig     `yaml:"push"`
+	Pull         PullConfig     `yaml:"pull"`
+	Conflict     ConflictCfg    `yaml:"conflict"`
+	State        StateConfig    `yaml:"state"`
+	HTTP         HTTPConfig     `yaml:"http"`
+	MQTT         MQTTConfig     `yaml:"mqtt"`
+	Logging      LoggingConfig  `yaml:"logging"`
+	Quota        QuotaConfig    `yaml:"quota"`
+	Bisync       BisyncConfig   `yaml:"bisync"`
+	Trash        TrashConfig    `yaml:"trash"`
+	Symlinks     SymlinksConfig `yaml:"symlinks"`
+	DryRun       bool           `yaml:"dry_run"`
 }
 
 // WatcherConfig configures the fsnotify watcher.
@@ -213,6 +214,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: conflict.old_suffix_format: %w", err)
 	}
 	if err := cfg.Bisync.validate(); err != nil {
+		return nil, err
+	}
+	if err := cfg.Symlinks.validate(); err != nil {
 		return nil, err
 	}
 	cfg.applyDefaults()
