@@ -161,8 +161,9 @@ func (p *pairer) handleRename(path string, at time.Time) bool {
 // matching when the Rename arrives later (macOS/kqueue path).
 // Returns true only when the event is fully consumed by a forward pair.
 func (p *pairer) handleCreate(path string, at time.Time) bool {
-	// Check if the created path is a directory.
-	info, err := os.Stat(path)
+	// Check if the created path is a directory. Lstat: a symlink to a
+	// directory is not one (issue #191), so it never pairs as a dir rename.
+	info, err := os.Lstat(path)
 	if err != nil || !info.IsDir() {
 		return false
 	}

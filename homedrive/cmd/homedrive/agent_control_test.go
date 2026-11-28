@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -340,3 +342,29 @@ func TestParseLogLevel_Cases(t *testing.T) {
 // without bisyncMu explicitly set in a test (guards against future field
 // additions breaking these lightweight test constructions).
 var _ = sync.RWMutex{}
+
+// issue #191: /status carries the number of skipped symlinks.
+func TestAgent_Status_SkippedSymlinks(t *testing.T) {
+	tr := syncer.NewSymlinkTracker(slog.New(slog.DiscardHandler))
+	a := &Agent{log: slog.Default(), rfs: newFakeRemoteFS(), stats: stats.New(stats.Config{}), symlinks: tr}
+
+	info, err := a.Status(context.Background())
+	if err != nil || info.SkippedSymlinks != 0 {
+		t.Fatalf("no links: info.SkippedSymlinks=%d err=%v, want 0", info.SkippedSymlinks, err)
+	}
+	b, _ := json.Marshal(info)
+	if strings.Contains(string(b), "skipped_symlinks") {
+		t.Errorf("zero count must be omitted: %s", b)
+	}
+
+	tr.Report("a", syncer.LinkUnresolved, "tgt")
+	tr.Report("b", syncer.LinkOutsideRoot, "tgt")
+	info, _ = a.Status(context.Background())
+	if info.SkippedSymlinks != 2 {
+		t.Errorf("SkippedSymlinks = %d, want 2", info.SkippedSymlinks)
+	}
+	b, _ = json.Marshal(info)
+	if !strings.Contains(string(b), `"skipped_symlinks":2`) {
+		t.Errorf("status JSON lacks skipped_symlinks: %s", b)
+	}
+}

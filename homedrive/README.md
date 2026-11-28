@@ -439,6 +439,23 @@ journal denominator counts only rows with a sync baseline that are not
 excluded. The Changes API pull path has no count guard of its own; it is
 covered by the `local_root` guard below.
 
+### Symlinks are never synced
+
+A symlink inside `local_root` is skipped, whatever it points to (dangling,
+outside `local_root`, or inside it): it is never uploaded, never retried and
+never followed, and the watcher does not watch through a link to a directory.
+Each skipped link is logged once per run at ERROR (`symlink skipped: not
+synced`, with `path` and `reason` `unresolved`, `outside_root` or `in_root`).
+`GET /status` shows `"skipped_symlinks": N` and the status v2 document shows
+`guards.skipped_symlinks` (`{count, since}`); both are absent/null at zero and
+clear once the links are deleted or replaced by regular files (the next
+bisync pass notices). No MQTT event is published: the retained status topic
+carries the alert state. A symlink already pushed to Drive as a file by an
+earlier version is left alone on Drive (not deleted, not overwritten), and
+so are the Drive children of a skipped link to a directory (a skipped link
+never looks like a local delete).
+Replace links with real copies to sync their content.
+
 ### local_root guard (`.homedrive-root`)
 
 The puller, the push syncer and bisync act on `local_root`. If the data disk

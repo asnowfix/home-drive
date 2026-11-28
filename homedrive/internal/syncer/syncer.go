@@ -60,6 +60,10 @@ type Syncer struct {
 	// recorder receives one Outcome per final push result; nil disables.
 	recorder Recorder
 
+	// links tracks the symlinks skipped by the push path and bisync
+	// (issue #191); never nil after New.
+	links *SymlinkTracker
+
 	// rootGate, if set, vetoes push work while local_root is not the synced
 	// tree (issue #170).
 	rootGate RootGate
@@ -114,6 +118,7 @@ func New(
 		sleepFn:   contextSleep,
 		nowFn:     time.Now,
 	}
+	s.links = NewSymlinkTracker(logger)
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -215,7 +220,7 @@ func (s *Syncer) handleEvent(ctx context.Context, ev Event) {
 	start := s.nowFn()
 	logger := s.logger.With("path", ev.Path, "op", ev.Op.String())
 
-	if s.skipTrashEvent(ev) || s.skipExpectedDelete(logger, ev) || s.skipUnpairedRename(logger, ev) || s.skipDirEvent(logger, ev) {
+	if s.skipTrashEvent(ev) || s.skipExpectedDelete(logger, ev) || s.skipUnpairedRename(logger, ev) || s.skipSymlinkEvent(logger, ev) || s.skipDirEvent(logger, ev) {
 		return
 	}
 
