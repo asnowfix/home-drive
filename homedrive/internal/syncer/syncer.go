@@ -229,8 +229,13 @@ func (s *Syncer) handleEvent(ctx context.Context, ev Event) {
 	defer s.bisyncMu.RUnlock()
 
 	var obj *RemoteObject
+	var rm removeOutcome
 	blocked, err := s.retryGated(ctx, logger, ev.Op.String(), func(ctx context.Context) error {
 		var execErr error
+		if ev.Op == OpRemove {
+			rm, execErr = s.execRemove(ctx, ev.Path)
+			return execErr
+		}
 		obj, execErr = s.execEvent(ctx, ev)
 		return execErr
 	})
@@ -238,6 +243,9 @@ func (s *Syncer) handleEvent(ctx context.Context, ev Event) {
 		return // nothing was attempted: no journal change, no failure event
 	}
 	elapsed := s.nowFn().Sub(start)
+	if ev.Op == OpRemove && s.recordDirRemove(ev.Path, rm, err, elapsed.Milliseconds()) {
+		return
+	}
 	s.recordResult(ctx, ev.Path, ev.Op.String(), obj, err, elapsed)
 }
 
@@ -265,7 +273,8 @@ func (s *Syncer) execEvent(ctx context.Context, ev Event) (*RemoteObject, error)
 		}
 		return &obj, nil
 	case OpRemove:
-		return nil, s.execRemove(ctx, ev.Path)
+		_, err := s.execRemove(ctx, ev.Path)
+		return nil, err
 	default:
 		return nil, fmt.Errorf("unhandled operation: %s", ev.Op)
 	}

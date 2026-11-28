@@ -18,6 +18,11 @@ var (
 	// files are synced, so DeleteFile refuses to touch a folder (issue #115).
 	ErrIsDir = errors.New("remote path is a directory")
 
+	// ErrDirNotEmpty indicates RemoveEmptyDir refused a folder because it
+	// still has a child outside the trash on the remote (unknown ones
+	// included), or because the path is ambiguous (issue #174).
+	ErrDirNotEmpty = errors.New("remote directory is not empty")
+
 	// ErrDanglingShortcut indicates the remote object is a Drive shortcut
 	// whose target no longer exists or is not accessible. rclone's drive
 	// backend gives such objects the made-up mime type
